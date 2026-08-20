@@ -15,3 +15,7 @@ vite.config.ts.timestamp-*
 
 # stray leftover file from an old npm install redirect
 /src-tauri/2
+
+# updater signing keypair -- private key must never be committed
+/src-tauri/*.key
+/src-tauri/*.key.pub

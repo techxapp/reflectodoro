@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Reflectodoro</title>
+  <meta name="description" content="A Pomodoro app that forces a short reflection at the end of every break, enforced by a hard-to-dismiss overlay." />
+  <style>
+    :root {
+      --bg: #0f1115;
+      --surface: #161a21;
+      --surface-2: #1e232c;
+      --border: #2a3040;
+      --text: #e8eaed;
+      --text-dim: #9aa3b2;
+      --accent: #ff7a59;
+      --accent-soft: rgba(255, 122, 89, 0.14);
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #faf9f7;
+        --surface: #ffffff;
+        --surface-2: #f2f0ec;
+        --border: #e3e0da;
+        --text: #1c1c1c;
+        --text-dim: #6b6b6b;
+        --accent: #e05d3a;
+        --accent-soft: rgba(224, 93, 58, 0.1);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+      line-height: 1.5;
+    }
+    .wrap {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 96px 24px 64px;
+    }
+    .eyebrow {
+      display: inline-block;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: var(--accent-soft);
+      padding: 4px 10px;
+      border-radius: 999px;
+      margin-bottom: 18px;
+    }
+    h1 {
+      font-size: clamp(2.2rem, 5vw, 3.2rem);
+      margin: 0 0 12px;
+      letter-spacing: -0.02em;
+    }
+    .tagline {
+      font-size: 1.15rem;
+      color: var(--text-dim);
+      max-width: 560px;
+      margin: 0 0 32px;
+    }
+    .cta-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 56px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 22px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 15px;
+      text-decoration: none;
+      border: 1px solid transparent;
+      transition: transform 0.15s ease, opacity 0.15s ease;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-secondary {
+      background: transparent;
+      border-color: var(--border);
+      color: var(--text);
+    }
+    .note {
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-top: -44px;
+      margin-bottom: 56px;
+    }
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 56px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+    }
+    .card h3 {
+      margin: 0 0 6px;
+      font-size: 15px;
+    }
+    .card p {
+      margin: 0;
+      font-size: 14px;
+      color: var(--text-dim);
+    }
+    footer {
+      border-top: 1px solid var(--border);
+      padding-top: 24px;
+      font-size: 13px;
+      color: var(--text-dim);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    footer a { color: inherit; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <span class="eyebrow">Windows &middot; Free</span>
+    <h1>Reflectodoro</h1>
+    <p class="tagline">
+      A Pomodoro app whose real point is forcing a short self-reflection at the end of
+      every break &mdash; "what did I do?" &mdash; enforced by a hard-to-dismiss overlay.
+    </p>
+
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/techxapp/reflectodoro/releases/latest">
+        Download for Windows (.msi)
+      </a>
+      <a class="btn btn-secondary" href="https://github.com/techxapp/reflectodoro">
+        View source on GitHub
+      </a>
+    </div>
+    <p class="note">
+      Windows may show a SmartScreen "unknown publisher" warning on first run &mdash;
+      choose <em>More info &rarr; Run anyway</em>. The app isn't code-signed yet.
+    </p>
+
+    <div class="features">
+      <div class="card">
+        <h3>Wall-clock breaks</h3>
+        <p>Work and break slots are pinned to fixed clock boundaries, not a rolling timer that drifts.</p>
+      </div>
+      <div class="card">
+        <h3>No free pass</h3>
+        <p>The break overlay can't be dismissed by waiting it out &mdash; you always have to write what you did.</p>
+      </div>
+      <div class="card">
+        <h3>breakit challenge</h3>
+        <p>Type a random on-screen string to end the break early &mdash; still requires the reflection either way.</p>
+      </div>
+      <div class="card">
+        <h3>Fully local</h3>
+        <p>Everything is stored on-device in SQLite. No account, no server, no sync.</p>
+      </div>
+    </div>
+
+    <footer>
+      <span>Reflectodoro</span>
+      <span><a href="https://github.com/techxapp/reflectodoro">github.com/techxapp/reflectodoro</a></span>
+    </footer>
+  </div>
+</body>
+</html>

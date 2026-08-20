@@ -3,6 +3,8 @@
   import "./app.css";
   import { page } from "$app/stores";
   import { invoke } from "@tauri-apps/api/core";
+  import { check } from "@tauri-apps/plugin-updater";
+  import { relaunch } from "@tauri-apps/plugin-process";
   import { isSlotCovered, canonicalIso } from "$lib/db";
 
   let { children } = $props();
@@ -33,6 +35,22 @@
     const covered = await isSlotCovered(canonicalIso(candidate));
     if (!covered) {
       await invoke("open_catchup_window", { slotStartIso: candidate });
+    }
+  });
+
+  /** Runs once per app boot (main window only). Checks GitHub Releases'
+   * latest.json for a newer signed build; if found and the user accepts,
+   * downloads, installs, and relaunches into the new version. */
+  onMount(async () => {
+    if (isSpecialWindow) return;
+    try {
+      const update = await check();
+      if (update && confirm(`A new version (${update.version}) is available. Update now?`)) {
+        await update.downloadAndInstall();
+        await relaunch();
+      }
+    } catch (e) {
+      console.error("update check failed", e);
     }
   });
 </script>
