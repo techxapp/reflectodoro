@@ -1,0 +1,7 @@
+# Overrides resolve_dev_mode()'s debug-build default (see src/lib.rs) so
+# `npm run tauri dev` / `cargo run` exercise real enforcement -- keyboard
+# hook installed, no "Close (DEV)" escape hatch -- instead of dev mode.
+# Delete this file (or flip the value to "1") to go back to dev-mode
+# defaults while iterating.
+[env]
+POMODORO_DEV_MODE = "0"

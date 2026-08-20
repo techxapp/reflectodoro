@@ -1,0 +1,17 @@
+.DS_Store
+node_modules
+/build
+/.svelte-kit
+/package
+.env
+.env.*
+!.env.example
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Rust/Tauri build output
+/src-tauri/target
+/src-tauri/gen
+
+# stray leftover file from an old npm install redirect
+/src-tauri/2
