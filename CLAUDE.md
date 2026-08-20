@@ -47,7 +47,7 @@ Originally designed as a fixed word ("breakit") typed a configurable number of t
 
 ## Inactivity / merge behavior
 
-Because the overlay never auto-closes without a reflection, "what did I do in the last N pomodoros" can end up covering more than one slot. This is **not** special-cased in Rust — the frontend (`src/routes/overlay/+page.svelte`) queries SQLite on mount/update for whether the *previous* break slot's timestamp is already covered by a saved `reflection` row (`isSlotCovered` in `src/lib/db.ts`, using SQLite's `json_each`). If not, the prompt and the saved row both cover both slots (`covers_slot_start_ats` JSON array). This one check handles both real triggers: the grid reaching the next break boundary while unresolved, and the app being killed/crashed and relaunched with a pending slot.
+Because the overlay never auto-closes without a reflection, "what did I do in the last N pomodoros" can end up covering more than one slot. This is **not** special-cased in Rust — the frontend (`src/routes/overlay/+page.svelte`) queries SQLite on mount/update for whether the *previous* break slot's timestamp is already covered by a saved `reflection` row (`isSlotCovered` in `src/lib/db.ts`, a plain `slot_start_at = $1` equality check). If not, `saveReflection` inserts one `reflection` row per covered slot (same `created_at`/`text`, different `slot_start_at`) rather than bundling them into one row. This one check handles both real triggers: the grid reaching the next break boundary while unresolved, and the app being killed/crashed and relaunched with a pending slot.
 
 ## Data model
 
@@ -57,7 +57,7 @@ No `pomodoro_session` table — deliberately. Slot identity/boundaries are fully
 reflection
   id INTEGER PK
   created_at TEXT
-  covers_slot_start_ats TEXT   -- JSON array of ISO local timestamps; usually 1, sometimes 2 when merged
+  slot_start_at TEXT          -- one row per covered slot; usually 1 row per reflection, sometimes 2 when merged
   text TEXT
 
 daily_task_list              -- "Most Important Tasks Today", shared between main window and overlay
@@ -70,7 +70,7 @@ app_setting
   value TEXT                  -- breakit_length, breakit_include_special (work/break durations are fixed constants, not stored/configurable yet)
 ```
 
-Migrations live in `src-tauri/src/db.rs` (`tauri-plugin-sql` migration list) — add a new versioned migration for schema/default changes rather than editing an already-shipped one, since applied versions are tracked in `_sqlx_migrations` and won't re-run.
+Migrations live in `src-tauri/src/db.rs` (`tauri-plugin-sql` migration list). Applied versions are tracked per-database in `_sqlx_migrations` and never re-run — so editing an already-shipped migration silently skips on any db that already applied it. Before the first tagged release, squashing/rewriting migrations freely is fine (nothing but local dev dbs has run them). From the first tagged release onward, always add a new versioned migration for schema/default changes instead.
 
 ## Kill switches (must always work, tested explicitly)
 
