@@ -148,7 +148,7 @@
       <form onsubmit={submitReflection}>
         <textarea
           bind:value={reflectionText}
-          placeholder="Write a couple of sentences..."
+          placeholder="Write a couple of bullet points or type 'Skip' to skip it. "
           rows="5"
           disabled={overlayState?.reflection_entered}
         ></textarea>

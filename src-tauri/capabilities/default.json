@@ -1,11 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window, the break overlay window, and the startup catch-up window",
+  "description": "Capability for the main window, the break overlay window, the startup catch-up window, and the wellness check-in window",
   "windows": [
     "main",
     "overlay",
-    "catchup"
+    "catchup",
+    "checkin"
   ],
   "permissions": [
     "core:default",
@@ -14,6 +15,7 @@
     "sql:default",
     "sql:allow-execute",
     "updater:default",
-    "process:default"
+    "process:default",
+    "dialog:default"
   ]
 }

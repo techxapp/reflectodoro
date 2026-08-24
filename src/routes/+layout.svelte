@@ -16,12 +16,14 @@
   ];
 
   const isSpecialWindow = $derived(
-    $page.url.pathname === "/overlay" || $page.url.pathname === "/catchup",
+    $page.url.pathname === "/overlay" ||
+      $page.url.pathname === "/catchup" ||
+      $page.url.pathname === "/checkin",
   );
 
   /**
-   * Runs once per app boot (main window only -- the overlay/catchup windows
-   * mount this same root layout too, so bail out immediately there instead
+   * Runs once per app boot (main window only -- the overlay/catchup/checkin
+   * windows mount this same root layout too, so bail out immediately there instead
    * of re-running the check from inside the window it would itself open).
    * If the app was closed/killed or the machine restarted while a break's
    * reflection was never logged, this pops the catch-up window immediately

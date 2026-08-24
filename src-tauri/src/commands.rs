@@ -1,10 +1,11 @@
 use std::sync::atomic::Ordering;
 
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_autostart::ManagerExt;
 
 use crate::overlay;
 use crate::state::{AppState, OverlayState};
-use crate::POMODORO_ENABLED;
+use crate::{FORCE_CLOSE_SHORTCUT_ENABLED, OVERLAY_AUTO_CLOSE_MINUTES, POMODORO_ENABLED};
 
 #[tauri::command]
 pub fn get_overlay_state(state: State<AppState>) -> OverlayState {
@@ -101,6 +102,80 @@ pub async fn open_catchup_window(
 #[tauri::command]
 pub fn get_catchup_slot(state: State<AppState>) -> Option<String> {
     state.catchup_slot.lock().unwrap().clone()
+}
+
+/// Triggers the wellness check-in popup for a slot whose reflection was just
+/// saved. Called by the `catchup` window after "Save & close"; the live break
+/// overlay's own close path calls `overlay::open_checkin_for_slot` directly
+/// instead of going through this command.
+#[tauri::command]
+pub fn open_checkin_window(app: AppHandle, slot_start_iso: String) {
+    overlay::open_checkin_for_slot(&app, slot_start_iso);
+}
+
+/// Read by the check-in window on mount to learn which slot triggered it.
+#[tauri::command]
+pub fn get_checkin_slot(state: State<AppState>) -> Option<String> {
+    state.checkin_slot.lock().unwrap().clone()
+}
+
+/// Backs the Settings "Data" export/import feature. Plain `std::fs` rather
+/// than tauri-plugin-fs: app-defined commands need no capability entry at
+/// all, sidestepping that plugin's path-scope config entirely (the same
+/// class of silent-permission trap already hit twice with sql/window
+/// capabilities -- see CLAUDE.md). The path always comes from the native
+/// dialog picker, not arbitrary user text input.
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("failed to read {path}: {e}"))
+}
+
+#[tauri::command]
+pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(|e| format!("failed to write {path}: {e}"))
+}
+
+/// Reflects the actual OS registration state (Windows Run registry key /
+/// equivalent elsewhere) -- this is the single source of truth for on/off,
+/// not anything stored in app_setting. See `ensureDefaultAutostart` in
+/// db.ts for why a *separate* DB flag exists to track whether the user has
+/// ever made an explicit choice at all.
+#[tauri::command]
+pub fn get_autostart_enabled(app: AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let auto = app.autolaunch();
+    let result = if enabled { auto.enable() } else { auto.disable() };
+    result.map_err(|e| e.to_string())
+}
+
+/// Mirrors app_setting.force_close_shortcut_enabled -- loaded and pushed here
+/// by the frontend on boot and on every Settings save (see
+/// loadAndSyncForceCloseShortcutSetting in db.ts).
+#[tauri::command]
+pub fn get_force_close_shortcut_enabled() -> bool {
+    FORCE_CLOSE_SHORTCUT_ENABLED.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+pub fn set_force_close_shortcut_enabled(enabled: bool) {
+    FORCE_CLOSE_SHORTCUT_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+/// Mirrors app_setting.overlay_auto_close_minutes -- loaded and pushed here
+/// by the frontend on boot and on every Settings save (see
+/// loadAndSyncOverlayAutoClose in db.ts).
+#[tauri::command]
+pub fn get_overlay_auto_close_minutes() -> u32 {
+    OVERLAY_AUTO_CLOSE_MINUTES.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+pub fn set_overlay_auto_close_minutes(minutes: u32) {
+    OVERLAY_AUTO_CLOSE_MINUTES.store(minutes.max(1), Ordering::SeqCst);
 }
 
 /// Only available when dev_mode is on -- bypasses the unlock formula entirely.

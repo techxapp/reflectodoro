@@ -69,6 +69,9 @@
     saving = true;
     try {
       await saveReflection(slots, text.trim());
+      // slots is oldest-first (see findMissedSlots) -- the last entry is the
+      // current/most-recent slot, the only one the check-in popup asks about.
+      await invoke("open_checkin_window", { slotStartIso: slots[slots.length - 1] });
       await getCurrentWindow().close();
     } finally {
       // If saving or closing failed, the window is still open -- don't
@@ -88,7 +91,7 @@
       <h1>You didn't log your {promptLabel}</h1>
       <p class="hint">What did you do? Closing this window without saving skips it.</p>
       <form onsubmit={submit}>
-        <textarea bind:value={text} rows="5" placeholder="Write a couple of sentences..."
+        <textarea bind:value={text} rows="5" placeholder="Write a couple of bullet points or type 'Skip' to skip it"
         ></textarea>
         <div class="actions">
           <button type="button" class="secondary" onclick={dismiss}>Dismiss</button>

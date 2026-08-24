@@ -68,6 +68,10 @@ pub struct AppState {
     /// set by `open_catchup_window` right before spawning it, read back by the
     /// window's own `get_catchup_slot` call on mount. See overlay.rs.
     pub catchup_slot: Mutex<Option<String>>,
+    /// Slot start (RFC3339, local offset) handed off to the wellness check-in
+    /// window -- set by `open_checkin_for_slot` right before spawning it, read
+    /// back by the window's own `get_checkin_slot` call on mount. See overlay.rs.
+    pub checkin_slot: Mutex<Option<String>>,
     /// When the app process started. A newly created WebviewWindow on this
     /// machine renders permanently blank if shown within ~a couple seconds
     /// of process start (some WebView2/wry initialization race) -- both the
@@ -84,6 +88,7 @@ impl AppState {
             overlay: Mutex::new(OverlayState::closed()),
             breakit_config: Mutex::new(BreakitConfig::default()),
             catchup_slot: Mutex::new(None),
+            checkin_slot: Mutex::new(None),
             started_at: std::time::Instant::now(),
             dev_mode,
         }

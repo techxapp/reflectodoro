@@ -3,13 +3,24 @@
   import {
     getReflectionsForDate,
     getTaskList,
+    getWellnessSummaryForDate,
     localDateStamp,
     type ReflectionEntry,
+    type WellnessSummary,
   } from "$lib/db";
+
+  const EMPTY_WELLNESS_SUMMARY: WellnessSummary = {
+    total: 0,
+    relaxedEyes: 0,
+    exercise: 0,
+    drankWater: 0,
+    washroom: 0,
+  };
 
   let selected = $state(new Date());
   let reflections = $state<ReflectionEntry[]>([]);
   let taskList = $state("");
+  let wellnessSummary = $state<WellnessSummary>(EMPTY_WELLNESS_SUMMARY);
   let calendarMonth = $state(new Date());
   let loading = $state(false);
 
@@ -19,9 +30,14 @@
   async function load() {
     loading = true;
     const stamp = selectedStamp;
-    const [r, t] = await Promise.all([getReflectionsForDate(stamp), getTaskList(stamp)]);
+    const [r, t, w] = await Promise.all([
+      getReflectionsForDate(stamp),
+      getTaskList(stamp),
+      getWellnessSummaryForDate(stamp),
+    ]);
     reflections = r;
     taskList = t;
+    wellnessSummary = w;
     loading = false;
   }
 
@@ -103,6 +119,27 @@
     {#if loading}
       <p class="hint">Loading...</p>
     {:else}
+      {#if wellnessSummary.total > 0}
+        <div class="wellness-summary">
+          <div class="stat">
+            <span class="stat-value">{wellnessSummary.relaxedEyes}/{wellnessSummary.total}</span>
+            <span class="stat-label">Relaxed eyes</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value">{wellnessSummary.exercise}/{wellnessSummary.total}</span>
+            <span class="stat-label">Exercise</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value">{wellnessSummary.drankWater}/{wellnessSummary.total}</span>
+            <span class="stat-label">Drank water</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value">{wellnessSummary.washroom}/{wellnessSummary.total}</span>
+            <span class="stat-label">Washroom</span>
+          </div>
+        </div>
+      {/if}
+
       {#if taskList.trim()}
         <div class="task-list">
           <h3>Most Important Tasks</h3>
@@ -224,6 +261,35 @@
     padding: 6px 12px;
     border-radius: 8px;
     font-size: 13px;
+  }
+
+  .wellness-summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+
+  .stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    background: var(--surface-2);
+    border-radius: 10px;
+    padding: 10px 8px;
+    text-align: center;
+  }
+
+  .stat-value {
+    font-size: 18px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat-label {
+    font-size: 11px;
+    color: var(--text-dim);
   }
 
   .task-list {

@@ -8,6 +8,8 @@
     saveTaskList,
     localDateStamp,
     loadAndSyncBreakitSettings,
+    loadAndSyncForceCloseShortcutSetting,
+    loadAndSyncOverlayAutoClose,
     listenForTaskListUpdates,
   } from "$lib/db";
 
@@ -42,6 +44,8 @@
 
   onMount(async () => {
     await loadAndSyncBreakitSettings();
+    await loadAndSyncForceCloseShortcutSetting();
+    await loadAndSyncOverlayAutoClose();
     enabled = await invoke<boolean>("get_enabled");
     taskListContent = await getTaskList(localDateStamp());
 

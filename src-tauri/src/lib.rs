@@ -6,14 +6,13 @@ mod hook;
 mod overlay;
 mod state;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration as StdDuration;
 
 use chrono::Local;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 use grid::Phase;
@@ -32,6 +31,25 @@ fn resolve_dev_mode() -> bool {
 }
 
 pub(crate) static POMODORO_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Whether Ctrl+Alt+Shift+F12 actually force-closes the overlay. Backed by
+/// `app_setting.force_close_shortcut_enabled`; the frontend loads that value
+/// and pushes it here on boot and on every Settings save (see
+/// `sync_force_close_shortcut_enabled` in commands.rs), the same pattern as
+/// `breakit_config`. Defaults to `true` here too, matching the migration's
+/// default, so the shortcut still works during the brief window before the
+/// frontend's first sync completes.
+pub(crate) static FORCE_CLOSE_SHORTCUT_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// How long after a break ends the overlay force-closes even without a
+/// reflection. Backed by `app_setting.overlay_auto_close_minutes`; the
+/// frontend loads that value and pushes it here on boot and on every
+/// Settings save (see `sync_overlay_auto_close_to_backend` in db.ts), the
+/// same pattern as `breakit_config`/`FORCE_CLOSE_SHORTCUT_ENABLED`. Defaults
+/// to 5 here too, matching the migration's default, so the timeout still
+/// applies during the brief window before the frontend's first sync
+/// completes. See `overlay::schedule_auto_close`.
+pub(crate) static OVERLAY_AUTO_CLOSE_MINUTES: AtomicU32 = AtomicU32::new(5);
 
 async fn run_scheduler(app: AppHandle) {
     let mut last_phase: Option<Phase> = None;
@@ -62,14 +80,23 @@ async fn run_scheduler(app: AppHandle) {
                         overlay::spawn_or_update_overlay(&app);
                     }
                     Phase::Work => {
-                        {
+                        let slot_start = {
                             let state = app.state::<AppState>();
                             let mut ov = state.overlay.lock().unwrap();
                             if ov.open {
                                 ov.time_expired = true;
                             }
-                        }
+                            ov.current_slot_start.clone()
+                        };
                         overlay::try_close_if_unlocked(&app);
+                        // If the unlock formula didn't already close it above
+                        // (no reflection yet), force-close it after the
+                        // configured grace period regardless -- see
+                        // OVERLAY_AUTO_CLOSE_MINUTES and schedule_auto_close's
+                        // own guard against a slot that already moved on.
+                        if !slot_start.is_empty() {
+                            overlay::schedule_auto_close(&app, slot_start);
+                        }
                     }
                 }
             }
@@ -128,13 +155,19 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
 fn setup_dev_kill_switch(app: &AppHandle) -> anyhow::Result<()> {
     // Always registered (not just in dev builds): cheap insurance against a
     // stuck overlay in production too. Task Manager and tray Quit are the
-    // other two independent kill switches.
+    // other two independent kill switches. Registration itself is
+    // unconditional; whether it actually does anything is gated on
+    // FORCE_CLOSE_SHORTCUT_ENABLED (Settings toggle) so disabling it doesn't
+    // require fighting the OS over re-registering/unregistering a global
+    // hotkey at runtime.
     let shortcut = Shortcut::new(
         Some(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT),
         Code::F12,
     );
     app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
-        if event.state() == ShortcutState::Pressed {
+        if event.state() == ShortcutState::Pressed
+            && FORCE_CLOSE_SHORTCUT_ENABLED.load(Ordering::SeqCst)
+        {
             overlay::close_overlay(app);
         }
     })?;
@@ -161,6 +194,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_overlay_state,
             commands::is_dev_mode,
@@ -173,13 +207,29 @@ pub fn run() {
             commands::get_startup_catchup_slot,
             commands::open_catchup_window,
             commands::get_catchup_slot,
+            commands::open_checkin_window,
+            commands::get_checkin_slot,
+            commands::read_text_file,
+            commands::write_text_file,
+            commands::get_autostart_enabled,
+            commands::set_autostart_enabled,
+            commands::get_force_close_shortcut_enabled,
+            commands::set_force_close_shortcut_enabled,
+            commands::get_overlay_auto_close_minutes,
+            commands::set_overlay_auto_close_minutes,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
 
-            if let Err(e) = handle.autolaunch().enable() {
-                eprintln!("failed to enable autostart: {e}");
-            }
+            // Deliberately NOT force-enabling autostart here on every boot --
+            // the Settings toggle now lets the user turn it off, and the OS
+            // registration itself is the only record of that choice (see
+            // commands::get/set_autostart_enabled). Force-enabling on every
+            // launch would silently undo an explicit "off" the next time the
+            // app starts. Defaulting it on for a brand new install instead
+            // happens once, from the frontend -- see `ensureDefaultAutostart`
+            // in db.ts, gated on the same first-run marker `findMissedSlots`
+            // already uses.
 
             setup_tray(&handle)?;
             setup_dev_kill_switch(&handle)?;

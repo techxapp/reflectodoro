@@ -1,12 +1,12 @@
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-    WindowEvent,
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 
 use crate::state::{AppState, OverlayState};
 
 pub const OVERLAY_LABEL: &str = "overlay";
 pub const CATCHUP_LABEL: &str = "catchup";
+pub const CHECKIN_LABEL: &str = "checkin";
 
 /// A freshly created WebviewWindow on this machine renders permanently blank
 /// if shown within roughly this long of process start (reproduced directly:
@@ -37,6 +37,9 @@ pub fn precreate_windows(app: &AppHandle) {
     }
     if app.get_webview_window(CATCHUP_LABEL).is_none() {
         build_catchup_window(app, false);
+    }
+    if app.get_webview_window(CHECKIN_LABEL).is_none() {
+        build_checkin_window(app, false);
     }
 }
 
@@ -109,12 +112,38 @@ pub fn try_close_if_unlocked(app: &AppHandle) {
     }
 }
 
+/// Force-closes the overlay `OVERLAY_AUTO_CLOSE_MINUTES` after this is
+/// called (from the break->work transition in `run_scheduler`) if it's still
+/// showing the *same* occurrence by then -- even without a reflection. The
+/// `current_slot_start` equality check is what makes this safe to fire
+/// unconditionally: if the user already resolved it (reflection/breakit) or
+/// it rolled into a newer slot via the merge path before the timer elapsed,
+/// this is a no-op rather than closing the wrong occurrence.
+pub fn schedule_auto_close(app: &AppHandle, slot_start: String) {
+    let minutes = crate::OVERLAY_AUTO_CLOSE_MINUTES.load(std::sync::atomic::Ordering::SeqCst);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(minutes as u64 * 60)).await;
+        let still_pending = {
+            let state = app.state::<AppState>();
+            let overlay = state.overlay.lock().unwrap();
+            overlay.open && overlay.current_slot_start == slot_start
+        };
+        if still_pending {
+            close_overlay(&app);
+        }
+    });
+}
+
 pub fn close_overlay(app: &AppHandle) {
-    {
+    let (slot_start, had_reflection) = {
         let state = app.state::<AppState>();
         let mut overlay = state.overlay.lock().unwrap();
+        let slot_start = overlay.current_slot_start.clone();
+        let had_reflection = overlay.reflection_entered;
         *overlay = OverlayState::closed();
-    }
+        (slot_start, had_reflection)
+    };
     // Hidden, not destroyed: keeps the webview warm so the *next* break
     // doesn't have to pay the creation cost (or risk the startup blank-page
     // race) all over again.
@@ -122,30 +151,46 @@ pub fn close_overlay(app: &AppHandle) {
         let _ = win.hide();
     }
     crate::hook::uninstall();
+
+    // The catch-up window (if it's up -- it can only ever be open at the
+    // same time as the live overlay right after app boot, see
+    // get_startup_catchup_slot) prompts for a slot that the overlay's own
+    // merge logic (findMissedSlots in the frontend) may have just covered
+    // too. Whatever closed the overlay just now -- reflection, breakit,
+    // auto-close timeout, or a kill switch -- that catch-up prompt is stale
+    // either way, so dismiss it along with the overlay rather than leaving
+    // it sitting open to ask about a slot the user just handled (or that
+    // timed out same as this one did).
+    if let Some(win) = app.get_webview_window(CATCHUP_LABEL) {
+        let _ = win.hide();
+    }
+
+    // Only prompt for the wellness check-in when a reflection was actually
+    // recorded for this slot -- excludes force-closes (dev "Close (DEV)",
+    // the Ctrl+Alt+Shift+F12 kill switch) where nothing was ever saved to
+    // link a wellness_check row to.
+    if had_reflection && !slot_start.is_empty() {
+        open_checkin_for_slot(app, slot_start);
+    }
 }
 
-/// Small, ordinary (decorated, closable, not-fullscreen) always-on-top window
-/// docked near the top of the screen, used at app startup when a break was
-/// left unreflected -- deliberately NOT the enforcement mechanism the live
-/// break overlay is (no keyboard hook, no close-requested trap): the break
-/// it's asking about has already ended, so there's no timer left to enforce,
-/// just a reminder that shouldn't be able to get the user stuck.
-fn build_catchup_window(app: &AppHandle, visible: bool) -> WebviewWindow {
-    let width = 720.0;
-    let height = 460.0;
-
-    let win = WebviewWindowBuilder::new(app, CATCHUP_LABEL, WebviewUrl::App("catchup".into()))
-        .title("Missed Reflectodoro")
-        .inner_size(width, height)
-        .resizable(false)
+/// Shared by the `catchup` and `checkin` popups: decorated (so the native
+/// title bar close/restore controls work), maximized, and always-on-top --
+/// deliberately NOT the enforcement mechanism the live break overlay is (no
+/// keyboard hook, no close-requested trap): by the time either of these
+/// windows is shown, there's no timer left to enforce, just an optional
+/// follow-up the user can dismiss.
+fn build_popup_window(app: &AppHandle, label: &str, page: &str, title: &str, visible: bool) -> WebviewWindow {
+    let win = WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
+        .title(title)
+        .maximized(true)
         .always_on_top(true)
         .visible(visible)
         .focused(visible)
-        .center()
         .build()
-        .expect("failed to build catchup window");
+        .expect("failed to build popup window");
 
-    // Closing (native X, or the page's own Dismiss/Save & close) hides
+    // Closing (native X, or the page's own Dismiss/Skip/Save & close) hides
     // rather than destroys, so the webview stays warm for reuse next time
     // instead of risking the startup blank-page race all over again.
     let win_for_close = win.clone();
@@ -156,19 +201,15 @@ fn build_catchup_window(app: &AppHandle, visible: bool) -> WebviewWindow {
         }
     });
 
-    // .center() above centers on both axes as a safe fallback; nudge it up to
-    // sit near the top of the screen instead, per the user's preference over
-    // the previous fullscreen version.
-    if let Ok(Some(monitor)) = win.primary_monitor() {
-        let scale = monitor.scale_factor();
-        let screen_x = monitor.position().x as f64 / scale;
-        let screen_w = monitor.size().width as f64 / scale;
-        let x = screen_x + (screen_w - width) / 2.0;
-        let y = monitor.position().y as f64 / scale + 32.0;
-        let _ = win.set_position(LogicalPosition::new(x, y));
-    }
-
     win
+}
+
+fn build_catchup_window(app: &AppHandle, visible: bool) -> WebviewWindow {
+    build_popup_window(app, CATCHUP_LABEL, "catchup", "Missed Reflectodoro", visible)
+}
+
+fn build_checkin_window(app: &AppHandle, visible: bool) -> WebviewWindow {
+    build_popup_window(app, CHECKIN_LABEL, "checkin", "Wellness Check-in", visible)
 }
 
 /// Shows the (already pre-created) catch-up window, or builds it fresh if it
@@ -184,4 +225,36 @@ pub fn spawn_catchup_window(app: &AppHandle) {
             build_catchup_window(app, true);
         }
     }
+}
+
+/// Shows the (already pre-created) check-in window, or builds it fresh if it
+/// was destroyed some other way.
+pub fn spawn_checkin_window(app: &AppHandle) {
+    match app.get_webview_window(CHECKIN_LABEL) {
+        Some(win) => {
+            let _ = win.show();
+            let _ = win.set_focus();
+        }
+        None => {
+            build_checkin_window(app, true);
+        }
+    }
+}
+
+/// Single entry point for triggering the wellness check-in, called both from
+/// `close_overlay` (the live break overlay finishing with a reflection saved)
+/// and from `commands::open_checkin_window` (the startup catch-up window's
+/// "Save & close"). Stores the slot for the window's own `get_checkin_slot`
+/// call on first mount, shows the window, and emits an event for every reuse
+/// after that -- the window is hidden rather than destroyed between uses, so
+/// its page mounts once per app run and needs a signal to reset itself for
+/// each new occurrence.
+pub fn open_checkin_for_slot(app: &AppHandle, slot_start_iso: String) {
+    {
+        let state = app.state::<AppState>();
+        let mut slot = state.checkin_slot.lock().unwrap();
+        *slot = Some(slot_start_iso.clone());
+    }
+    spawn_checkin_window(app);
+    let _ = app.emit("checkin://slot", slot_start_iso);
 }
