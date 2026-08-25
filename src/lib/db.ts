@@ -534,12 +534,14 @@ export interface ExportPayload {
   };
 }
 
-export async function exportAllData(): Promise<ExportPayload> {
+export async function exportAllData(includeSettings: boolean = true): Promise<ExportPayload> {
   const db = await getDb();
   const [reflection, daily_task_list, app_setting, wellness_check] = await Promise.all([
     db.select<ReflectionRow[]>(`SELECT id, created_at, slot_start_at, text FROM reflection`),
     db.select<TaskListRow[]>(`SELECT date, content, updated_at FROM daily_task_list`),
-    db.select<SettingRow[]>(`SELECT key, value FROM app_setting`),
+    includeSettings
+      ? db.select<SettingRow[]>(`SELECT key, value FROM app_setting`)
+      : Promise.resolve([]),
     db.select<WellnessCheckRow[]>(
       `SELECT id, reflection_id, relaxed_eyes, exercise, drank_water, washroom, created_at FROM wellness_check`,
     ),
@@ -690,7 +692,11 @@ export interface ImportResult {
  * (including that every wellness_check.reflection_id resolves within the
  * same file) before this function is ever called.
  */
-export async function importData(payload: ExportPayload, mode: ImportMode): Promise<ImportResult> {
+export async function importData(
+  payload: ExportPayload,
+  mode: ImportMode,
+  includeSettings: boolean = true,
+): Promise<ImportResult> {
   const db = await getDb();
   const { reflection, daily_task_list, app_setting, wellness_check } = payload.data;
 
@@ -699,7 +705,7 @@ export async function importData(payload: ExportPayload, mode: ImportMode): Prom
     await db.execute(`DELETE FROM wellness_check`);
     await db.execute(`DELETE FROM reflection`);
     await db.execute(`DELETE FROM daily_task_list`);
-    await db.execute(`DELETE FROM app_setting`);
+    if (includeSettings) await db.execute(`DELETE FROM app_setting`);
   }
 
   const idMap = new Map<number, number>();
@@ -731,28 +737,31 @@ export async function importData(payload: ExportPayload, mode: ImportMode): Prom
     );
   }
 
-  for (const row of app_setting) {
-    await db.execute(
-      mode === "merge"
-        ? `INSERT INTO app_setting (key, value) VALUES ($1, $2)
-           ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-        : `INSERT INTO app_setting (key, value) VALUES ($1, $2)`,
-      [row.key, row.value],
-    );
-  }
+  if (includeSettings) {
+    for (const row of app_setting) {
+      await db.execute(
+        mode === "merge"
+          ? `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+          : `INSERT INTO app_setting (key, value) VALUES ($1, $2)`,
+        [row.key, row.value],
+      );
+    }
 
-  // Rust's in-memory breakit config, force-close-shortcut flag, and overlay
-  // auto-close minutes are all caches of app_setting -- resync so an
-  // imported value takes effect immediately, not just after the next app
-  // restart.
-  await loadAndSyncBreakitSettings();
-  await loadAndSyncForceCloseShortcutSetting();
-  await loadAndSyncOverlayAutoClose();
+    // Rust's in-memory breakit config, force-close-shortcut flag, and overlay
+    // auto-close minutes are all caches of app_setting -- resync so an
+    // imported value takes effect immediately, not just after the next app
+    // restart.
+    await loadAndSyncBreakitSettings();
+    await loadAndSyncForceCloseShortcutSetting();
+    await loadAndSyncOverlayAutoClose();
+    await loadAndSyncMediaPauseOnBreakSetting();
+  }
 
   return {
     reflectionCount: reflection.length,
     taskListCount: daily_task_list.length,
-    settingCount: app_setting.length,
+    settingCount: includeSettings ? app_setting.length : 0,
     wellnessCheckCount: wellness_check.length,
   };
 }

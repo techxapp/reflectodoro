@@ -56,6 +56,8 @@
   let mediaPauseOnBreakLoaded = $state(false);
   let mediaPauseOnBreakBusy = $state(false);
 
+  let includeSettingsInTransfer = $state(true);
+
   let exportStatus = $state<"idle" | "success" | "error">("idle");
   let exportError = $state("");
   let importPath = $state<string | null>(null);
@@ -224,7 +226,7 @@
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (!path) return;
-      const payload = await exportAllData();
+      const payload = await exportAllData(includeSettingsInTransfer);
       await writeTextFile(path, JSON.stringify(payload, null, 2));
       exportStatus = "success";
       setTimeout(() => (exportStatus = "idle"), 3000);
@@ -247,10 +249,13 @@
 
   async function runImport(mode: ImportMode) {
     if (!importPath) return;
+    const settingsClause = includeSettingsInTransfer
+      ? "reflections, task lists, and settings"
+      : "reflections and task lists (settings will be left untouched)";
     const confirmed =
       mode === "replace"
         ? confirm(
-            `This will permanently delete all existing reflections, task lists, and settings and replace them with the contents of "${importFileName}". This cannot be undone. Continue?`,
+            `This will permanently delete all existing ${settingsClause} and replace them with the contents of "${importFileName}". This cannot be undone. Continue?`,
           )
         : confirm(
             `Import "${importFileName}" and merge it into your existing data? Imported values win on conflict; nothing existing is deleted.`,
@@ -262,7 +267,7 @@
     try {
       const raw = await readTextFile(importPath);
       const payload = parseAndValidateExport(raw);
-      const result = await importData(payload, mode);
+      const result = await importData(payload, mode, includeSettingsInTransfer);
       await loadBreakitSettings();
       importMessage = `Imported ${result.reflectionCount} reflection${result.reflectionCount === 1 ? "" : "s"}, ${result.taskListCount} task list${result.taskListCount === 1 ? "" : "s"}, ${result.settingCount} setting${result.settingCount === 1 ? "" : "s"}, ${result.wellnessCheckCount} wellness check-in${result.wellnessCheckCount === 1 ? "" : "s"}.`;
       importStatus = "success";
@@ -450,6 +455,13 @@
     <p class="hint">
       Export all reflections, task lists, and settings to a JSON file, or import one back in.
     </p>
+
+    <div class="data-row">
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={includeSettingsInTransfer} />
+        Include settings (breakit code, timeouts, etc.) in export/import
+      </label>
+    </div>
 
     <div class="data-row">
       <button type="button" onclick={exportData}>Export data&hellip;</button>
