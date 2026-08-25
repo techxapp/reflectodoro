@@ -16,6 +16,7 @@
     "sql:allow-execute",
     "updater:default",
     "process:default",
-    "dialog:default"
+    "dialog:default",
+    "log:default"
   ]
 }

@@ -35,12 +35,15 @@ pub async fn wait_for_webview_warmup(app: &AppHandle) {
 /// a window was destroyed) -- no-ops if the label already exists.
 pub fn precreate_windows(app: &AppHandle) {
     if app.get_webview_window(OVERLAY_LABEL).is_none() {
+        log::info!("precreate_windows: building {OVERLAY_LABEL}");
         build_overlay_window(app, false);
     }
     if app.get_webview_window(CATCHUP_LABEL).is_none() {
+        log::info!("precreate_windows: building {CATCHUP_LABEL}");
         build_catchup_window(app, false);
     }
     if app.get_webview_window(CHECKIN_LABEL).is_none() {
+        log::info!("precreate_windows: building {CHECKIN_LABEL}");
         build_checkin_window(app, false);
     }
 }
@@ -167,6 +170,9 @@ pub fn close_overlay(app: &AppHandle) {
     // it sitting open to ask about a slot the user just handled (or that
     // timed out same as this one did).
     if let Some(win) = app.get_webview_window(CATCHUP_LABEL) {
+        if win.is_visible().unwrap_or(false) {
+            log::info!("close_overlay: dismissing stale catchup window for slot={slot_start}");
+        }
         let _ = win.hide();
     }
 
@@ -223,10 +229,12 @@ fn build_checkin_window(app: &AppHandle, visible: bool) -> WebviewWindow {
 pub fn spawn_catchup_window(app: &AppHandle) {
     match app.get_webview_window(CATCHUP_LABEL) {
         Some(win) => {
+            log::info!("spawn_catchup_window: showing pre-created window");
             let _ = win.show();
             let _ = win.set_focus();
         }
         None => {
+            log::warn!("spawn_catchup_window: no pre-created window found, building fresh");
             build_catchup_window(app, true);
         }
     }
@@ -255,6 +263,7 @@ pub fn spawn_checkin_window(app: &AppHandle) {
 /// its page mounts once per app run and needs a signal to reset itself for
 /// each new occurrence.
 pub fn open_checkin_for_slot(app: &AppHandle, slot_start_iso: String) {
+    log::info!("open_checkin_for_slot: setting checkin_slot={slot_start_iso}");
     {
         let state = app.state::<AppState>();
         let mut slot = state.checkin_slot.lock().unwrap();

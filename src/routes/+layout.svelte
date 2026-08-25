@@ -5,6 +5,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { check } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
+  import { info } from "@tauri-apps/plugin-log";
   import { isSlotCovered, canonicalIso } from "$lib/db";
 
   let { children } = $props();
@@ -35,6 +36,7 @@
     const candidate = await invoke<string | null>("get_startup_catchup_slot");
     if (!candidate) return;
     const covered = await isSlotCovered(canonicalIso(candidate));
+    void info(`main: startup catchup check, candidate=${candidate}, covered=${covered}`);
     if (!covered) {
       await invoke("open_catchup_window", { slotStartIso: candidate });
     }

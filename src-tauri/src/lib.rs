@@ -68,6 +68,12 @@ async fn run_scheduler(app: AppHandle) {
         let slot = grid::slot_for(now);
 
         if last_phase != Some(slot.phase) {
+            log::info!(
+                "scheduler: phase transition {:?} -> {:?} at slot {}",
+                last_phase,
+                slot.phase,
+                slot.start_iso()
+            );
             if POMODORO_ENABLED.load(Ordering::SeqCst) {
                 match slot.phase {
                     Phase::Break => {
@@ -204,6 +210,24 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                    // Also mirrors into each window's devtools console, so
+                    // frontend `@tauri-apps/plugin-log` calls (info/warn/error)
+                    // land in the same log file as these Rust-side ones --
+                    // useful for the hidden catchup/checkin/overlay windows,
+                    // which don't have a devtools window open by default to
+                    // read console output from directly.
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                ])
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             commands::get_overlay_state,
             commands::is_dev_mode,
@@ -241,6 +265,8 @@ pub fn run() {
             // happens once, from the frontend -- see `ensureDefaultAutostart`
             // in db.ts, gated on the same first-run marker `findMissedSlots`
             // already uses.
+
+            log::info!("app setup starting, dev_mode={dev_mode}");
 
             setup_tray(&handle)?;
             setup_dev_kill_switch(&handle)?;

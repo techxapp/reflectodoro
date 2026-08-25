@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { info } from "@tauri-apps/plugin-log";
   import {
     canonicalIso,
     getCheckinAutoCloseMinutes,
@@ -132,20 +133,31 @@
     // between two breaks should still apply to the next one.
     excludedLabels = parseWellnessTextExclusions(await getWellnessTextExclusions());
     ready = true;
+    void info(`checkin: loaded slot=${slot}`);
     await scheduleAutoClose();
   }
 
   onMount(async () => {
     // This window is hidden rather than destroyed when dismissed (so its
-    // webview stays warm), meaning it mounts once per app run but can be
-    // reused for a different occurrence later -- the initial invoke covers
-    // the very first show, the event covers every reuse after that.
-    const initialSlot = await invoke<string | null>("get_checkin_slot");
-    if (initialSlot) void loadForSlot(initialSlot);
-
+    // webview stays warm), meaning it mounts once per app run -- often
+    // before whatever triggers the first check-in has even run. The
+    // listener MUST be attached before the fallback invoke below: the
+    // trigger (open_checkin_for_slot in overlay.rs) sets `checkin_slot`
+    // state and then emits "checkin://slot" in that order, so once the
+    // listener is live, any emit that already fired is still covered by the
+    // invoke's read of the now-set state -- see best_practices.md race #2.
+    // Attaching the listener after the invoke, as this used to, left a gap
+    // where an emit could land in between and be silently dropped, leaving
+    // the window blank.
+    void info("checkin: onMount, attaching listener before fallback invoke");
     unlistenSlot = await listen<string>("checkin://slot", (event) => {
+      void info(`checkin: received checkin://slot event, slot=${event.payload}`);
       void loadForSlot(event.payload);
     });
+
+    const initialSlot = await invoke<string | null>("get_checkin_slot");
+    void info(`checkin: fallback get_checkin_slot -> ${initialSlot}`);
+    if (initialSlot) void loadForSlot(initialSlot);
   });
 
   onDestroy(() => {

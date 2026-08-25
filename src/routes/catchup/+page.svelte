@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { info } from "@tauri-apps/plugin-log";
   import {
     findMissedSlots,
     saveReflection,
@@ -31,6 +32,7 @@
     saving = false;
     slots = await findMissedSlots(slot);
     ready = true;
+    void info(`catchup: loaded slot=${slot}, covering ${slots.length} slot(s)`);
   }
 
   function scheduleTaskSave() {
@@ -42,19 +44,29 @@
 
   onMount(async () => {
     // This window is hidden rather than destroyed when dismissed (so its
-    // webview stays warm), meaning it mounts once per app run but can be
-    // reused for a different occurrence later -- the initial invoke covers
-    // the very first show, the event covers every reuse after that.
-    const slot = await invoke<string | null>("get_catchup_slot");
-    if (slot) await loadForSlot(slot);
-    taskListContent = await getTaskList(localDateStamp());
-
+    // webview stays warm), meaning it mounts once per app run -- often
+    // *before* the main window's startup check has even run, since both are
+    // racing DB calls of similar cost. The listener MUST be attached before
+    // the fallback invoke below: `open_catchup_window` (commands.rs) sets
+    // `catchup_slot` state and then emits "catchup://slot" in that order, so
+    // once the listener is live, any emit that already fired is still
+    // covered by the invoke's read of the now-set state -- see
+    // best_practices.md race #2. Attaching the listener after the invoke, as
+    // this used to, left a gap where an emit could land in between and be
+    // silently dropped, which is what made this window come up blank.
+    void info("catchup: onMount, attaching listener before fallback invoke");
     unlistenSlot = await listen<string>("catchup://slot", (event) => {
+      void info(`catchup: received catchup://slot event, slot=${event.payload}`);
       void loadForSlot(event.payload);
     });
     unlistenTasks = await listenForTaskListUpdates((content) => {
       taskListContent = content;
     });
+
+    const slot = await invoke<string | null>("get_catchup_slot");
+    void info(`catchup: fallback get_catchup_slot -> ${slot}`);
+    if (slot) await loadForSlot(slot);
+    taskListContent = await getTaskList(localDateStamp());
   });
 
   onDestroy(() => {
