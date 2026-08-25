@@ -16,6 +16,8 @@
     saveWellnessTextExclusions,
     getForceCloseShortcutEnabled,
     saveForceCloseShortcutEnabled,
+    getMediaPauseOnBreakEnabled,
+    saveMediaPauseOnBreakEnabled,
     getOverlayAutoCloseMinutes,
     saveOverlayAutoCloseMinutes,
     getCheckinAutoCloseMinutes,
@@ -50,6 +52,10 @@
   let forceCloseShortcutLoaded = $state(false);
   let forceCloseShortcutBusy = $state(false);
 
+  let mediaPauseOnBreakEnabled = $state(true);
+  let mediaPauseOnBreakLoaded = $state(false);
+  let mediaPauseOnBreakBusy = $state(false);
+
   let exportStatus = $state<"idle" | "success" | "error">("idle");
   let exportError = $state("");
   let importPath = $state<string | null>(null);
@@ -80,6 +86,11 @@
   onMount(async () => {
     forceCloseShortcutEnabled = await getForceCloseShortcutEnabled();
     forceCloseShortcutLoaded = true;
+  });
+
+  onMount(async () => {
+    mediaPauseOnBreakEnabled = await getMediaPauseOnBreakEnabled();
+    mediaPauseOnBreakLoaded = true;
   });
 
   onMount(async () => {
@@ -148,6 +159,17 @@
     if (e.key !== "Enter" && e.key !== " ") return;
     e.preventDefault();
     void commitForceCloseShortcut(!forceCloseShortcutEnabled);
+  }
+
+  async function toggleMediaPauseOnBreak() {
+    const next = !mediaPauseOnBreakEnabled;
+    mediaPauseOnBreakBusy = true;
+    try {
+      await saveMediaPauseOnBreakEnabled(next);
+      mediaPauseOnBreakEnabled = next;
+    } finally {
+      mediaPauseOnBreakBusy = false;
+    }
   }
 
   async function saveWellnessExclusions(e: Event) {
@@ -293,6 +315,20 @@
           <span class="hint saved">Saved</span>
         {/if}
       </form>
+    {/if}
+
+    {#if mediaPauseOnBreakLoaded}
+      <div class="data-row">
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={mediaPauseOnBreakEnabled}
+            disabled={mediaPauseOnBreakBusy}
+            onchange={toggleMediaPauseOnBreak}
+          />
+          Pause playing media (video/music) when a break starts
+        </label>
+      </div>
     {/if}
   </section>
 

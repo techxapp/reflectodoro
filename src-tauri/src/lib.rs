@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod grid;
 mod hook;
+mod media;
 mod overlay;
 mod state;
 
@@ -40,6 +41,14 @@ pub(crate) static POMODORO_ENABLED: AtomicBool = AtomicBool::new(true);
 /// default, so the shortcut still works during the brief window before the
 /// frontend's first sync completes.
 pub(crate) static FORCE_CLOSE_SHORTCUT_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Whether entering a break simulates the hardware Play/Pause media key
+/// (best-effort toggle of whatever holds Windows' System Media Transport
+/// Controls -- see media.rs). Backed by `app_setting.media_pause_on_break_enabled`;
+/// the frontend loads that value and pushes it here on boot and on every
+/// Settings save, the same pattern as `FORCE_CLOSE_SHORTCUT_ENABLED`. Defaults
+/// to `true` here too, matching the migration's default.
+pub(crate) static MEDIA_PAUSE_ON_BREAK_ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// How long after a break ends the overlay force-closes even without a
 /// reflection. Backed by `app_setting.overlay_auto_close_minutes`; the
@@ -217,6 +226,8 @@ pub fn run() {
             commands::set_force_close_shortcut_enabled,
             commands::get_overlay_auto_close_minutes,
             commands::set_overlay_auto_close_minutes,
+            commands::get_media_pause_on_break_enabled,
+            commands::set_media_pause_on_break_enabled,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

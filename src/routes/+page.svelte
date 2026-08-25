@@ -10,6 +10,7 @@
     loadAndSyncBreakitSettings,
     loadAndSyncForceCloseShortcutSetting,
     loadAndSyncOverlayAutoClose,
+    loadAndSyncMediaPauseOnBreakSetting,
     listenForTaskListUpdates,
   } from "$lib/db";
 
@@ -46,6 +47,7 @@
     await loadAndSyncBreakitSettings();
     await loadAndSyncForceCloseShortcutSetting();
     await loadAndSyncOverlayAutoClose();
+    await loadAndSyncMediaPauseOnBreakSetting();
     enabled = await invoke<boolean>("get_enabled");
     taskListContent = await getTaskList(localDateStamp());
 

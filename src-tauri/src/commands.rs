@@ -5,7 +5,10 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::overlay;
 use crate::state::{AppState, OverlayState};
-use crate::{FORCE_CLOSE_SHORTCUT_ENABLED, OVERLAY_AUTO_CLOSE_MINUTES, POMODORO_ENABLED};
+use crate::{
+    FORCE_CLOSE_SHORTCUT_ENABLED, MEDIA_PAUSE_ON_BREAK_ENABLED, OVERLAY_AUTO_CLOSE_MINUTES,
+    POMODORO_ENABLED,
+};
 
 #[tauri::command]
 pub fn get_overlay_state(state: State<AppState>) -> OverlayState {
@@ -176,6 +179,19 @@ pub fn get_overlay_auto_close_minutes() -> u32 {
 #[tauri::command]
 pub fn set_overlay_auto_close_minutes(minutes: u32) {
     OVERLAY_AUTO_CLOSE_MINUTES.store(minutes.max(1), Ordering::SeqCst);
+}
+
+/// Mirrors app_setting.media_pause_on_break_enabled -- loaded and pushed here
+/// by the frontend on boot and on every Settings save (see
+/// loadAndSyncMediaPauseOnBreakSetting in db.ts).
+#[tauri::command]
+pub fn get_media_pause_on_break_enabled() -> bool {
+    MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+pub fn set_media_pause_on_break_enabled(enabled: bool) {
+    MEDIA_PAUSE_ON_BREAK_ENABLED.store(enabled, Ordering::SeqCst);
 }
 
 /// Only available when dev_mode is on -- bypasses the unlock formula entirely.

@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use tauri::{
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
@@ -82,6 +84,9 @@ pub fn spawn_or_update_overlay(app: &AppHandle) {
         let dev_mode = app.state::<AppState>().dev_mode;
         let _ = win.show();
         let _ = win.set_focus();
+        if crate::MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst) {
+            crate::media::pause_playing_sessions();
+        }
         if !dev_mode {
             crate::hook::install();
         }

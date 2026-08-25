@@ -90,5 +90,13 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 6,
+            description: "default media_pause_on_break_enabled setting to enabled",
+            sql: r#"
+                INSERT INTO app_setting (key, value) VALUES ('media_pause_on_break_enabled', 'true');
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -340,6 +340,40 @@ export async function loadAndSyncForceCloseShortcutSetting(): Promise<boolean> {
   return enabled;
 }
 
+// --- Media pause-on-break toggle (Settings) ----------------------------
+
+const MEDIA_PAUSE_ON_BREAK_KEY = "media_pause_on_break_enabled";
+
+export async function getMediaPauseOnBreakEnabled(): Promise<boolean> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [MEDIA_PAUSE_ON_BREAK_KEY],
+  );
+  return (rows[0]?.value ?? "true") === "true";
+}
+
+export async function saveMediaPauseOnBreakEnabled(enabled: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [MEDIA_PAUSE_ON_BREAK_KEY, String(enabled)],
+  );
+  await syncMediaPauseOnBreakToBackend(enabled);
+}
+
+export async function syncMediaPauseOnBreakToBackend(enabled: boolean): Promise<void> {
+  await invoke("set_media_pause_on_break_enabled", { enabled });
+}
+
+/** Call once on app boot (main window) so Rust's in-memory flag matches SQLite. */
+export async function loadAndSyncMediaPauseOnBreakSetting(): Promise<boolean> {
+  const enabled = await getMediaPauseOnBreakEnabled();
+  await syncMediaPauseOnBreakToBackend(enabled);
+  return enabled;
+}
+
 // --- Overlay auto-close timeout (Settings) -----------------------------
 
 const OVERLAY_AUTO_CLOSE_KEY = "overlay_auto_close_minutes";
