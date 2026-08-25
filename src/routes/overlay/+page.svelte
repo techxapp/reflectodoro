@@ -163,7 +163,7 @@
         {#if overlayState?.breakit_matched}
           <p class="hint ok">Code matched.</p>
         {:else}
-          <label for="breakit-field">Or type this code exactly (no pasting) and press Enter</label>
+          <label for="breakit-field">To close this window early, type this code and press Enter</label>
           <p class="challenge">{overlayState?.breakit_challenge ?? ""}</p>
           <input
             id="breakit-field"

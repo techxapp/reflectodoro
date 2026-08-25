@@ -14,6 +14,7 @@
     { href: "/", label: "Timer" },
     { href: "/entries", label: "Entries" },
     { href: "/settings", label: "Settings" },
+    { href: "/about", label: "About" },
   ];
 
   const isSpecialWindow = $derived(

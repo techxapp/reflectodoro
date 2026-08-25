@@ -74,8 +74,8 @@
     <p class="label">{slot.phase === "work" ? "Working" : "On break"}</p>
     <p class="big">{remainingLabel}</p>
     <p class="sub">
-      {slot.phase === "work" ? "until break" : "until work resumes"}
-      &middot; sessions run :00-:25 and :30-:55, breaks :25-:30 and :55-:00
+      &middot; {slot.phase === "work" ? "until break" : "until work resumes"}
+      &middot; <br/> sessions run :00-:25 and :30-:55 <br/> breaks :25-:30 and :55-:00
     </p>
     <button class="toggle" class:off={!enabled} onclick={toggleEnabled}>
       {enabled ? "Pomodoro mode: On" : "Pomodoro mode: Off"}
@@ -87,7 +87,9 @@
     <textarea
       bind:value={taskListContent}
       oninput={scheduleTaskSave}
-      placeholder="1.&#10;2.&#10;3."
+      placeholder="1.
+2.
+3."
       rows="8"
     ></textarea>
     <p class="hint">Shared with the break overlay &mdash; auto-saves as you type.</p>

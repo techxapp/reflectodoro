@@ -286,9 +286,9 @@
   <section class="card">
     <h2>Break overlay</h2>
     <p class="hint">
-      Reflection ("what did I do?") ends a break immediately once entered. Typing a random code
-      exactly (no pasting) is the early-exit alternative &mdash; it still requires the reflection too.
-      A new code is generated for every break, so it can't become muscle memory. If neither happens,
+      Typing a random code exactly is the early-exit alternative &mdash;
+      it still requires the reflection ("what did I do?") too.
+      If neither happens,
       the overlay auto-closes on its own after the timeout below.
     </p>
 
