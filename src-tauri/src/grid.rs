@@ -51,12 +51,6 @@ pub fn slot_for(now: DateTime<Local>) -> Slot {
     Slot { phase, start, end }
 }
 
-/// Break slots are always 30 minutes apart (:25 and :55 each hour), so the
-/// previous break slot's start is just this one minus 30 minutes.
-pub fn previous_break_start(current_break_start: DateTime<Local>) -> DateTime<Local> {
-    current_break_start - ChronoDuration::minutes(30)
-}
-
 /// If `now` falls in a work slot, returns the start of the 5-minute break
 /// that ended when this work slot began (every work slot is immediately
 /// preceded by a break) -- used at app startup to check for a reflection

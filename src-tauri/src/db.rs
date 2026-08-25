@@ -98,5 +98,14 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 7,
+            description: "bump default checkin_auto_close_minutes to 15",
+            sql: r#"
+                UPDATE app_setting SET value = '15'
+                WHERE key = 'checkin_auto_close_minutes' AND value = '5';
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

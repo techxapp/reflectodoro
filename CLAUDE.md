@@ -96,3 +96,4 @@ Both bugs were silent (no thrown error visible to the user) — diagnosed by que
 ## Best practices
 
 - Refer best_pratices.md file best_pratices and checks for code changes.
+- Try to make variable values configurable wherever feasible and appropriate.
