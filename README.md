@@ -22,7 +22,7 @@ npm run tauri dev
 npm run tauri build
 ```
 
-Produces a `.msi` and `.exe` installer under `src-tauri/target/release/bundle/`.
+Produces `.exe` installer under `src-tauri/target/release/bundle/`.
 Pushing a `vX.Y.Z` tag also triggers `.github/workflows/release.yml`, which builds and
 publishes these automatically as a GitHub Release.
 
