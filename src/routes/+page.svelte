@@ -75,7 +75,7 @@
     <p class="big">{remainingLabel}</p>
     <p class="sub">
       &middot; {slot.phase === "work" ? "until break" : "until work resumes"}
-      &middot; <br/> sessions run :00-:25 and :30-:55 <br/> breaks :25-:30 and :55-:00
+      &middot; <br/> Sessions :00-:25 and :30-:55 <br/> Breaks :25-:30 and :55-:00
     </p>
     <button class="toggle" class:off={!enabled} onclick={toggleEnabled}>
       {enabled ? "Pomodoro mode: On" : "Pomodoro mode: Off"}
