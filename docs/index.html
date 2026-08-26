@@ -119,6 +119,80 @@
       font-size: 14px;
       color: var(--text-dim);
     }
+    .section-title {
+      font-size: 1.4rem;
+      margin: 0 0 20px;
+      letter-spacing: -0.01em;
+    }
+    .carousel {
+      position: relative;
+      margin-bottom: 16px;
+    }
+    .carousel-track {
+      display: flex;
+      overflow-x: auto;
+      scroll-snap-type: x mandatory;
+      scroll-behavior: smooth;
+      gap: 16px;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    .carousel-track::-webkit-scrollbar { display: none; }
+    .carousel-slide {
+      flex: 0 0 100%;
+      scroll-snap-align: center;
+    }
+    .shot {
+      width: 100%;
+      height: auto;
+      display: block;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    }
+    .carousel-btn {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
+      opacity: 0.9;
+      transition: background 0.15s ease, opacity 0.15s ease;
+    }
+    .carousel-btn:hover { background: var(--accent-soft); opacity: 1; }
+    .carousel-prev { left: 8px; }
+    .carousel-next { right: 8px; }
+    .carousel-dots {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 56px;
+    }
+    .carousel-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      border: none;
+      background: var(--border);
+      cursor: pointer;
+      padding: 0;
+      transition: background 0.15s ease, transform 0.15s ease;
+    }
+    .carousel-dot.active {
+      background: var(--accent);
+      transform: scale(1.25);
+    }
     footer {
       border-top: 1px solid var(--border);
       padding-top: 24px;
@@ -151,36 +225,111 @@
     </div>
     <p class="note">
       Windows may show a SmartScreen "unknown publisher" warning on first run &mdash;
-      choose <em>More info &rarr; Run anyway</em>. The app isn't code-signed yet.
+      choose <em>More info &rarr; Run anyway</em>.
     </p>
 
     <div class="features">
       <div class="card">
-        <h3>Wall-clock breaks</h3>
+        <h3>Wall-clock breaks &#9202;</h3>
         <p>Work and break slots are pinned to fixed clock boundaries.</p>
       </div>
       <div class="card">
-        <h3>No free pass</h3>
+        <h3>No free pass &#128274;</h3>
         <p>The break overlay can't be dismissed directly &mdash; you have to write what you did and wait for break time to be over.</p>
       </div>
       <div class="card">
-        <h3>Breakit challenge</h3>
+        <h3>Emergency exit &#9889;</h3>
         <p>Type a random on-screen string to end the break early &mdash; still requires the reflection either way.</p>
       </div>
       <div class="card">
-        <h3>Wellness check</h3>
+        <h3>Wellness check &#127793;</h3>
         <p>Wellness check at the end of break to track break items i.e. did short exercise, relaxed eyes, drank water.</p>
       </div>
       <div class="card">
-        <h3>Fully local</h3>
-        <p>Everything is stored on-device. No account, no server, no sync.</p>
+        <h3>Fully local and private &#128187;</h3>
+        <p>All of your data is stored on your device. No cloud data transfer.</p>
+      </div>
+      <div class="card">
+        <h3>Auto-pause Media &#9208;&#65039;</h3>
+        <p>Auto-pause music/movies during breaktime, so you do not get spoilers &#128540; when you get back.</p>
+      </div>
+      <div class="card">
+        <h3>Cross-platform support &#128241;</h3>
+        <p>Coming soon...</p>
       </div>
     </div>
+
+    <h2 class="section-title">Screenshots</h2>
+    <div class="carousel">
+      <button class="carousel-btn carousel-prev" type="button" aria-label="Previous screenshot">&#8592;</button>
+      <div class="carousel-track" id="carouselTrack" tabindex="0" aria-label="Screenshots carousel">
+        <div class="carousel-slide"><img class="shot" src="screenshots/SS3.png" alt="Main timer window with wall-clock countdown and Most Important Tasks panel" loading="lazy" /></div>
+        <div class="carousel-slide"><img class="shot" src="screenshots/SS1.png" alt="Break overlay requiring a written reflection, with the emergency-exit code challenge" loading="lazy" /></div>
+        <div class="carousel-slide"><img class="shot" src="screenshots/SS2.png" alt="Wellness check-in prompt for relaxed eyes, exercise, water, and washroom breaks" loading="lazy" /></div>
+        <div class="carousel-slide"><img class="shot" src="screenshots/SS4.png" alt="Entries view showing daily wellness stats and reflection history on a calendar" loading="lazy" /></div>
+      </div>
+      <button class="carousel-btn carousel-next" type="button" aria-label="Next screenshot">&#8594;</button>
+    </div>
+    <div class="carousel-dots" id="carouselDots"></div>
 
     <footer>
       <span>Reflectodoro</span>
       <span><a href="https://github.com/techxapp/reflectodoro">github.com/techxapp/reflectodoro</a></span>
     </footer>
   </div>
+
+  <script>
+    (function () {
+      var track = document.getElementById('carouselTrack');
+      var dotsWrap = document.getElementById('carouselDots');
+      var slides = Array.prototype.slice.call(track.children);
+      var prevBtn = document.querySelector('.carousel-prev');
+      var nextBtn = document.querySelector('.carousel-next');
+
+      slides.forEach(function (slide, i) {
+        var dot = document.createElement('button');
+        dot.type = 'button';
+        dot.className = 'carousel-dot' + (i === 0 ? ' active' : '');
+        dot.setAttribute('aria-label', 'Go to screenshot ' + (i + 1));
+        dot.addEventListener('click', function () {
+          slide.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+        });
+        dotsWrap.appendChild(dot);
+      });
+      var dots = Array.prototype.slice.call(dotsWrap.children);
+
+      function currentIndex() {
+        var center = track.scrollLeft + track.clientWidth / 2;
+        var closest = 0;
+        var minDist = Infinity;
+        slides.forEach(function (slide, i) {
+          var mid = slide.offsetLeft + slide.offsetWidth / 2;
+          var dist = Math.abs(mid - center);
+          if (dist < minDist) { minDist = dist; closest = i; }
+        });
+        return closest;
+      }
+
+      function updateDots() {
+        var idx = currentIndex();
+        dots.forEach(function (d, i) { d.classList.toggle('active', i === idx); });
+      }
+
+      var scrollTimeout;
+      track.addEventListener('scroll', function () {
+        clearTimeout(scrollTimeout);
+        scrollTimeout = setTimeout(updateDots, 100);
+      });
+
+      prevBtn.addEventListener('click', function () {
+        var idx = Math.max(0, currentIndex() - 1);
+        slides[idx].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+      });
+      nextBtn.addEventListener('click', function () {
+        var idx = Math.min(slides.length - 1, currentIndex() + 1);
+        slides[idx].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+      });
+    })();
+  </script>
 </body>
 </html>
