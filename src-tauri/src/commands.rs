@@ -64,68 +64,6 @@ pub fn set_enabled(app: AppHandle, enabled: bool) {
     let _ = app.emit("pomodoro://enabled-changed", enabled);
 }
 
-/// Checked once by the main window on every app boot. Returns the start of
-/// the most recently completed break slot (RFC3339, local offset) if `now`
-/// is in a work slot, so the frontend can check whether it was ever
-/// reflected on -- catches the case where the app was closed/killed/the
-/// machine restarted with a break left unlogged. `None` while a break is
-/// live; that case is already owned by the normal scheduler.
-#[tauri::command]
-pub fn get_startup_catchup_slot() -> Option<String> {
-    let slot = crate::grid::preceding_break_start(chrono::Local::now()).map(|dt| dt.to_rfc3339());
-    log::info!("get_startup_catchup_slot -> {slot:?}");
-    slot
-}
-
-/// Opens the small top-of-screen catch-up window for a break slot that has
-/// already elapsed unreflected (see `get_startup_catchup_slot`). Stores the
-/// slot in state for the window's `get_catchup_slot` call on its very first
-/// mount, and also emits it as an event for every show after that -- the
-/// window is hidden rather than destroyed when dismissed (see overlay.rs),
-/// so its page only mounts once per app run and needs a signal to reset
-/// itself (clear the textarea, re-check for missed slots) each time it's
-/// reused for a different occurrence.
-#[tauri::command]
-pub async fn open_catchup_window(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    slot_start_iso: String,
-) -> Result<(), ()> {
-    log::info!("open_catchup_window: setting catchup_slot={slot_start_iso}");
-    {
-        let mut slot = state.catchup_slot.lock().unwrap();
-        *slot = Some(slot_start_iso.clone());
-    }
-    // This runs at app boot, often within the webview startup race window
-    // (see overlay::WEBVIEW_WARMUP) -- wait it out before showing. Note the
-    // catchup page may already be mounted and listening (or may check via
-    // get_catchup_slot after this point) well before this wait finishes --
-    // see the ordering note in catchup/+page.svelte's onMount.
-    crate::overlay::wait_for_webview_warmup(&app).await;
-    crate::overlay::spawn_catchup_window(&app);
-    log::info!("open_catchup_window: emitting catchup://slot={slot_start_iso}");
-    let _ = app.emit("catchup://slot", slot_start_iso);
-    Ok(())
-}
-
-/// Read by the catch-up window on mount to learn which slot triggered it.
-#[tauri::command]
-pub fn get_catchup_slot(state: State<AppState>) -> Option<String> {
-    let slot = state.catchup_slot.lock().unwrap().clone();
-    log::info!("get_catchup_slot -> {slot:?}");
-    slot
-}
-
-/// Triggers the wellness check-in popup for a slot whose reflection was just
-/// saved. Called by the `catchup` window after "Save & close"; the live break
-/// overlay's own close path calls `overlay::open_checkin_for_slot` directly
-/// instead of going through this command.
-#[tauri::command]
-pub fn open_checkin_window(app: AppHandle, slot_start_iso: String) {
-    log::info!("open_checkin_window (from catchup window): slot={slot_start_iso}");
-    overlay::open_checkin_for_slot(&app, slot_start_iso);
-}
-
 /// Read by the check-in window on mount to learn which slot triggered it.
 #[tauri::command]
 pub fn get_checkin_slot(state: State<AppState>) -> Option<String> {

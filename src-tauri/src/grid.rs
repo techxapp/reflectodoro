@@ -51,20 +51,6 @@ pub fn slot_for(now: DateTime<Local>) -> Slot {
     Slot { phase, start, end }
 }
 
-/// If `now` falls in a work slot, returns the start of the 5-minute break
-/// that ended when this work slot began (every work slot is immediately
-/// preceded by a break) -- used at app startup to check for a reflection
-/// that was never logged before the app was closed/killed/restarted.
-/// Returns `None` if `now` falls in a break, since that's a live break the
-/// normal scheduler already owns.
-pub fn preceding_break_start(now: DateTime<Local>) -> Option<DateTime<Local>> {
-    let slot = slot_for(now);
-    match slot.phase {
-        Phase::Work => Some(slot.start - ChronoDuration::minutes(5)),
-        Phase::Break => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,22 +98,5 @@ mod tests {
         assert_eq!(slot.phase, Phase::Break);
         assert_eq!(slot.start, local(10, 55));
         assert_eq!(slot.end, local(11, 0));
-    }
-
-    #[test]
-    fn previous_break_is_thirty_minutes_earlier() {
-        assert_eq!(previous_break_start(local(10, 55)), local(10, 25));
-        assert_eq!(previous_break_start(local(11, 25)), local(10, 55));
-    }
-
-    #[test]
-    fn preceding_break_start_during_work() {
-        assert_eq!(preceding_break_start(local(10, 5)), Some(local(9, 55)));
-        assert_eq!(preceding_break_start(local(10, 45)), Some(local(10, 25)));
-    }
-
-    #[test]
-    fn preceding_break_start_is_none_during_break() {
-        assert_eq!(preceding_break_start(local(10, 27)), None);
     }
 }

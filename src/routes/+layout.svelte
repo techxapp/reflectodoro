@@ -2,11 +2,8 @@
   import { onMount } from "svelte";
   import "./app.css";
   import { page } from "$app/stores";
-  import { invoke } from "@tauri-apps/api/core";
   import { check } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
-  import { info } from "@tauri-apps/plugin-log";
-  import { isSlotCovered, canonicalIso } from "$lib/db";
 
   let { children } = $props();
 
@@ -18,30 +15,8 @@
   ];
 
   const isSpecialWindow = $derived(
-    $page.url.pathname === "/overlay" ||
-      $page.url.pathname === "/catchup" ||
-      $page.url.pathname === "/checkin",
+    $page.url.pathname === "/overlay" || $page.url.pathname === "/checkin",
   );
-
-  /**
-   * Runs once per app boot (main window only -- the overlay/catchup/checkin
-   * windows mount this same root layout too, so bail out immediately there instead
-   * of re-running the check from inside the window it would itself open).
-   * If the app was closed/killed or the machine restarted while a break's
-   * reflection was never logged, this pops the catch-up window immediately
-   * instead of waiting for the next scheduled break, which could be up to
-   * 25 minutes away.
-   */
-  onMount(async () => {
-    if (isSpecialWindow) return;
-    const candidate = await invoke<string | null>("get_startup_catchup_slot");
-    if (!candidate) return;
-    const covered = await isSlotCovered(canonicalIso(candidate));
-    void info(`main: startup catchup check, candidate=${candidate}, covered=${covered}`);
-    if (!covered) {
-      await invoke("open_catchup_window", { slotStartIso: candidate });
-    }
-  });
 
   /** Runs once per app boot (main window only). Checks GitHub Releases'
    * latest.json for a newer signed build; if found and the user accepts,

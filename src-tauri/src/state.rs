@@ -64,10 +64,6 @@ impl Default for BreakitConfig {
 pub struct AppState {
     pub overlay: Mutex<OverlayState>,
     pub breakit_config: Mutex<BreakitConfig>,
-    /// Slot start (RFC3339, local offset) handed off to the catch-up window --
-    /// set by `open_catchup_window` right before spawning it, read back by the
-    /// window's own `get_catchup_slot` call on mount. See overlay.rs.
-    pub catchup_slot: Mutex<Option<String>>,
     /// Slot start (RFC3339, local offset) handed off to the wellness check-in
     /// window -- set by `open_checkin_for_slot` right before spawning it, read
     /// back by the window's own `get_checkin_slot` call on mount. See overlay.rs.
@@ -87,7 +83,6 @@ impl AppState {
         Self {
             overlay: Mutex::new(OverlayState::closed()),
             breakit_config: Mutex::new(BreakitConfig::default()),
-            catchup_slot: Mutex::new(None),
             checkin_slot: Mutex::new(None),
             started_at: std::time::Instant::now(),
             dev_mode,

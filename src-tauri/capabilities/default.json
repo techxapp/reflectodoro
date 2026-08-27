@@ -1,11 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window, the break overlay window, the startup catch-up window, and the wellness check-in window",
+  "description": "Capability for the main window, the break overlay window, and the wellness check-in window",
   "windows": [
     "main",
     "overlay",
-    "catchup",
     "checkin"
   ],
   "permissions": [

@@ -220,7 +220,7 @@ pub fn run() {
                     // Also mirrors into each window's devtools console, so
                     // frontend `@tauri-apps/plugin-log` calls (info/warn/error)
                     // land in the same log file as these Rust-side ones --
-                    // useful for the hidden catchup/checkin/overlay windows,
+                    // useful for the hidden checkin/overlay windows,
                     // which don't have a devtools window open by default to
                     // read console output from directly.
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
@@ -237,10 +237,6 @@ pub fn run() {
             commands::dev_force_close,
             commands::get_enabled,
             commands::set_enabled,
-            commands::get_startup_catchup_slot,
-            commands::open_catchup_window,
-            commands::get_catchup_slot,
-            commands::open_checkin_window,
             commands::get_checkin_slot,
             commands::read_text_file,
             commands::write_text_file,

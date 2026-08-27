@@ -7,7 +7,6 @@ use tauri::{
 use crate::state::{AppState, OverlayState};
 
 pub const OVERLAY_LABEL: &str = "overlay";
-pub const CATCHUP_LABEL: &str = "catchup";
 pub const CHECKIN_LABEL: &str = "checkin";
 
 /// A freshly created WebviewWindow on this machine renders permanently blank
@@ -16,8 +15,8 @@ pub const CHECKIN_LABEL: &str = "checkin";
 /// devtools output -- while the same window shown 6s after boot renders
 /// fine). 6s is the only empirically-confirmed-safe value; there's no data
 /// point between "1-2s: broken" and "6s: fine", so this doesn't shave that
-/// margin down without a reason to believe it's still safe. Both special
-/// windows are pre-created hidden in `precreate_windows` so they get a head
+/// margin down without a reason to believe it's still safe. The check-in
+/// window is pre-created hidden in `precreate_windows` so it gets a head
 /// start on whatever WebView2/wry is doing during that window, and callers
 /// await this before the first `show()`.
 const WEBVIEW_WARMUP: std::time::Duration = std::time::Duration::from_millis(6000);
@@ -29,18 +28,14 @@ pub async fn wait_for_webview_warmup(app: &AppHandle) {
     }
 }
 
-/// Builds both special windows hidden, immediately on app start, so they
-/// have as much of a head start as possible on `WEBVIEW_WARMUP` before
+/// Builds the check-in window hidden, immediately on app start, so it
+/// has as much of a head start as possible on `WEBVIEW_WARMUP` before
 /// anything ever tries to show them. Safe to call more than once (e.g. after
 /// a window was destroyed) -- no-ops if the label already exists.
 pub fn precreate_windows(app: &AppHandle) {
     if app.get_webview_window(OVERLAY_LABEL).is_none() {
         log::info!("precreate_windows: building {OVERLAY_LABEL}");
         build_overlay_window(app, false);
-    }
-    if app.get_webview_window(CATCHUP_LABEL).is_none() {
-        log::info!("precreate_windows: building {CATCHUP_LABEL}");
-        build_catchup_window(app, false);
     }
     if app.get_webview_window(CHECKIN_LABEL).is_none() {
         log::info!("precreate_windows: building {CHECKIN_LABEL}");
@@ -160,22 +155,6 @@ pub fn close_overlay(app: &AppHandle) {
     }
     crate::hook::uninstall();
 
-    // The catch-up window (if it's up -- it can only ever be open at the
-    // same time as the live overlay right after app boot, see
-    // get_startup_catchup_slot) prompts for a slot that the overlay's own
-    // merge logic (findMissedSlots in the frontend) may have just covered
-    // too. Whatever closed the overlay just now -- reflection, breakit,
-    // auto-close timeout, or a kill switch -- that catch-up prompt is stale
-    // either way, so dismiss it along with the overlay rather than leaving
-    // it sitting open to ask about a slot the user just handled (or that
-    // timed out same as this one did).
-    if let Some(win) = app.get_webview_window(CATCHUP_LABEL) {
-        if win.is_visible().unwrap_or(false) {
-            log::info!("close_overlay: dismissing stale catchup window for slot={slot_start}");
-        }
-        let _ = win.hide();
-    }
-
     // Only prompt for the wellness check-in when a reflection was actually
     // recorded for this slot -- excludes force-closes (dev "Close (DEV)",
     // the Ctrl+Alt+Shift+F12 kill switch) where nothing was ever saved to
@@ -185,12 +164,12 @@ pub fn close_overlay(app: &AppHandle) {
     }
 }
 
-/// Shared by the `catchup` and `checkin` popups: decorated (so the native
-/// title bar close/restore controls work), maximized, and always-on-top --
+/// Backs the `checkin` popup: decorated (so the native title bar
+/// close/restore controls work), maximized, and always-on-top --
 /// deliberately NOT the enforcement mechanism the live break overlay is (no
-/// keyboard hook, no close-requested trap): by the time either of these
-/// windows is shown, there's no timer left to enforce, just an optional
-/// follow-up the user can dismiss.
+/// keyboard hook, no close-requested trap): by the time this window is
+/// shown, there's no timer left to enforce, just an optional follow-up the
+/// user can dismiss.
 fn build_popup_window(app: &AppHandle, label: &str, page: &str, title: &str, visible: bool) -> WebviewWindow {
     let win = WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
         .title(title)
@@ -215,29 +194,8 @@ fn build_popup_window(app: &AppHandle, label: &str, page: &str, title: &str, vis
     win
 }
 
-fn build_catchup_window(app: &AppHandle, visible: bool) -> WebviewWindow {
-    build_popup_window(app, CATCHUP_LABEL, "catchup", "Missed Reflectodoro", visible)
-}
-
 fn build_checkin_window(app: &AppHandle, visible: bool) -> WebviewWindow {
     build_popup_window(app, CHECKIN_LABEL, "checkin", "Wellness Check-in", visible)
-}
-
-/// Shows the (already pre-created) catch-up window, or builds it fresh if it
-/// was destroyed some other way. Callers should `wait_for_webview_warmup`
-/// first; see `commands::open_catchup_window`.
-pub fn spawn_catchup_window(app: &AppHandle) {
-    match app.get_webview_window(CATCHUP_LABEL) {
-        Some(win) => {
-            log::info!("spawn_catchup_window: showing pre-created window");
-            let _ = win.show();
-            let _ = win.set_focus();
-        }
-        None => {
-            log::warn!("spawn_catchup_window: no pre-created window found, building fresh");
-            build_catchup_window(app, true);
-        }
-    }
 }
 
 /// Shows the (already pre-created) check-in window, or builds it fresh if it
@@ -254,14 +212,12 @@ pub fn spawn_checkin_window(app: &AppHandle) {
     }
 }
 
-/// Single entry point for triggering the wellness check-in, called both from
-/// `close_overlay` (the live break overlay finishing with a reflection saved)
-/// and from `commands::open_checkin_window` (the startup catch-up window's
-/// "Save & close"). Stores the slot for the window's own `get_checkin_slot`
-/// call on first mount, shows the window, and emits an event for every reuse
-/// after that -- the window is hidden rather than destroyed between uses, so
-/// its page mounts once per app run and needs a signal to reset itself for
-/// each new occurrence.
+/// Triggers the wellness check-in, called from `close_overlay` when the live
+/// break overlay finishes with a reflection saved. Stores the slot for the
+/// window's own `get_checkin_slot` call on first mount, shows the window, and
+/// emits an event for every reuse after that -- the window is hidden rather
+/// than destroyed between uses, so its page mounts once per app run and needs
+/// a signal to reset itself for each new occurrence.
 pub fn open_checkin_for_slot(app: &AppHandle, slot_start_iso: String) {
     log::info!("open_checkin_for_slot: setting checkin_slot={slot_start_iso}");
     {
