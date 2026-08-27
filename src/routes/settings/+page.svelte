@@ -348,8 +348,9 @@
   <section class="card">
     <h2>Session schedule</h2>
     <p class="hint">
-      Fixed for now: work runs :00&ndash;:25 and :30&ndash;:55 each hour; breaks run :25&ndash;:30 and
-      :55&ndash;:00. Not configurable in this build.
+      Fixed for now (Not configurable in this build) <br/> 
+      Work runs :00&ndash;:25 and :30&ndash;:55 each hour <br/> 
+      Breaks run :25&ndash;:30 and :55&ndash;:00
     </p>
   </section>
 
@@ -435,7 +436,7 @@
   
   <section class="card">
     <h2>Startup</h2>
-    <p class="hint">Launch Reflectodoro automatically when you log in to Windows.</p>
+    <p class="hint">Launch Reflectodoro automatically when you log in.</p>
 
     {#if autostartLoaded}
       <div class="data-row">

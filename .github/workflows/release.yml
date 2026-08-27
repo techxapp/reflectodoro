@@ -17,7 +17,13 @@ jobs:
         # macos-latest is an Apple Silicon (aarch64) runner; this produces an
         # arm64-only build for now, not a universal binary. Revisit if Intel
         # Mac support is needed.
-        os: [windows-latest, macos-latest]
+        #
+        # Linux ships AppImage only (see tauri.linux.conf.json), not deb/rpm --
+        # AppImage is the only Linux format tauri-plugin-updater currently
+        # auto-updates, so this keeps Linux consistent with how Windows/macOS
+        # already auto-update. Don't add deb/rpm targets without also solving
+        # updates for them.
+        os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +34,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf build-essential curl wget file libssl-dev libgtk-3-dev libx11-dev
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

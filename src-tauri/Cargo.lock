@@ -1122,6 +1122,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
+name = "enum-kinds"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e40a16955681d469ab3da85aaa6b42ff656b3c67b52e1d8d3dd36afe97fd462"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "enumflags2"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2548,6 +2559,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mpris"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b72fbda9340cad2ca8181eabd8b96a2d8f4386e1ac9eefcf4045fc4e97d1ab7b"
+dependencies = [
+ "dbus",
+ "enum-kinds",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "muda"
 version = "0.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3511,6 +3533,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "log",
+ "mpris",
  "objc2",
  "objc2-app-kit",
  "objc2-core-graphics",
@@ -3531,6 +3554,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "windows",
+ "x11rb",
 ]
 
 [[package]]

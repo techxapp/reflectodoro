@@ -24,7 +24,13 @@
 //! been skip-proof instead, but `wellness_check.created_at` was the explicit
 //! choice.
 //!
-//! Both platforms: this is a "strong deterrent, not an absolute lock" like
+//! On Linux: uses MPRIS (the Media Player Remote Interfacing Specification,
+//! exposed over the session D-Bus) via the `mpris` crate. Unlike macOS's
+//! private-API wall, MPRIS genuinely exposes per-player `PlaybackStatus`, so
+//! Linux gets the same query-then-pause approach as Windows -- pausing only
+//! players actually playing -- rather than the macOS blind toggle.
+//!
+//! All platforms: this is a "strong deterrent, not an absolute lock" like
 //! the rest of the overlay enforcement (see hook.rs) -- nothing here
 //! guarantees media was found or actually paused, and any failure here must
 //! never block the overlay from showing.
@@ -138,7 +144,33 @@ mod macos_impl {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "linux")]
+mod linux_impl {
+    //! Crate-API note: verify `mpris` crate's exact surface (`PlayerFinder`,
+    //! `find_all`, error types) against its currently pinned version the
+    //! first time this is compiled on a Linux toolchain -- this can't be
+    //! compile-checked from a Windows dev machine.
+    use mpris::{PlaybackStatus, PlayerFinder};
+    use tauri::AppHandle;
+
+    fn pause_playing_sessions_inner() -> Result<(), mpris::FindingError> {
+        let finder = PlayerFinder::new()?;
+        for player in finder.find_all()? {
+            if let Ok(PlaybackStatus::Playing) = player.get_playback_status() {
+                let _ = player.pause();
+            }
+        }
+        Ok(())
+    }
+
+    pub fn pause_playing_sessions(_app: &AppHandle) {
+        if let Err(e) = pause_playing_sessions_inner() {
+            log::warn!("pause_playing_sessions: failed to query/pause MPRIS players: {e:?}");
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod noop_impl {
     use tauri::AppHandle;
 
@@ -149,5 +181,7 @@ mod noop_impl {
 pub use windows_impl::pause_playing_sessions;
 #[cfg(target_os = "macos")]
 pub use macos_impl::pause_playing_sessions;
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "linux")]
+pub use linux_impl::pause_playing_sessions;
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub use noop_impl::pause_playing_sessions;

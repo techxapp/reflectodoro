@@ -4,6 +4,13 @@
 //! unprivileged hook anyway) — Task Manager stays reachable as the kill switch.
 //! Bare Tab (no Alt held) is left alone so it still works for field navigation
 //! inside the overlay itself.
+//!
+//! Linux: suppression is only possible on X11 sessions (via `XGrabKey`, see
+//! `linux_impl` below), never on Wayland. That's not a scope cut -- no
+//! client, sandboxed or not, can suppress another client's/the compositor's
+//! own global shortcuts under Wayland; it's a deliberate security property of
+//! the protocol with no portable workaround. Wayland sessions fall back to
+//! the same no-op macOS already ships with.
 
 #[cfg(windows)]
 mod windows_impl {
@@ -80,7 +87,183 @@ mod windows_impl {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+mod linux_impl {
+    //! `XGrabKey`-based suppression for X11 sessions only. Grabbing a key
+    //! combo on the root window makes the X server deliver those key events
+    //! to us instead of the window manager -- that redirection *is* the
+    //! suppression, mirroring how the Windows low-level hook works, just
+    //! implemented at the X protocol level instead of via a message hook.
+    //! Wayland sessions (detected via `XDG_SESSION_TYPE`/`WAYLAND_DISPLAY`)
+    //! get no grabs at all and behave exactly like the cross-platform no-op.
+    //!
+    //! Crate-API note: `x11rb`'s generated enum casing (e.g. `GrabMode::Async`)
+    //! and bitflag constant names (e.g. `ModMask::M1`) should be re-verified
+    //! against the pinned `x11rb` version the first time this is actually
+    //! compiled on a Linux toolchain -- this can't be compile-checked from a
+    //! Windows dev machine.
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{self, Sender};
+    use std::sync::OnceLock;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{ConnectionExt as _, GrabMode, ModMask};
+    use x11rb::protocol::Event;
+
+    // Core X keysyms, from <X11/keysymdef.h>.
+    const XK_TAB: u32 = 0xff09;
+    const XK_SUPER_L: u32 = 0xffeb;
+    const XK_SUPER_R: u32 = 0xffec;
+
+    enum Command {
+        Install,
+        Uninstall,
+    }
+
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    static SENDER: OnceLock<Sender<Command>> = OnceLock::new();
+
+    fn is_x11_session() -> bool {
+        match std::env::var("XDG_SESSION_TYPE") {
+            Ok(v) => v.eq_ignore_ascii_case("x11"),
+            Err(_) => std::env::var("WAYLAND_DISPLAY").is_err(),
+        }
+    }
+
+    fn keysym_to_keycode(
+        conn: &impl Connection,
+        min_keycode: u8,
+        max_keycode: u8,
+        keysym: u32,
+    ) -> Option<u8> {
+        let count = max_keycode - min_keycode + 1;
+        let reply = conn
+            .get_keyboard_mapping(min_keycode, count)
+            .ok()?
+            .reply()
+            .ok()?;
+        let per = reply.keysyms_per_keycode as usize;
+        if per == 0 {
+            return None;
+        }
+        reply
+            .keysyms
+            .chunks(per)
+            .position(|chunk| chunk.contains(&keysym))
+            .map(|i| min_keycode + i as u8)
+    }
+
+    /// Owns the X11 connection for the process lifetime and grabs/ungrabs on
+    /// command. Kept alive on a dedicated thread rather than reconnecting per
+    /// break, since breaks recur every ~30 minutes for the life of the app.
+    fn run(rx: mpsc::Receiver<Command>) {
+        let (conn, screen_num) = match x11rb::connect(None) {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("hook: failed to connect to X server: {e:?}");
+                return;
+            }
+        };
+        let root = conn.setup().roots[screen_num].root;
+        let (min_kc, max_kc) = (conn.setup().min_keycode, conn.setup().max_keycode);
+
+        let tab_kc = keysym_to_keycode(&conn, min_kc, max_kc, XK_TAB);
+        let super_keycodes: Vec<u8> = [XK_SUPER_L, XK_SUPER_R]
+            .into_iter()
+            .filter_map(|ks| keysym_to_keycode(&conn, min_kc, max_kc, ks))
+            .collect();
+
+        if tab_kc.is_none() && super_keycodes.is_empty() {
+            log::warn!("hook: could not resolve Tab/Super keycodes, X11 suppression disabled");
+            return;
+        }
+
+        // X11 key grabs don't ignore "uninteresting" modifiers (NumLock,
+        // CapsLock) automatically, so grab every combination that includes
+        // Alt (Mod1) plus each lock-state combination.
+        let lock_masks = [
+            ModMask::from(0u16),
+            ModMask::LOCK,
+            ModMask::M2,
+            ModMask::LOCK | ModMask::M2,
+        ];
+        let mut grabbed = false;
+
+        loop {
+            match rx.recv() {
+                Ok(Command::Install) if !grabbed => {
+                    for &extra in &lock_masks {
+                        if let Some(kc) = tab_kc {
+                            let _ = conn.grab_key(
+                                true,
+                                root,
+                                ModMask::M1 | extra,
+                                kc,
+                                GrabMode::ASYNC,
+                                GrabMode::ASYNC,
+                            );
+                        }
+                        for &kc in &super_keycodes {
+                            let _ =
+                                conn.grab_key(true, root, extra, kc, GrabMode::ASYNC, GrabMode::ASYNC);
+                        }
+                    }
+                    let _ = conn.flush();
+                    grabbed = true;
+                }
+                Ok(Command::Uninstall) if grabbed => {
+                    for &extra in &lock_masks {
+                        if let Some(kc) = tab_kc {
+                            let _ = conn.ungrab_key(kc, root, ModMask::M1 | extra);
+                        }
+                        for &kc in &super_keycodes {
+                            let _ = conn.ungrab_key(kc, root, extra);
+                        }
+                    }
+                    let _ = conn.flush();
+                    grabbed = false;
+                }
+                Ok(_) => {}
+                Err(_) => return, // sender dropped: process exiting
+            }
+
+            // Drain queued grabbed-key events without blocking, so receiving
+            // them instead of the window manager (which is what achieves the
+            // suppression) doesn't build up an unbounded backlog between
+            // commands. The events themselves carry no useful signal here.
+            while let Ok(Some(event)) = conn.poll_for_event() {
+                if let Event::KeyPress(_) | Event::KeyRelease(_) = event {}
+            }
+        }
+    }
+
+    pub fn install() {
+        if !is_x11_session() {
+            return; // Wayland (or undetectable): behave like the no-op fallback
+        }
+        if ACTIVE.swap(true, Ordering::SeqCst) {
+            return; // already active
+        }
+        let sender = SENDER.get_or_init(|| {
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || run(rx));
+            tx
+        });
+        let _ = sender.send(Command::Install);
+    }
+
+    /// Mirrors `windows_impl::uninstall`: ungrabs rather than tearing down
+    /// the connection/thread, since suppression is needed again for the next
+    /// break.
+    pub fn uninstall() {
+        ACTIVE.store(false, Ordering::SeqCst);
+        if let Some(sender) = SENDER.get() {
+            let _ = sender.send(Command::Uninstall);
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 mod noop_impl {
     pub fn install() {}
     pub fn uninstall() {}
@@ -88,5 +271,7 @@ mod noop_impl {
 
 #[cfg(windows)]
 pub use windows_impl::{install, uninstall};
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub use linux_impl::{install, uninstall};
+#[cfg(not(any(windows, target_os = "linux")))]
 pub use noop_impl::{install, uninstall};
