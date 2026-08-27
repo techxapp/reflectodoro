@@ -21,6 +21,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -33,6 +35,37 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Generate PR-based release notes
+        id: pr_notes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.repos.generateReleaseNotes({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: "${{ github.ref_name }}",
+              target_commitish: "${{ github.sha }}",
+            });
+            core.setOutput('body', data.body);
+
+      - name: Generate commit-log release notes
+        id: commit_notes
+        shell: bash
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="$PREV_TAG..${{ github.ref_name }}"
+          else
+            RANGE="${{ github.ref_name }}"
+          fi
+          {
+            echo 'body<<EOF'
+            echo '### Commits'
+            git log "$RANGE" --pretty=format:"- %s" --no-merges
+            echo
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and publish release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -42,6 +75,9 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Reflectodoro v__VERSION__"
-          releaseBody: "See the assets below to download and install this version."
+          releaseBody: |
+            ${{ steps.pr_notes.outputs.body }}
+
+            ${{ steps.commit_notes.outputs.body }}
           releaseDraft: false
           prerelease: false
