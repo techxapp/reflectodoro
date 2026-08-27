@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
     getBreakitSettings,
@@ -51,6 +52,8 @@
   let forceCloseShortcutEnabled = $state(true);
   let forceCloseShortcutLoaded = $state(false);
   let forceCloseShortcutBusy = $state(false);
+  // Windows/Linux default; overwritten on macOS once current_os resolves.
+  let forceCloseShortcutLabel = $state("Ctrl+Alt+Shift+F12");
 
   let mediaPauseOnBreakEnabled = $state(true);
   let mediaPauseOnBreakLoaded = $state(false);
@@ -88,6 +91,11 @@
   onMount(async () => {
     forceCloseShortcutEnabled = await getForceCloseShortcutEnabled();
     forceCloseShortcutLoaded = true;
+  });
+
+  onMount(async () => {
+    const os = await invoke<string>("current_os");
+    if (os === "macos") forceCloseShortcutLabel = "Cmd+Option+Shift+F12";
   });
 
   onMount(async () => {
@@ -383,7 +391,7 @@
   <section class="card">
     <h2>If the overlay ever gets stuck</h2>
     <ul class="hint">
-      <li>Press Ctrl+Alt+Shift+F12 to force-close the overlay.</li>
+      <li>Press {forceCloseShortcutLabel} to force-close the overlay.</li>
     </ul>
 
     {#if forceCloseShortcutLoaded}
@@ -393,7 +401,7 @@
           class:busy={forceCloseShortcutBusy}
           role="switch"
           aria-checked={forceCloseShortcutEnabled}
-          aria-label="Enable Ctrl+Alt+Shift+F12 force-close shortcut"
+          aria-label={`Enable ${forceCloseShortcutLabel} force-close shortcut`}
           tabindex="0"
           onpointerdown={onSliderPointerDown}
           onpointermove={onSliderPointerMove}

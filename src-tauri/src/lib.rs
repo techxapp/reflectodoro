@@ -33,7 +33,8 @@ fn resolve_dev_mode() -> bool {
 
 pub(crate) static POMODORO_ENABLED: AtomicBool = AtomicBool::new(true);
 
-/// Whether Ctrl+Alt+Shift+F12 actually force-closes the overlay. Backed by
+/// Whether Ctrl+Alt+Shift+F12 (Cmd+Option+Shift+F12 on macOS) actually
+/// force-closes the overlay. Backed by
 /// `app_setting.force_close_shortcut_enabled`; the frontend loads that value
 /// and pushes it here on boot and on every Settings save (see
 /// `sync_force_close_shortcut_enabled` in commands.rs), the same pattern as
@@ -175,10 +176,15 @@ fn setup_dev_kill_switch(app: &AppHandle) -> anyhow::Result<()> {
     // FORCE_CLOSE_SHORTCUT_ENABLED (Settings toggle) so disabling it doesn't
     // require fighting the OS over re-registering/unregistering a global
     // hotkey at runtime.
-    let shortcut = Shortcut::new(
-        Some(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT),
-        Code::F12,
-    );
+    // macOS convention swaps Ctrl->Cmd and Alt->Option: Cmd+Option+Shift+F12
+    // there, Ctrl+Alt+Shift+F12 everywhere else. Modifiers::SUPER maps to Cmd
+    // on macOS in tauri-plugin-global-shortcut.
+    let modifiers = if cfg!(target_os = "macos") {
+        Modifiers::SUPER | Modifiers::ALT | Modifiers::SHIFT
+    } else {
+        Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT
+    };
+    let shortcut = Shortcut::new(Some(modifiers), Code::F12);
     app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
         if event.state() == ShortcutState::Pressed
             && FORCE_CLOSE_SHORTCUT_ENABLED.load(Ordering::SeqCst)
@@ -231,6 +237,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_overlay_state,
             commands::is_dev_mode,
+            commands::current_os,
             commands::sync_breakit_config,
             commands::mark_reflection_entered,
             commands::breakit_attempt,

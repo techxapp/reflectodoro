@@ -1,6 +1,6 @@
 # Reflectodoro
 
-A Pomodoro app whose real point is forcing a short self-reflection ("what did I do?") at the end of every break, enforced via a hard-to-dismiss overlay. This is the **Windows MVP**; macOS/Android/iOS are planned later on the same stack, but not yet started. Sync across devices and auth are explicitly deferred — this build is fully local, single-device, no server/DB service of any kind.
+A Pomodoro app whose real point is forcing a short self-reflection ("what did I do?") at the end of every break, enforced via a hard-to-dismiss overlay. Ships for **Windows and macOS**; Android/iOS are planned later on the same stack, but not yet started. The macOS build is currently unsigned/non-notarized (no Apple Developer account yet) and is missing two Windows-only features — see "Not built yet / explicitly deferred" below. Sync across devices and auth are explicitly deferred — this build is fully local, single-device, no server/DB service of any kind.
 
 Full original design exploration/rationale (superseded in details by this file where they conflict): `C:\Users\gursi\.claude\plans\i-want-to-create-glowing-abelson.md`.
 
@@ -74,9 +74,9 @@ Migrations live in `src-tauri/src/db.rs` (`tauri-plugin-sql` migration list). Ap
 
 ## Kill switches (must always work, tested explicitly)
 
-1. **Task Manager** (Ctrl+Shift+Esc) — never blocked, by design.
+1. **Task Manager** (Ctrl+Shift+Esc on Windows; Activity Monitor / Cmd+Option+Esc Force Quit on macOS) — never blocked, by design.
 2. **Tray → Quit** — `std::process::exit(0)`, deliberately *not* `app.exit()` or a window `.close()`, so it can't get caught by the overlay's close-requested prevention.
-3. **Ctrl+Alt+Shift+F12** — global shortcut, force-destroys the overlay, registered unconditionally (not just in dev builds).
+3. **Ctrl+Alt+Shift+F12** (Windows/Linux) / **Cmd+Option+Shift+F12** (macOS) — global shortcut, force-destroys the overlay, registered unconditionally (not just in dev builds). Platform-selected at runtime via `cfg!(target_os = "macos")` in `setup_dev_kill_switch` (`src-tauri/src/lib.rs`); the Settings UI label is driven by the `current_os` command so it always matches what's actually registered.
 4. **Dev mode** (`cfg!(debug_assertions)` by default, override with `POMODORO_DEV_MODE=0/1`): shows a visible "Close (DEV)" button on the overlay and skips installing the keyboard hook entirely.
 
 ## Known gotchas already hit in this codebase
@@ -90,7 +90,10 @@ Both bugs were silent (no thrown error visible to the user) — diagnosed by que
 
 - Sync across devices, auth/pairing — deferred by user decision. If revisited, the recommended direction (not designed in detail) is an end-to-end-encrypted, short-TTL serverless mailbox rather than a permanent central DB.
 - Configurable work/break durations (currently fixed 25/5 constants).
-- macOS/Android/iOS builds.
+- Android/iOS builds.
+- **macOS Alt-Tab/Win-key-equivalent suppression** — `src-tauri/src/hook.rs`'s `WH_KEYBOARD_LL` hook is Windows-only (`#[cfg(windows)]`), with a no-op fallback on macOS (`#[cfg(not(windows))]`). Deliberately not implemented for macOS: the nearest equivalent (`CGEventTap`) requires the user to grant Accessibility permission, real UX friction Apple scrutinizes apps for. The overlay's unlock formula still fully enforces itself without it — this was always a deterrent, not the mechanism holding the lock together.
+- **macOS media-pause-on-break** — `src-tauri/src/media.rs`'s pause-on-break (via Windows SMTC) is likewise Windows-only with a no-op fallback elsewhere. A macOS equivalent is possible later via the private, undocumented `MediaRemote.framework` (the technique tools like `nowplaying-cli` use) — it can pause Safari/Chromium browser media generically since they register with the system-wide Now Playing/Control Center session automatically. Not built yet: real scope (a new Rust module, comparable to `hook.rs`) and depends on an API Apple could change without notice.
+- **macOS code signing / notarization** — no Apple Developer account yet, so the macOS build is unsigned. Gatekeeper blocks it on first launch (see README's workaround). Revisit if/when an account is obtained; the release pipeline (`.github/workflows/release.yml`) is structured so signing env vars can be added to the macOS matrix leg without restructuring it.
 
 
 ## Best practices

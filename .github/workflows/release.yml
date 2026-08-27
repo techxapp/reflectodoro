@@ -11,7 +11,14 @@ permissions:
 
 jobs:
   release:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is an Apple Silicon (aarch64) runner; this produces an
+        # arm64-only build for now, not a universal binary. Revisit if Intel
+        # Mac support is needed.
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 

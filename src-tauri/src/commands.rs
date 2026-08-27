@@ -20,6 +20,14 @@ pub fn is_dev_mode(state: State<AppState>) -> bool {
     state.dev_mode
 }
 
+/// Lets the frontend render OS-appropriate shortcut text (e.g. the force-close
+/// kill switch is Ctrl+Alt+Shift+F12 on Windows but Cmd+Option+Shift+F12 on
+/// macOS -- see setup_dev_kill_switch in lib.rs).
+#[tauri::command]
+pub fn current_os() -> &'static str {
+    std::env::consts::OS
+}
+
 /// Pushes the breakit challenge length/charset (loaded by the frontend from
 /// app_setting) into Rust state. Called once on app boot and again whenever
 /// Settings saves, so SQLite stays the source of truth while the scheduler

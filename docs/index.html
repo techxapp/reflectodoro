@@ -193,6 +193,55 @@
       background: var(--accent);
       transform: scale(1.25);
     }
+    .support-table-wrap {
+      overflow-x: auto;
+      margin-bottom: 56px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+    }
+    .support-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      background: var(--surface);
+    }
+    .support-table th,
+    .support-table td {
+      padding: 12px 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .support-table th {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-dim);
+      background: var(--surface-2);
+    }
+    .support-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+    .support-table th:not(:first-child),
+    .support-table td:not(:first-child) {
+      text-align: center;
+      white-space: nowrap;
+    }
+    .support-table .yes {
+      color: #2fae60;
+      font-weight: 700;
+    }
+    .support-table .no {
+      color: var(--text-dim);
+      font-weight: 700;
+    }
+    .table-note {
+      display: block;
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
     footer {
       border-top: 1px solid var(--border);
       padding-top: 24px;
@@ -208,7 +257,7 @@
 </head>
 <body>
   <div class="wrap">
-    <span class="eyebrow">Windows</span>
+    <span class="eyebrow">Windows &amp; macOS</span>
     <h1>Reflectodoro</h1>
     <p class="tagline">
       A Pomodoro app whose real point is forcing a short self-reflection at the end of
@@ -219,13 +268,18 @@
       <a class="btn btn-primary" href="https://github.com/techxapp/reflectodoro/releases/latest">
         Download for Windows (.exe)
       </a>
+      <a class="btn btn-primary" href="https://github.com/techxapp/reflectodoro/releases/latest">
+        Download for macOS (.dmg)
+      </a>
       <a class="btn btn-secondary" href="https://github.com/techxapp/reflectodoro">
         View source on GitHub
       </a>
     </div>
     <p class="note">
       Windows may show a SmartScreen "unknown publisher" warning on first run &mdash;
-      choose <em>More info &rarr; Run anyway</em>.
+      choose <em>More info &rarr; Run anyway</em>. <br/> On macOS, the app isn't notarized yet,
+      so Gatekeeper will block it the first time &mdash; right-click the app and choose
+      <em>Open</em>, or run <code>xattr -cr /Applications/Reflectodoro.app</code> in Terminal.
     </p>
 
     <div class="features">
@@ -255,7 +309,8 @@
       </div>
       <div class="card">
         <h3>Cross-platform support &#128241;</h3>
-        <p>Coming soon...</p>
+        <p>Windows, MacOS</p>
+        <p>Coming soon: Linux, IOS, Android</p>
       </div>
     </div>
 
@@ -271,6 +326,56 @@
       <button class="carousel-btn carousel-next" type="button" aria-label="Next screenshot">&#8594;</button>
     </div>
     <div class="carousel-dots" id="carouselDots"></div>
+
+    <h2 class="section-title">Platform support</h2>
+    <div class="support-table-wrap">
+      <table class="support-table">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>Windows</th>
+            <th>macOS</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Wall-clock breaks</td>
+            <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
+          </tr>
+          <tr>
+            <td>No free pass (reflection required)</td>
+            <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
+          </tr>
+          <tr>
+            <td>Emergency exit challenge</td>
+            <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
+          </tr>
+          <tr>
+            <td>Wellness check</td>
+            <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
+          </tr>
+          <tr>
+            <td>Fully local and private</td>
+            <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
+          </tr>
+          <!-- <tr>
+            <td>Alt+Tab / Cmd+Tab suppression during break</td>
+            <td class="yes">&#10003;</td>
+            <td class="no">&#10007;<span class="table-note">planned</span></td>
+          </tr> -->
+          <tr>
+            <td>Auto-pause media on break</td>
+            <td class="yes">&#10003;</td>
+            <td class="no">&#10007;<span class="table-note">planned</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <footer>
       <span>Reflectodoro</span>
