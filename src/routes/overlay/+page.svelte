@@ -50,6 +50,10 @@
     return `${m}:${String(s).padStart(2, "0")}`;
   });
 
+  const clockLabel = $derived.by(() =>
+    new Date(nowTick).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+  );
+
   async function refreshCoverage() {
     if (!overlayState?.current_slot_start) return;
     missedSlots = await findMissedSlots(overlayState.current_slot_start);
@@ -140,6 +144,8 @@
     <button class="dev-close" onclick={devClose}>Close (DEV)</button>
   {/if}
 
+  <p class="clock">{clockLabel}</p>
+
   <div class="grid">
     <section class="panel primary">
       <p class="timer">{remainingSeconds > 0 ? remainingLabel : "Time's up"}</p>
@@ -226,6 +232,17 @@
     padding: 6px 12px;
     cursor: pointer;
     z-index: 10;
+  }
+
+  .clock {
+    position: absolute;
+    top: 16px;
+    left: 20px;
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    opacity: 0.55;
   }
 
   .grid {
