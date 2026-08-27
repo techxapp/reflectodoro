@@ -8,6 +8,7 @@ mod overlay;
 mod state;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
 use std::time::Duration as StdDuration;
 
 use chrono::Local;
@@ -43,13 +44,28 @@ pub(crate) static POMODORO_ENABLED: AtomicBool = AtomicBool::new(true);
 /// frontend's first sync completes.
 pub(crate) static FORCE_CLOSE_SHORTCUT_ENABLED: AtomicBool = AtomicBool::new(true);
 
-/// Whether entering a break simulates the hardware Play/Pause media key
-/// (best-effort toggle of whatever holds Windows' System Media Transport
-/// Controls -- see media.rs). Backed by `app_setting.media_pause_on_break_enabled`;
-/// the frontend loads that value and pushes it here on boot and on every
-/// Settings save, the same pattern as `FORCE_CLOSE_SHORTCUT_ENABLED`. Defaults
-/// to `true` here too, matching the migration's default.
+/// Whether entering a break best-effort-pauses whatever media is playing --
+/// on Windows by querying System Media Transport Controls and pausing only
+/// sessions actually playing, on macOS by toggling the hardware Play/Pause
+/// media key (see media.rs for why those two approaches differ). Backed by
+/// `app_setting.media_pause_on_break_enabled`; the frontend loads that value
+/// and pushes it here on boot and on every Settings save, the same pattern as
+/// `FORCE_CLOSE_SHORTCUT_ENABLED`. Defaults to `true` here too, matching the
+/// migration's default.
 pub(crate) static MEDIA_PAUSE_ON_BREAK_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// macOS-only media-toggle guard state (see media.rs's macos_impl module for
+/// the full rationale). Both are RFC3339/ISO8601 UTC strings, same convention
+/// as `reflection.created_at`/`wellness_check.created_at`, so they're safe to
+/// compare lexicographically. `LAST_MEDIA_TOGGLE_AT` is written by media.rs
+/// itself the instant it fires the toggle (and separately persisted to
+/// `app_setting.last_toggle_time` by the frontend via the
+/// `media-toggle://recorded` event, so it survives a crash/relaunch mid-break).
+/// `LAST_WELLNESS_CHECK_AT` is pushed from the frontend on boot and again
+/// after every completed (non-skipped) check-in -- see
+/// `sync_last_wellness_check_at` in commands.rs.
+pub(crate) static LAST_MEDIA_TOGGLE_AT: Mutex<Option<String>> = Mutex::new(None);
+pub(crate) static LAST_WELLNESS_CHECK_AT: Mutex<Option<String>> = Mutex::new(None);
 
 /// How long after a break ends the overlay force-closes even without a
 /// reflection. Backed by `app_setting.overlay_auto_close_minutes`; the
@@ -255,6 +271,8 @@ pub fn run() {
             commands::set_overlay_auto_close_minutes,
             commands::get_media_pause_on_break_enabled,
             commands::set_media_pause_on_break_enabled,
+            commands::sync_media_toggle_guard,
+            commands::sync_last_wellness_check_at,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

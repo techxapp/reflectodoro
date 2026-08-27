@@ -11,7 +11,9 @@
     loadAndSyncForceCloseShortcutSetting,
     loadAndSyncOverlayAutoClose,
     loadAndSyncMediaPauseOnBreakSetting,
+    loadAndSyncMediaToggleGuard,
     listenForTaskListUpdates,
+    listenForMediaToggleRecorded,
   } from "$lib/db";
 
   let now = $state(new Date());
@@ -19,6 +21,7 @@
   let taskListContent = $state("");
   let unlisten: UnlistenFn | null = null;
   let unlistenTasks: UnlistenFn | null = null;
+  let unlistenMediaToggle: UnlistenFn | null = null;
   let tickInterval: ReturnType<typeof setInterval> | null = null;
   let taskSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -48,6 +51,7 @@
     await loadAndSyncForceCloseShortcutSetting();
     await loadAndSyncOverlayAutoClose();
     await loadAndSyncMediaPauseOnBreakSetting();
+    await loadAndSyncMediaToggleGuard();
     enabled = await invoke<boolean>("get_enabled");
     taskListContent = await getTaskList(localDateStamp());
 
@@ -57,6 +61,7 @@
     unlistenTasks = await listenForTaskListUpdates((content) => {
       taskListContent = content;
     });
+    unlistenMediaToggle = await listenForMediaToggleRecorded();
 
     tickInterval = setInterval(() => (now = new Date()), 1000);
   });
@@ -64,6 +69,7 @@
   onDestroy(() => {
     unlisten?.();
     unlistenTasks?.();
+    unlistenMediaToggle?.();
     if (tickInterval) clearInterval(tickInterval);
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
   });

@@ -83,7 +83,7 @@ pub fn spawn_or_update_overlay(app: &AppHandle) {
         let _ = win.show();
         let _ = win.set_focus();
         if crate::MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst) {
-            crate::media::pause_playing_sessions();
+            crate::media::pause_playing_sessions(app);
         }
         if !dev_mode {
             crate::hook::install();

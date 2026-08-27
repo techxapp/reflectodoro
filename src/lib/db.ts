@@ -137,11 +137,15 @@ export interface WellnessCheckValues {
   washroom: boolean;
 }
 
+/** Returns the `created_at` it saved, so callers needing that exact value
+ * (e.g. syncing the macOS media-toggle guard) don't take a second, possibly
+ * drifting, timestamp reading of their own. */
 export async function saveWellnessCheck(
   reflectionId: number,
   values: WellnessCheckValues,
-): Promise<void> {
+): Promise<string> {
   const db = await getDb();
+  const createdAt = new Date().toISOString();
   await db.execute(
     `INSERT INTO wellness_check (reflection_id, relaxed_eyes, exercise, drank_water, washroom, created_at)
      VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -151,9 +155,10 @@ export async function saveWellnessCheck(
       values.exercise ? 1 : 0,
       values.drankWater ? 1 : 0,
       values.washroom ? 1 : 0,
-      new Date().toISOString(),
+      createdAt,
     ],
   );
+  return createdAt;
 }
 
 export interface WellnessSummary {
@@ -372,6 +377,67 @@ export async function loadAndSyncMediaPauseOnBreakSetting(): Promise<boolean> {
   const enabled = await getMediaPauseOnBreakEnabled();
   await syncMediaPauseOnBreakToBackend(enabled);
   return enabled;
+}
+
+// --- macOS media-toggle guard (see media.rs's macos_impl module) -------
+//
+// Windows' media pause queries actual playback state, so it never needs
+// this; macOS's toggle is blind, so this narrows (does not eliminate) the
+// risk of a second toggle within the same break cycle resuming media we
+// already paused. Not a user-facing setting -- no Settings UI for this.
+
+const LAST_TOGGLE_TIME_KEY = "last_toggle_time";
+
+/** No row until the first macOS toggle ever fires -- absence means null,
+ * matching every other app_setting getter's default-when-missing pattern.
+ * (app_setting.value is TEXT NOT NULL, so there's no seeded-NULL row to find.) */
+export async function getLastMediaToggleTime(): Promise<string | null> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [LAST_TOGGLE_TIME_KEY],
+  );
+  return rows[0]?.value ?? null;
+}
+
+export async function saveLastMediaToggleTime(at: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [LAST_TOGGLE_TIME_KEY, at],
+  );
+}
+
+export async function getLastWellnessCheckTime(): Promise<string | null> {
+  const db = await getDb();
+  const rows = await db.select<{ created_at: string }[]>(
+    `SELECT created_at FROM wellness_check ORDER BY created_at DESC LIMIT 1`,
+  );
+  return rows[0]?.created_at ?? null;
+}
+
+export async function syncLastWellnessCheckAtToBackend(at: string): Promise<void> {
+  await invoke("sync_last_wellness_check_at", { at });
+}
+
+/** Call once on app boot (main window) so Rust's media-toggle guard matches SQLite. */
+export async function loadAndSyncMediaToggleGuard(): Promise<void> {
+  const [lastToggleAt, lastWellnessCheckAt] = await Promise.all([
+    getLastMediaToggleTime(),
+    getLastWellnessCheckTime(),
+  ]);
+  await invoke("sync_media_toggle_guard", { lastToggleAt, lastWellnessCheckAt });
+}
+
+/** Persists Rust's media-toggle timestamp (emitted right after it actually
+ * fires the macOS toggle) so the guard survives a crash/relaunch mid-break.
+ * Call once from the main window; unlisten in onDestroy like every other
+ * listener in this app. */
+export async function listenForMediaToggleRecorded(): Promise<UnlistenFn> {
+  return listen<string>("media-toggle://recorded", (event) => {
+    void saveLastMediaToggleTime(event.payload);
+  });
 }
 
 // --- Overlay auto-close timeout (Settings) -----------------------------
@@ -757,6 +823,11 @@ export async function importData(
     await loadAndSyncOverlayAutoClose();
     await loadAndSyncMediaPauseOnBreakSetting();
   }
+
+  // Unconditional (unlike the block above): wellness_check rows -- half of
+  // the macOS media-toggle guard's state -- import regardless of
+  // includeSettings, so this needs to resync even when settings are excluded.
+  await loadAndSyncMediaToggleGuard();
 
   return {
     reflectionCount: reflection.length,

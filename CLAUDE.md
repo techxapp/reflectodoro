@@ -1,6 +1,6 @@
 # Reflectodoro
 
-A Pomodoro app whose real point is forcing a short self-reflection ("what did I do?") at the end of every break, enforced via a hard-to-dismiss overlay. Ships for **Windows and macOS**; Android/iOS are planned later on the same stack, but not yet started. The macOS build is currently unsigned/non-notarized (no Apple Developer account yet) and is missing two Windows-only features — see "Not built yet / explicitly deferred" below. Sync across devices and auth are explicitly deferred — this build is fully local, single-device, no server/DB service of any kind.
+A Pomodoro app whose real point is forcing a short self-reflection ("what did I do?") at the end of every break, enforced via a hard-to-dismiss overlay. Ships for **Windows and macOS**; Android/iOS are planned later on the same stack, but not yet started. The macOS build is currently unsigned/non-notarized (no Apple Developer account yet), is missing the Windows-only Alt-Tab/Win-key suppression hook, and uses a best-effort media-pause toggle instead of Windows' state-aware pause — see "Media pause-on-break" and "Not built yet / explicitly deferred" below. Sync across devices and auth are explicitly deferred — this build is fully local, single-device, no server/DB service of any kind.
 
 Full original design exploration/rationale (superseded in details by this file where they conflict): `C:\Users\gursi\.claude\plans\i-want-to-create-glowing-abelson.md`.
 
@@ -49,6 +49,15 @@ Originally designed as a fixed word ("breakit") typed a configurable number of t
 
 Because the overlay never auto-closes without a reflection, "what did I do in the last N pomodoros" can end up covering more than one slot. This is **not** special-cased in Rust — the frontend (`src/routes/overlay/+page.svelte`) queries SQLite on mount/update for whether the *previous* break slot's timestamp is already covered by a saved `reflection` row (`isSlotCovered` in `src/lib/db.ts`, a plain `slot_start_at = $1` equality check). If not, `saveReflection` inserts one `reflection` row per covered slot (same `created_at`/`text`, different `slot_start_at`) rather than bundling them into one row. This one check handles both real triggers: the grid reaching the next break boundary while unresolved, and the app being killed/crashed and relaunched with a pending slot.
 
+## Media pause-on-break
+
+`src-tauri/src/media.rs`, gated on `app_setting.media_pause_on_break_enabled`. Two entirely different mechanisms per platform, both "strong deterrent, not an absolute lock" like the rest of the overlay:
+
+- **Windows**: queries System Media Transport Controls (SMTC) for every registered session and pauses only the ones actually playing (`GlobalSystemMediaTransportControlsSessionManager`). State-aware — never resumes something that was already paused.
+- **macOS**: no public API can query playback state the way SMTC does (only the private, undocumented `MediaRemote.framework` can), so this posts a synthetic hardware Play/Pause media-key event instead (`NX_KEYTYPE_PLAY`, via an AppKit `NSEvent` bridge — see `media.rs`'s doc comment for why that needs AppKit and not plain Core Graphics). This is a **blind toggle**: it can incorrectly *resume* media that was already paused before the break started. Explicit, confirmed tradeoff — not a bug.
+
+**Guard, macOS only**: narrows (does not eliminate) the toggle's failure mode for the specific case of "we already toggled it paused this break, and toggling again would resume it." Tracks `LAST_MEDIA_TOGGLE_AT` (in-memory, set the instant the toggle fires, persisted to `app_setting.last_toggle_time` via the `media-toggle://recorded` event so it survives a crash/relaunch mid-break) against `LAST_WELLNESS_CHECK_AT` (most recent `wellness_check.created_at`, synced from the frontend on boot and after every completed check-in). Skips the toggle iff a toggle already happened and no completed check-in has happened since. Uses `wellness_check.created_at` as the "cycle completed" signal even though check-in is skippable (closing or auto-closing it saves nothing) — a user who routinely skips check-ins will see the guard's reset stop firing after their first break. Confirmed with the user as an accepted tradeoff (the skip-proof alternative, `reflection.created_at`, was considered and explicitly not chosen).
+
 ## Data model
 
 No `pomodoro_session` table — deliberately. Slot identity/boundaries are fully determined by computing from a timestamp against the fixed grid, so there's nothing session-shaped to persist.
@@ -67,7 +76,7 @@ daily_task_list              -- "Most Important Tasks Today", shared between mai
 
 app_setting
   key TEXT PK
-  value TEXT                  -- breakit_length, breakit_include_special (work/break durations are fixed constants, not stored/configurable yet)
+  value TEXT                  -- breakit_length, breakit_include_special, last_toggle_time (macOS media-toggle guard, see below; row absent until first toggle) (work/break durations are fixed constants, not stored/configurable yet)
 ```
 
 Migrations live in `src-tauri/src/db.rs` (`tauri-plugin-sql` migration list). Applied versions are tracked per-database in `_sqlx_migrations` and never re-run — so editing an already-shipped migration silently skips on any db that already applied it. Before the first tagged release, squashing/rewriting migrations freely is fine (nothing but local dev dbs has run them). From the first tagged release onward, always add a new versioned migration for schema/default changes instead.
@@ -92,7 +101,7 @@ Both bugs were silent (no thrown error visible to the user) — diagnosed by que
 - Configurable work/break durations (currently fixed 25/5 constants).
 - Android/iOS builds.
 - **macOS Alt-Tab/Win-key-equivalent suppression** — `src-tauri/src/hook.rs`'s `WH_KEYBOARD_LL` hook is Windows-only (`#[cfg(windows)]`), with a no-op fallback on macOS (`#[cfg(not(windows))]`). Deliberately not implemented for macOS: the nearest equivalent (`CGEventTap`) requires the user to grant Accessibility permission, real UX friction Apple scrutinizes apps for. The overlay's unlock formula still fully enforces itself without it — this was always a deterrent, not the mechanism holding the lock together.
-- **macOS media-pause-on-break** — `src-tauri/src/media.rs`'s pause-on-break (via Windows SMTC) is likewise Windows-only with a no-op fallback elsewhere. A macOS equivalent is possible later via the private, undocumented `MediaRemote.framework` (the technique tools like `nowplaying-cli` use) — it can pause Safari/Chromium browser media generically since they register with the system-wide Now Playing/Control Center session automatically. Not built yet: real scope (a new Rust module, comparable to `hook.rs`) and depends on an API Apple could change without notice.
+- **State-aware macOS media pause** — `src-tauri/src/media.rs` pauses media on both Windows (via SMTC, query-then-pause) and macOS (via a synthetic Play/Pause key toggle — see "Media pause-on-break" below), but the macOS path is a best-effort toggle, not a true query-then-pause like Windows'. A state-aware macOS implementation is possible later via the private, undocumented `MediaRemote.framework` (the technique tools like `nowplaying-cli` use), which would eliminate the toggle's known limitation — not built yet: real scope (a new Rust module) and depends on an API Apple could change without notice.
 - **macOS code signing / notarization** — no Apple Developer account yet, so the macOS build is unsigned. Gatekeeper blocks it on first launch (see README's workaround). Revisit if/when an account is obtained; the release pipeline (`.github/workflows/release.yml`) is structured so signing env vars can be added to the macOS matrix leg without restructuring it.
 
 

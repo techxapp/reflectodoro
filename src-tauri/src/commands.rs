@@ -6,8 +6,8 @@ use tauri_plugin_autostart::ManagerExt;
 use crate::overlay;
 use crate::state::{AppState, OverlayState};
 use crate::{
-    FORCE_CLOSE_SHORTCUT_ENABLED, MEDIA_PAUSE_ON_BREAK_ENABLED, OVERLAY_AUTO_CLOSE_MINUTES,
-    POMODORO_ENABLED,
+    FORCE_CLOSE_SHORTCUT_ENABLED, LAST_MEDIA_TOGGLE_AT, LAST_WELLNESS_CHECK_AT,
+    MEDIA_PAUSE_ON_BREAK_ENABLED, OVERLAY_AUTO_CLOSE_MINUTES, POMODORO_ENABLED,
 };
 
 #[tauri::command]
@@ -150,6 +150,23 @@ pub fn get_media_pause_on_break_enabled() -> bool {
 #[tauri::command]
 pub fn set_media_pause_on_break_enabled(enabled: bool) {
     MEDIA_PAUSE_ON_BREAK_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+/// Pushes both halves of the macOS media-toggle guard (see media.rs) into
+/// Rust state. Called once on main-window boot, after the frontend loads
+/// `app_setting.last_toggle_time` and the most recent `wellness_check.created_at`.
+#[tauri::command]
+pub fn sync_media_toggle_guard(last_toggle_at: Option<String>, last_wellness_check_at: Option<String>) {
+    *LAST_MEDIA_TOGGLE_AT.lock().unwrap() = last_toggle_at;
+    *LAST_WELLNESS_CHECK_AT.lock().unwrap() = last_wellness_check_at;
+}
+
+/// Called after a check-in is actually saved (not skipped/auto-closed) so the
+/// macOS media-toggle guard resets within the current session, not just after
+/// a restart. See `submit()` in checkin/+page.svelte.
+#[tauri::command]
+pub fn sync_last_wellness_check_at(at: String) {
+    *LAST_WELLNESS_CHECK_AT.lock().unwrap() = Some(at);
 }
 
 /// Only available when dev_mode is on -- bypasses the unlock formula entirely.
