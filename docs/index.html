@@ -261,7 +261,7 @@
 </head>
 <body>
   <div class="wrap">
-    <span class="eyebrow">Windows &amp; macOS</span>
+    <span class="eyebrow">Windows, macOS &amp; Linux</span>
     <h1>Reflectodoro</h1>
     <p class="tagline">
       A Pomodoro app whose real point is forcing a short self-reflection at the end of
@@ -275,6 +275,9 @@
       <a class="btn btn-primary" href="https://github.com/techxapp/reflectodoro/releases/latest">
         Download for macOS (.dmg)
       </a>
+      <a class="btn btn-primary" href="https://github.com/techxapp/reflectodoro/releases/latest">
+        Download for Linux (.AppImage)
+      </a>
       <a class="btn btn-secondary" href="https://github.com/techxapp/reflectodoro">
         View source on GitHub
       </a>
@@ -284,6 +287,8 @@
       choose <em>More info &rarr; Run anyway</em>. <br/> On macOS, the app isn't notarized yet,
       so Gatekeeper will block it the first time &mdash; right-click the app and choose
       <em>Open</em>, or run <code>xattr -cr /Applications/Reflectodoro.app</code> in Terminal.
+      <br/> On Linux, make the AppImage executable first (<code>chmod +x Reflectodoro*.AppImage</code>);
+      some distros also need <code>libfuse2</code> installed for it to run.
     </p>
 
     <div class="features">
@@ -313,8 +318,8 @@
       </div>
       <div class="card">
         <h3>Cross-platform support &#128241;</h3>
-        <p>Windows, MacOS</p>
-        <p>Coming soon: Linux, IOS, Android</p>
+        <p>Windows, macOS, Linux</p>
+        <p>Coming soon: iOS, Android</p>
       </div>
     </div>
 
@@ -339,6 +344,7 @@
             <th>Feature</th>
             <th>Windows</th>
             <th>macOS<br/>(Early Release)</th>
+            <th>Linux</th>
           </tr>
         </thead>
         <tbody>
@@ -346,14 +352,17 @@
             <td>Wall-clock breaks</td>
             <td class="yes">&#10003;</td>
             <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
           </tr>
           <tr>
             <td>No free pass (reflection required)</td>
             <td class="yes">&#10003;</td>
             <td class="partial">&#10003;<span class="table-note">Best efforts</span></td>
+            <td class="yes">&#10003;</td>
           </tr>
           <tr>
             <td>Emergency exit challenge</td>
+            <td class="yes">&#10003;</td>
             <td class="yes">&#10003;</td>
             <td class="yes">&#10003;</td>
           </tr>
@@ -361,9 +370,11 @@
             <td>Wellness check</td>
             <td class="yes">&#10003;</td>
             <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
           </tr>
           <tr>
             <td>Fully local and private</td>
+            <td class="yes">&#10003;</td>
             <td class="yes">&#10003;</td>
             <td class="yes">&#10003;</td>
           </tr>
@@ -371,11 +382,13 @@
             <td>Alt+Tab / Cmd+Tab suppression during break</td>
             <td class="yes">&#10003;</td>
             <td class="no">&#10007;<span class="table-note">planned</span></td>
+            <td class="partial">&#10003;<span class="table-note">X11 only</span></td>
           </tr> -->
           <tr>
             <td>Auto-pause media on break</td>
             <td class="yes">&#10003;</td>
             <td class="partial">&#10003;<span class="table-note">Best efforts (Toggle support)</span></td>
+            <td class="yes">&#10003;</td>
           </tr>
         </tbody>
       </table>
