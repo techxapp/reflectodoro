@@ -14,9 +14,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest is an Apple Silicon (aarch64) runner; this produces an
-        # arm64-only build for now, not a universal binary. Revisit if Intel
-        # Mac support is needed.
+        # macos-latest is an Apple Silicon (aarch64) runner. The macOS leg below
+        # passes --target universal-apple-darwin so the resulting .dmg/.app is a
+        # universal binary (arm64 + x86_64) that runs natively on Intel Macs too,
+        # not just Apple Silicon.
         #
         # Linux ships AppImage only (see tauri.linux.conf.json), not deb/rpm --
         # AppImage is the only Linux format tauri-plugin-updater currently
@@ -43,6 +44,10 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Add macOS universal build targets
+        if: matrix.os == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Install frontend dependencies
         run: npm ci
@@ -85,6 +90,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          args: ${{ matrix.os == 'macos-latest' && '--target universal-apple-darwin' || '' }}
           tagName: ${{ github.ref_name }}
           releaseName: "Reflectodoro v__VERSION__"
           releaseBody: |
