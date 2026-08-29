@@ -19,6 +19,8 @@
     saveForceCloseShortcutEnabled,
     getMediaPauseOnBreakEnabled,
     saveMediaPauseOnBreakEnabled,
+    getBreakNotificationPersistentEnabled,
+    saveBreakNotificationPersistentEnabled,
     getOverlayAutoCloseMinutes,
     saveOverlayAutoCloseMinutes,
     getCheckinAutoCloseMinutes,
@@ -59,6 +61,11 @@
   let mediaPauseOnBreakLoaded = $state(false);
   let mediaPauseOnBreakBusy = $state(false);
 
+  let isAndroid = $state(false);
+  let breakNotificationPersistentEnabled = $state(true);
+  let breakNotificationPersistentLoaded = $state(false);
+  let breakNotificationPersistentBusy = $state(false);
+
   let includeSettingsInTransfer = $state(true);
 
   let exportStatus = $state<"idle" | "success" | "error">("idle");
@@ -96,11 +103,17 @@
   onMount(async () => {
     const os = await invoke<string>("current_os");
     if (os === "macos") forceCloseShortcutLabel = "Cmd+Option+Shift+F12";
+    isAndroid = os === "android";
   });
 
   onMount(async () => {
     mediaPauseOnBreakEnabled = await getMediaPauseOnBreakEnabled();
     mediaPauseOnBreakLoaded = true;
+  });
+
+  onMount(async () => {
+    breakNotificationPersistentEnabled = await getBreakNotificationPersistentEnabled();
+    breakNotificationPersistentLoaded = true;
   });
 
   onMount(async () => {
@@ -179,6 +192,17 @@
       mediaPauseOnBreakEnabled = next;
     } finally {
       mediaPauseOnBreakBusy = false;
+    }
+  }
+
+  async function toggleBreakNotificationPersistent() {
+    const next = !breakNotificationPersistentEnabled;
+    breakNotificationPersistentBusy = true;
+    try {
+      await saveBreakNotificationPersistentEnabled(next);
+      breakNotificationPersistentEnabled = next;
+    } finally {
+      breakNotificationPersistentBusy = false;
     }
   }
 
@@ -342,6 +366,24 @@
           Pause playing media (video/music) when a break starts
         </label>
       </div>
+    {/if}
+
+    {#if isAndroid && breakNotificationPersistentLoaded}
+      <div class="data-row">
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={breakNotificationPersistentEnabled}
+            disabled={breakNotificationPersistentBusy}
+            onchange={toggleBreakNotificationPersistent}
+          />
+          Make the break notification non-dismissible until the break is resolved
+        </label>
+      </div>
+      <p class="hint">
+        Only affects a break that starts while you're using another app &mdash; it can't wake or
+        take over a locked screen.
+      </p>
     {/if}
   </section>
 

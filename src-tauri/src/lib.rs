@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+mod android_bridge;
 mod breakit;
 mod commands;
 mod db;
@@ -12,9 +14,14 @@ use std::sync::Mutex;
 use std::time::Duration as StdDuration;
 
 use chrono::Local;
+#[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+#[cfg(desktop)]
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager};
+#[cfg(desktop)]
+use tauri::Emitter;
+use tauri::{AppHandle, Manager};
+#[cfg(desktop)]
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 use grid::Phase;
@@ -53,6 +60,17 @@ pub(crate) static FORCE_CLOSE_SHORTCUT_ENABLED: AtomicBool = AtomicBool::new(tru
 /// `FORCE_CLOSE_SHORTCUT_ENABLED`. Defaults to `true` here too, matching the
 /// migration's default.
 pub(crate) static MEDIA_PAUSE_ON_BREAK_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Android only: whether the break notification (see overlay.rs's Android
+/// arm of spawn_or_update_overlay / android_bridge.rs's trigger_break_screen)
+/// is posted as non-dismissible (can't be swiped away, only cleared once the
+/// break actually resolves) versus a normal dismissible one. Backed by
+/// `app_setting.break_notification_persistent_enabled`; same load/push
+/// pattern as `MEDIA_PAUSE_ON_BREAK_ENABLED`. Defaults to `true` here too,
+/// matching the migration's default -- the whole point of this notification
+/// is to stop the user from using the phone for something else during a
+/// break, not just to politely mention it.
+pub(crate) static BREAK_NOTIFICATION_PERSISTENT_ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// macOS-only media-toggle guard state (see media.rs's macos_impl module for
 /// the full rationale). Both are RFC3339/ISO8601 UTC strings, same convention
@@ -142,6 +160,7 @@ async fn run_scheduler(app: AppHandle) {
     }
 }
 
+#[cfg(desktop)]
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let open_item = MenuItem::with_id(app, "open", "Open Reflectodoro", true, None::<&str>)?;
     let toggle_item = MenuItem::with_id(app, "toggle", "Disable Pomodoro Mode", true, None::<&str>)?;
@@ -184,6 +203,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(desktop)]
 fn setup_dev_kill_switch(app: &AppHandle) -> anyhow::Result<()> {
     // Always registered (not just in dev builds): cheap insurance against a
     // stuck overlay in production too. Task Manager and tray Quit are the
@@ -192,6 +212,11 @@ fn setup_dev_kill_switch(app: &AppHandle) -> anyhow::Result<()> {
     // FORCE_CLOSE_SHORTCUT_ENABLED (Settings toggle) so disabling it doesn't
     // require fighting the OS over re-registering/unregistering a global
     // hotkey at runtime.
+    //
+    // No Android equivalent is registered: swipe-away-from-Recents / Force
+    // Stop in Android Settings is always available regardless of anything
+    // this app does, the same structural role Task Manager plays on
+    // desktop -- see the Android release plan.
     // macOS convention swaps Ctrl->Cmd and Alt->Option: Cmd+Option+Shift+F12
     // there, Ctrl+Alt+Shift+F12 everywhere else. Modifiers::SUPER maps to Cmd
     // on macOS in tauri-plugin-global-shortcut.
@@ -215,22 +240,16 @@ fn setup_dev_kill_switch(app: &AppHandle) -> anyhow::Result<()> {
 pub fn run() {
     let dev_mode = resolve_dev_mode();
 
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .manage(AppState::new(dev_mode))
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
-        ))
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(
             tauri_plugin_sql::Builder::default()
                 .add_migrations(db::DB_URL, db::migrations())
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -249,7 +268,31 @@ pub fn run() {
                 ])
                 .level(log::LevelFilter::Info)
                 .build(),
-        )
+        );
+
+    // autostart/global-shortcut/updater/process are all desktop concepts
+    // with no Android equivalent attempted in this port -- Cargo.toml
+    // already excludes these crates from the Android/iOS dependency graph,
+    // so referencing them unconditionally here is a hard compile error on
+    // mobile, not just dead functionality.
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                None,
+            ))
+            .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init());
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        builder = android_bridge::register(builder);
+    }
+
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::get_overlay_state,
             commands::is_dev_mode,
@@ -273,6 +316,10 @@ pub fn run() {
             commands::set_media_pause_on_break_enabled,
             commands::sync_media_toggle_guard,
             commands::sync_last_wellness_check_at,
+            commands::can_schedule_exact_alarms,
+            commands::request_exact_alarm_permission,
+            commands::get_break_notification_persistent_enabled,
+            commands::set_break_notification_persistent_enabled,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -289,8 +336,25 @@ pub fn run() {
 
             log::info!("app setup starting, dev_mode={dev_mode}");
 
-            setup_tray(&handle)?;
-            setup_dev_kill_switch(&handle)?;
+            #[cfg(desktop)]
+            {
+                setup_tray(&handle)?;
+                setup_dev_kill_switch(&handle)?;
+            }
+
+            // POMODORO_ENABLED defaults to true and isn't persisted on any
+            // platform (see its declaration above), so starting the
+            // foreground service unconditionally here matches that same
+            // default rather than needing to read a toggle that hasn't had
+            // a chance to change yet at this point in startup -- subsequent
+            // toggles go through set_enabled in commands.rs instead.
+            #[cfg(target_os = "android")]
+            {
+                let bridge = handle.state::<android_bridge::AndroidBridge<tauri::Wry>>();
+                if let Err(e) = bridge.start_foreground_service() {
+                    log::error!("failed to start Android foreground service: {e:?}");
+                }
+            }
 
             // Hidden, built immediately: gives WebView2 a head start on the
             // startup blank-page race before anything tries to show these.

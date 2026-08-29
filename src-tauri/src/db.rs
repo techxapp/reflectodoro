@@ -116,5 +116,13 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 9,
+            description: "default break_notification_persistent_enabled setting to enabled",
+            sql: r#"
+                INSERT INTO app_setting (key, value) VALUES ('break_notification_persistent_enabled', 'true');
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

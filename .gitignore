@@ -11,7 +11,13 @@ vite.config.ts.timestamp-*
 
 # Rust/Tauri build output
 /src-tauri/target
-/src-tauri/gen
+
+# gen/android is hand-edited (native Kotlin bridge/service/receiver code), not
+# purely generated -- commit it. Other gen/<platform> dirs (e.g. a future
+# gen/ios) stay ignored until they get the same treatment. Build output within
+# gen/android itself is still excluded via its own nested .gitignore.
+/src-tauri/gen/*
+!/src-tauri/gen/android
 
 # stray leftover file from an old npm install redirect
 /src-tauri/2

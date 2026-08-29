@@ -11,6 +11,7 @@
     loadAndSyncForceCloseShortcutSetting,
     loadAndSyncOverlayAutoClose,
     loadAndSyncMediaPauseOnBreakSetting,
+    loadAndSyncBreakNotificationPersistentSetting,
     loadAndSyncMediaToggleGuard,
     listenForTaskListUpdates,
     listenForMediaToggleRecorded,
@@ -51,6 +52,7 @@
     await loadAndSyncForceCloseShortcutSetting();
     await loadAndSyncOverlayAutoClose();
     await loadAndSyncMediaPauseOnBreakSetting();
+    await loadAndSyncBreakNotificationPersistentSetting();
     await loadAndSyncMediaToggleGuard();
     enabled = await invoke<boolean>("get_enabled");
     taskListContent = await getTaskList(localDateStamp());
@@ -110,6 +112,14 @@
     gap: 20px;
     max-width: 900px;
     margin: 0 auto;
+  }
+
+  @media (max-width: 600px) {
+    .page {
+      grid-template-columns: 1fr;
+      padding: 16px;
+      gap: 16px;
+    }
   }
 
   .card {

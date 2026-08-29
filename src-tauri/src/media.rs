@@ -30,6 +30,18 @@
 //! Linux gets the same query-then-pause approach as Windows -- pausing only
 //! players actually playing -- rather than the macOS blind toggle.
 //!
+//! On Android: there is no cross-app API to list playback sessions and
+//! their state the way SMTC (Windows) or MPRIS (Linux) do, so this requests
+//! transient audio focus (`AUDIOFOCUS_GAIN_TRANSIENT`) via `AudioManager`
+//! instead -- a request, not a query. Any well-behaved playing app receives
+//! `AUDIOFOCUS_LOSS_TRANSIENT` and pauses itself as a matter of the
+//! platform's audio-focus contract; an app with nothing playing simply has
+//! nothing to duck. This is NOT macOS's blind key-toggle: abandoning the
+//! focus request on break-end (`resume_playing_sessions`, called from
+//! `close_overlay`) only signals apps that actually ducked for *this*
+//! request, so it can't resume media that was already paused before the
+//! break started. No special permission needed -- a plain public API.
+//!
 //! All platforms: this is a "strong deterrent, not an absolute lock" like
 //! the rest of the overlay enforcement (see hook.rs) -- nothing here
 //! guarantees media was found or actually paused, and any failure here must
@@ -170,7 +182,33 @@ mod linux_impl {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "android")]
+mod android_impl {
+    use tauri::{AppHandle, Manager, Wry};
+
+    use crate::android_bridge::AndroidBridge;
+
+    pub fn pause_playing_sessions(app: &AppHandle) {
+        let bridge = app.state::<AndroidBridge<Wry>>();
+        if let Err(e) = bridge.pause_audio_focus() {
+            log::warn!("pause_playing_sessions: pauseAudioFocus failed: {e:?}");
+        }
+    }
+
+    /// Abandons the focus request from `pause_playing_sessions`, if one is
+    /// outstanding -- releases the transient hold so whatever ducked for it
+    /// is free to resume. Called from `close_overlay`; harmless no-op if
+    /// nothing was ever granted (e.g. the request was denied, or this fires
+    /// twice).
+    pub fn resume_playing_sessions(app: &AppHandle) {
+        let bridge = app.state::<AndroidBridge<Wry>>();
+        if let Err(e) = bridge.resume_audio_focus() {
+            log::warn!("resume_playing_sessions: resumeAudioFocus failed: {e:?}");
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux", target_os = "android")))]
 mod noop_impl {
     use tauri::AppHandle;
 
@@ -183,5 +221,17 @@ pub use windows_impl::pause_playing_sessions;
 pub use macos_impl::pause_playing_sessions;
 #[cfg(target_os = "linux")]
 pub use linux_impl::pause_playing_sessions;
-#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "android")]
+pub use android_impl::pause_playing_sessions;
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux", target_os = "android")))]
 pub use noop_impl::pause_playing_sessions;
+
+/// Symmetric release for `pause_playing_sessions`, called from
+/// `close_overlay`. Only Android's audio-focus model has anything to
+/// release (a granted `AudioFocusRequest`) -- Windows/macOS/Linux act on
+/// media sessions directly with no analogous "hold" to give back, so they
+/// stay a no-op here.
+#[cfg(target_os = "android")]
+pub use android_impl::resume_playing_sessions;
+#[cfg(not(target_os = "android"))]
+pub fn resume_playing_sessions(_app: &tauri::AppHandle) {}
