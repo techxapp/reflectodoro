@@ -6,6 +6,7 @@ mod db;
 mod grid;
 mod hook;
 mod media;
+mod native_overlay;
 mod overlay;
 mod state;
 
@@ -316,10 +317,10 @@ pub fn run() {
             commands::set_media_pause_on_break_enabled,
             commands::sync_media_toggle_guard,
             commands::sync_last_wellness_check_at,
-            commands::can_schedule_exact_alarms,
-            commands::request_exact_alarm_permission,
             commands::get_break_notification_persistent_enabled,
             commands::set_break_notification_persistent_enabled,
+            commands::can_draw_overlays,
+            commands::request_draw_overlays_permission,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -354,6 +355,7 @@ pub fn run() {
                 if let Err(e) = bridge.start_foreground_service() {
                     log::error!("failed to start Android foreground service: {e:?}");
                 }
+                native_overlay::install_channel(&handle);
             }
 
             // Hidden, built immediately: gives WebView2 a head start on the

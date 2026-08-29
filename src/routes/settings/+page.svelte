@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
@@ -66,6 +66,9 @@
   let breakNotificationPersistentLoaded = $state(false);
   let breakNotificationPersistentBusy = $state(false);
 
+  let overlayGranted = $state(false);
+  let overlayChecked = $state(false);
+
   let includeSettingsInTransfer = $state(true);
 
   let exportStatus = $state<"idle" | "success" | "error">("idle");
@@ -114,6 +117,31 @@
   onMount(async () => {
     breakNotificationPersistentEnabled = await getBreakNotificationPersistentEnabled();
     breakNotificationPersistentLoaded = true;
+  });
+
+  async function refreshOverlayPermission() {
+    overlayGranted = await invoke<boolean>("can_draw_overlays");
+    overlayChecked = true;
+  }
+
+  async function openOverlaySettings() {
+    await invoke("request_draw_overlays_permission");
+  }
+
+  // Re-checks when the user comes back from the system settings screen --
+  // same pattern as onboarding's exact-alarm re-check, needed since that
+  // screen's return doesn't reliably resolve any promise here.
+  function onOverlayVisibilityChange() {
+    if (document.visibilityState === "visible") void refreshOverlayPermission();
+  }
+
+  onMount(() => {
+    void refreshOverlayPermission();
+    document.addEventListener("visibilitychange", onOverlayVisibilityChange);
+  });
+
+  onDestroy(() => {
+    document.removeEventListener("visibilitychange", onOverlayVisibilityChange);
   });
 
   onMount(async () => {
@@ -366,6 +394,19 @@
           Pause playing media (video/music) when a break starts
         </label>
       </div>
+    {/if}
+
+    {#if isAndroid && overlayChecked}
+      <div class="data-row">
+        <span>Break screen (draw over other apps): {overlayGranted ? "Granted" : "Not granted"}</span>
+        {#if !overlayGranted}
+          <button type="button" onclick={openOverlaySettings}>Open settings&hellip;</button>
+        {/if}
+      </div>
+      <p class="hint">
+        Recommended. Without it, a break can only reach you via a notification instead of
+        appearing directly over whatever else you're doing.
+      </p>
     {/if}
 
     {#if isAndroid && breakNotificationPersistentLoaded}

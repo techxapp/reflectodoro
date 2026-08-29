@@ -31,7 +31,7 @@ private fun nextBoundaryMinute(minute: Int): Int = when {
 }
 
 /** (Re)arms the single next AlarmManager wake, replacing whatever was
- * previously scheduled -- exact alarms are one-shot, so BreakSchedulerService
+ * previously scheduled -- setAlarmClock is one-shot, so BreakSchedulerService
  * and BreakAlarmReceiver both call this every time they run to keep the
  * chain going. */
 fun scheduleNextAlarm(context: Context) {
@@ -55,18 +55,29 @@ fun scheduleNextAlarm(context: Context) {
     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
   )
 
-  // Below API 31 exact alarms need no special permission at all and always
-  // work. From 31, SCHEDULE_EXACT_ALARM is user-grantable but not
-  // guaranteed -- fall back to an inexact-but-Doze-surviving wake instead
-  // of throwing SecurityException if it hasn't been granted. Requesting the
-  // grant (ACTION_REQUEST_SCHEDULE_EXACT_ALARM) is the permissions-
-  // onboarding phase's job, not wired up yet.
-  val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
-  if (canExact) {
-    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next.timeInMillis, pendingIntent)
-  } else {
-    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next.timeInMillis, pendingIntent)
-  }
+  // setAlarmClock, not setExactAndAllowWhileIdle -- confirmed empirically
+  // (real device) that a plain BroadcastReceiver's startActivity() only
+  // reliably brings the app forward from an idle/Home-screen state, not over
+  // another app actively in the foreground: Android's background-activity-
+  // launch restrictions (10+) don't exempt broadcasts from a regular exact
+  // alarm. setAlarmClock is the one AlarmManager entry point the OS does
+  // exempt, because it's the same primitive real alarm-clock apps use to
+  // interrupt whatever's currently on screen. It's also exempt from the API
+  // 31+ SCHEDULE_EXACT_ALARM grant entirely (that requirement was never
+  // extended to alarm-clock-style scheduling), which is why
+  // canScheduleExactAlarms/requestExactAlarmPermission no longer exist
+  // anywhere in this app. Side effect, not a bug: Android shows a small
+  // persistent alarm-clock icon in the status bar (tapping it opens
+  // MainActivity via showIntent below) for as long as Pomodoro mode is on --
+  // the same thing any real alarm-clock app shows, and a deliberate,
+  // confirmed tradeoff for the reliability gain.
+  val showIntent = PendingIntent.getActivity(
+    context,
+    3,
+    Intent(context, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK },
+    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+  )
+  alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(next.timeInMillis, showIntent), pendingIntent)
 }
 
 /** Only shown when BreakAlarmReceiver fires in a process where no Activity
@@ -77,9 +88,16 @@ fun scheduleNextAlarm(context: Context) {
  * way to know the actual phase or challenge without Rust running, and
  * guessing would risk showing stale or wrong content. Tapping it just opens
  * the app, whose fresh run_scheduler iteration figures out the real state
- * immediately on its own. Deliberately tap-to-open rather than an
- * auto-launching full-screen intent -- see postBreakNotification's doc
- * comment for why. */
+ * immediately on its own.
+ *
+ * Posted alongside (not instead of) BreakAlarmReceiver's own auto-launch of
+ * MainActivity for this same case -- this notification is the fallback if
+ * that auto-launch doesn't actually bring the app forward for any reason
+ * (an OS/OEM edge case, or the user simply not noticing it happen). This is
+ * the one place in the app that *does* auto-launch unprompted -- see
+ * BreakAlarmReceiver's own doc comment for why that's a scoped exception to
+ * postBreakNotification's "never auto-launch over active use" rule below,
+ * not a reversal of it. */
 fun postWakeNotification(context: Context) {
   ensureWakeChannel(context)
   val pendingOpen = PendingIntent.getActivity(

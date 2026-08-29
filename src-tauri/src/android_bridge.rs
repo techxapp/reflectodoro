@@ -11,6 +11,7 @@
 
 use serde_json::Value;
 use tauri::{
+    ipc::Channel,
     plugin::{mobile::PluginInvokeError, Builder, PluginHandle},
     Manager, Runtime,
 };
@@ -38,37 +39,68 @@ impl<R: Runtime> AndroidBridge<R> {
         self.0.run_mobile_plugin("stopForegroundService", ())
     }
 
-    /// Whether `scheduleNextAlarm` (BreakScheduling.kt) will get to use a
-    /// true exact alarm rather than its inexact fallback -- surfaced to the
-    /// onboarding screen so it only prompts for a grant that's actually
-    /// missing.
-    pub fn can_schedule_exact_alarms(&self) -> Result<Value, PluginInvokeError> {
-        self.0.run_mobile_plugin("canScheduleExactAlarms", ())
+    /// Brings the break to the user's attention if the app isn't already
+    /// visible (a no-op otherwise, decided on the Kotlin side via
+    /// MainActivity.isResumed) -- called from the Android arm of
+    /// overlay::spawn_or_update_overlay. Kotlin itself picks the surface:
+    /// the native WindowManager overlay (native_overlay.rs/
+    /// NativeOverlayManager.kt) when the "display over other apps" permission
+    /// is granted, else falls back to a break notification. `persistent`
+    /// mirrors BREAK_NOTIFICATION_PERSISTENT_ENABLED (only relevant to the
+    /// notification fallback); `state` is the current OverlayState, passed
+    /// through so the native overlay has real content (challenge, slot) to
+    /// show the instant it's created rather than a blank frame. Deliberately
+    /// not a full-screen-intent/auto-launch -- see that static's doc comment
+    /// for why.
+    pub fn trigger_break_screen(&self, persistent: bool, state: Value) -> Result<Value, PluginInvokeError> {
+        // Sent as a JSON string, not a nested object: Kotlin treats it as
+        // opaque (just relaying it into the overlay WebView via
+        // JSONObject.quote), so there's no need for a typed Jackson class
+        // matching OverlayState's shape on that side.
+        self.0.run_mobile_plugin(
+            "triggerBreakScreen",
+            serde_json::json!({ "persistent": persistent, "state": state.to_string() }),
+        )
     }
 
-    /// Opens the system settings screen for the exact-alarm grant -- there
-    /// is no in-app runtime-dialog form of this permission, unlike
-    /// POST_NOTIFICATIONS.
-    pub fn request_exact_alarm_permission(&self) -> Result<Value, PluginInvokeError> {
-        self.0.run_mobile_plugin("requestExactAlarmPermission", ())
-    }
-
-    /// Posts a break notification if the app isn't already visible (a no-op
-    /// otherwise, decided on the Kotlin side via MainActivity.isResumed) --
-    /// called from the Android arm of overlay::spawn_or_update_overlay.
-    /// `persistent` mirrors BREAK_NOTIFICATION_PERSISTENT_ENABLED: whether
-    /// the notification can be swiped away or only clears once the break
-    /// actually resolves. Deliberately not a full-screen-intent/auto-launch
-    /// -- see that static's doc comment for why.
-    pub fn trigger_break_screen(&self, persistent: bool) -> Result<Value, PluginInvokeError> {
-        self.0
-            .run_mobile_plugin("triggerBreakScreen", serde_json::json!({ "persistent": persistent }))
-    }
-
-    /// Clears a break notification the user resolved some other way than
-    /// tapping it -- called from the Android arm of overlay::close_overlay.
+    /// Clears a break notification / hides the native overlay, whichever
+    /// (if either) is currently up -- called from the Android arm of
+    /// overlay::close_overlay. Harmless no-op for whichever surface wasn't
+    /// actually in use.
     pub fn cancel_break_notification(&self) -> Result<Value, PluginInvokeError> {
         self.0.run_mobile_plugin("cancelBreakNotification", ())
+    }
+
+    /// Pushes updated OverlayState into the native overlay's WebView (e.g.
+    /// breakit_matched flipping, or a merged slot's new challenge/timer) --
+    /// called from every overlay::emit_state on Android. A harmless no-op if
+    /// the native overlay isn't currently showing (Kotlin decides that, not
+    /// Rust -- see NativeOverlayManager.isShowing).
+    pub fn update_native_overlay(&self, state: Value) -> Result<Value, PluginInvokeError> {
+        self.0
+            .run_mobile_plugin("updateNativeOverlay", serde_json::json!({ "state": state.to_string() }))
+    }
+
+    /// Registers the one long-lived Channel Kotlin uses to call back into
+    /// Rust whenever the user interacts with the native overlay (submitting
+    /// a reflection, attempting the breakit code) -- see
+    /// native_overlay.rs::install_channel, called once from lib.rs's setup().
+    pub fn init_native_overlay_channel(&self, channel: Channel<Value>) -> Result<Value, PluginInvokeError> {
+        self.0
+            .run_mobile_plugin("initNativeOverlayChannel", serde_json::json!({ "channel": channel }))
+    }
+
+    /// Whether "Display over other apps" is granted -- surfaced to
+    /// onboarding/Settings so it only prompts for a grant that's actually
+    /// missing.
+    pub fn can_draw_overlays(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("canDrawOverlays", ())
+    }
+
+    /// Deep-links to the system settings screen for the grant -- there is no
+    /// in-app runtime-dialog form of this permission.
+    pub fn request_draw_overlays_permission(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("requestDrawOverlaysPermission", ())
     }
 
     /// Requests transient audio focus (`AUDIOFOCUS_GAIN_TRANSIENT`) so any

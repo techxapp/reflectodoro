@@ -212,18 +212,19 @@ pub fn sync_last_wellness_check_at(at: String) {
     *LAST_WELLNESS_CHECK_AT.lock().unwrap() = Some(at);
 }
 
-/// Backs the Android onboarding screen (src/routes/onboarding/+page.svelte).
-/// No such restriction exists on desktop -- exact-alarm-equivalent
-/// scheduling there needs no permission at all, so it's unconditionally
-/// "already granted".
+/// Whether the native break overlay (native_overlay.rs) can actually be
+/// shown -- surfaced to onboarding/Settings so it only prompts for a grant
+/// that's actually missing. When false, spawn_or_update_overlay's Android arm
+/// falls back to a break notification instead (see trigger_break_screen's
+/// Kotlin side).
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub fn can_schedule_exact_alarms(app: AppHandle) -> bool {
+pub fn can_draw_overlays(app: AppHandle) -> bool {
     let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
-    match bridge.can_schedule_exact_alarms() {
+    match bridge.can_draw_overlays() {
         Ok(v) => v.get("value").and_then(|x| x.as_bool()).unwrap_or(false),
         Err(e) => {
-            log::error!("can_schedule_exact_alarms failed: {e:?}");
+            log::error!("can_draw_overlays failed: {e:?}");
             false
         }
     }
@@ -231,25 +232,24 @@ pub fn can_schedule_exact_alarms(app: AppHandle) -> bool {
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub fn can_schedule_exact_alarms() -> bool {
+pub fn can_draw_overlays() -> bool {
     true
 }
 
-/// Opens the system settings screen for the grant -- see
-/// NativeBridgePlugin.kt's requestExactAlarmPermission for why this can't
-/// be a normal in-app permission dialog. No-op on desktop.
+/// Opens the system settings screen for the grant -- there is no in-app
+/// runtime-dialog form of this permission. No-op on desktop.
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub fn request_exact_alarm_permission(app: AppHandle) {
+pub fn request_draw_overlays_permission(app: AppHandle) {
     let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
-    if let Err(e) = bridge.request_exact_alarm_permission() {
-        log::error!("request_exact_alarm_permission failed: {e:?}");
+    if let Err(e) = bridge.request_draw_overlays_permission() {
+        log::error!("request_draw_overlays_permission failed: {e:?}");
     }
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub fn request_exact_alarm_permission() {}
+pub fn request_draw_overlays_permission() {}
 
 /// Mirrors app_setting.break_notification_persistent_enabled -- loaded and
 /// pushed here by the frontend on boot and on every Settings save (see

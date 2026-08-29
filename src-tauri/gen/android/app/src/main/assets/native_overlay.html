@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Reflectodoro Break</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #0b0b12;
+  }
+
+  body {
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(160deg, #10111a 0%, #1b1c2b 100%);
+    color: #f3f3f7;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-family: sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+    box-sizing: border-box;
+    overflow-y: auto;
+    /* Fixed top padding rather than env(safe-area-inset-*): this WebView is
+       added directly to WindowManager, not laid out through the Activity's
+       own edge-to-edge/WindowInsets pipeline, so safe-area-inset support
+       here is unverified -- a generous fixed value is the simpler, reliably
+       correct choice for a status-bar-height allowance. */
+    padding: 40px 20px 24px;
+  }
+
+  .dev-close {
+    position: fixed;
+    top: 40px;
+    right: 20px;
+    background: #b3261e;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    z-index: 10;
+  }
+
+  .clock {
+    position: fixed;
+    top: 44px;
+    left: 20px;
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    opacity: 0.55;
+  }
+
+  .panel {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 24px;
+    width: min(480px, 100%);
+    margin: auto 0;
+    box-sizing: border-box;
+  }
+
+  .timer {
+    font-variant-numeric: tabular-nums;
+    font-size: 14px;
+    opacity: 0.7;
+    margin: 0 0 8px;
+  }
+
+  h1 {
+    font-size: 20px;
+    margin: 0 0 16px;
+  }
+
+  textarea, input {
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+    color: inherit;
+    font-family: inherit;
+    font-size: 14px;
+    padding: 10px 12px;
+    resize: vertical;
+  }
+
+  button {
+    margin-top: 10px;
+    background: #5865f2;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 14px;
+  }
+
+  button:disabled {
+    opacity: 0.4;
+  }
+
+  .breakit {
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  label {
+    display: block;
+    font-size: 13px;
+    opacity: 0.8;
+    margin-bottom: 8px;
+  }
+
+  .hint {
+    font-size: 12px;
+    opacity: 0.6;
+    margin-top: 8px;
+  }
+
+  .hint.ok {
+    color: #8fd19e;
+  }
+
+  .challenge {
+    font-family: ui-monospace, monospace;
+    font-size: 18px;
+    letter-spacing: 0.1em;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 0 0 12px;
+    word-break: break-all;
+  }
+
+  input.shake {
+    animation: shake 0.3s;
+    border-color: #e15b5b;
+  }
+
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-6px); }
+    75% { transform: translateX(6px); }
+  }
+</style>
+</head>
+<body>
+  <button id="dev-close" class="dev-close" style="display:none">Close (DEV)</button>
+  <p id="clock" class="clock"></p>
+
+  <section class="panel">
+    <p class="timer" id="timer">--:--</p>
+    <h1>What did I do since your last break?</h1>
+
+    <textarea id="reflection" rows="5" placeholder="Write a couple of bullet points or type 'Skip' to skip it."></textarea>
+    <div id="reflection-actions">
+      <button id="submit-reflection" disabled>Submit reflection</button>
+    </div>
+    <p id="reflection-saved" class="hint ok" style="display:none">Saved. Waiting on the other condition to finish the break.</p>
+
+    <div class="breakit">
+      <div id="breakit-pending">
+        <label for="breakit-input">To close this window early, type this code and press Enter</label>
+        <p class="challenge" id="challenge"></p>
+        <input id="breakit-input" type="text" autocomplete="off" spellcheck="false"
+          placeholder="type the code above, then press Enter" />
+      </div>
+      <p id="breakit-matched" class="hint ok" style="display:none">Code matched.</p>
+      <p class="hint">Reflection is still required either way.</p>
+    </div>
+  </section>
+
+  <script>
+    var state = {
+      open: false,
+      reflection_entered: false,
+      breakit_challenge: "",
+      breakit_matched: false,
+      time_expired: false,
+      current_slot_start: "",
+      dev_mode: false,
+    };
+    var pendingBreakitCheck = false;
+
+    var reflectionEl = document.getElementById("reflection");
+    var submitBtn = document.getElementById("submit-reflection");
+    var reflectionSavedEl = document.getElementById("reflection-saved");
+    var breakitInputEl = document.getElementById("breakit-input");
+    var breakitPendingEl = document.getElementById("breakit-pending");
+    var breakitMatchedEl = document.getElementById("breakit-matched");
+    var challengeEl = document.getElementById("challenge");
+    var clockEl = document.getElementById("clock");
+    var timerEl = document.getElementById("timer");
+    var devCloseEl = document.getElementById("dev-close");
+
+    function pad(n) { return String(n).padStart(2, "0"); }
+
+    function renderClock() {
+      var now = new Date();
+      clockEl.textContent = pad(now.getHours()) + ":" + pad(now.getMinutes());
+
+      if (state.current_slot_start) {
+        var end = new Date(state.current_slot_start).getTime() + 5 * 60 * 1000;
+        var remaining = Math.max(0, Math.round((end - now.getTime()) / 1000));
+        if (remaining > 0) {
+          timerEl.textContent = Math.floor(remaining / 60) + ":" + pad(remaining % 60);
+        } else {
+          timerEl.textContent = "Time's up";
+        }
+      }
+    }
+    setInterval(renderClock, 1000);
+    renderClock();
+
+    function render() {
+      devCloseEl.style.display = state.dev_mode ? "" : "none";
+      challengeEl.textContent = state.breakit_challenge;
+
+      reflectionEl.disabled = state.reflection_entered;
+      submitBtn.style.display = state.reflection_entered ? "none" : "";
+      reflectionSavedEl.style.display = state.reflection_entered ? "" : "none";
+
+      breakitPendingEl.style.display = state.breakit_matched ? "none" : "";
+      breakitMatchedEl.style.display = state.breakit_matched ? "" : "none";
+
+      if (pendingBreakitCheck) {
+        pendingBreakitCheck = false;
+        if (!state.breakit_matched) {
+          breakitInputEl.classList.add("shake");
+          setTimeout(function () { breakitInputEl.classList.remove("shake"); }, 300);
+        }
+      }
+    }
+
+    // Called by NativeOverlayManager.pushState via evaluateJavascript.
+    window.__updateOverlayState = function (json) {
+      try {
+        var next = JSON.parse(json);
+        var newSlot = next.current_slot_start !== state.current_slot_start;
+        state = next;
+        if (newSlot) {
+          reflectionEl.value = "";
+          breakitInputEl.value = "";
+        }
+        render();
+      } catch (e) {
+        // Malformed push -- ignore rather than throw, leaves the last known
+        // good state showing instead of a blank/broken page.
+      }
+    };
+
+    reflectionEl.addEventListener("input", function () {
+      submitBtn.disabled = reflectionEl.value.trim().length === 0;
+    });
+
+    submitBtn.addEventListener("click", function () {
+      var text = reflectionEl.value.trim();
+      if (!text || state.reflection_entered) return;
+      submitBtn.disabled = true;
+      window.AndroidBridge.submitReflection(text);
+    });
+
+    function blockCopyPaste(e) { e.preventDefault(); }
+    breakitInputEl.addEventListener("paste", blockCopyPaste);
+    breakitInputEl.addEventListener("drop", blockCopyPaste);
+    breakitInputEl.addEventListener("contextmenu", blockCopyPaste);
+
+    breakitInputEl.addEventListener("keydown", function (e) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        return;
+      }
+      if (e.shiftKey && e.key === "Insert") {
+        e.preventDefault();
+        return;
+      }
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      var val = breakitInputEl.value.trim();
+      breakitInputEl.value = "";
+      if (!val || state.breakit_matched) return;
+      pendingBreakitCheck = true;
+      window.AndroidBridge.breakitAttempt(val);
+    });
+
+    devCloseEl.addEventListener("click", function () {
+      window.AndroidBridge.devForceClose();
+    });
+
+    render();
+  </script>
+</body>
+</html>

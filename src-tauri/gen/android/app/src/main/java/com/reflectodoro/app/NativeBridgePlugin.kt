@@ -8,11 +8,11 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.net.Uri
-import android.os.Build
 import android.provider.Settings
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
+import app.tauri.plugin.Channel
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
@@ -20,6 +20,20 @@ import app.tauri.plugin.Plugin
 @InvokeArg
 class TriggerBreakScreenArgs {
     var persistent: Boolean = true
+    // JSON-encoded OverlayState (+ dev_mode) -- opaque to Kotlin, just
+    // relayed into the native overlay's WebView as-is. See
+    // overlay_state_json_for_android in overlay.rs.
+    lateinit var state: String
+}
+
+@InvokeArg
+class UpdateNativeOverlayArgs {
+    lateinit var state: String
+}
+
+@InvokeArg
+class InitNativeOverlayChannelArgs {
+    lateinit var channel: Channel
 }
 
 @TauriPlugin
@@ -28,6 +42,13 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
     // for the same break -- never persisted, since a fresh process start
     // has nothing outstanding to release anyway.
     private var audioFocusRequest: AudioFocusRequest? = null
+
+    // Set once at app startup (see native_overlay.rs::install_channel) and
+    // reused for the lifetime of the process -- this is how the native
+    // overlay's WebView (which has no Tauri IPC of its own) gets reflection
+    // submissions and breakit attempts back into Rust. See
+    // NativeOverlayManager's OverlayJsBridge.
+    private var overlayChannel: Channel? = null
 
     @Command
     fun ping(invoke: Invoke) {
@@ -56,37 +77,31 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(JSObject())
     }
 
-    /** No special permission exists below API 31 -- exact alarms always
-     * work there, matching scheduleNextAlarm's own SDK_INT check in
-     * BreakScheduling.kt. */
-    @Command
-    fun canScheduleExactAlarms(invoke: Invoke) {
-        val alarmManager = activity.getSystemService(AlarmManager::class.java)
-        val can = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
-        val ret = JSObject()
-        ret.put("value", can)
-        invoke.resolve(ret)
-    }
-
-    /** Deep-links to the system settings screen for this one permission --
-     * there is no in-app runtime-dialog form of this grant, unlike
-     * POST_NOTIFICATIONS. A no-op below API 31, where the setting doesn't
-     * exist because it isn't needed. */
-    @Command
-    fun requestExactAlarmPermission(invoke: Invoke) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
-            intent.data = Uri.parse("package:" + activity.packageName)
-            activity.startActivity(intent)
-        }
-        invoke.resolve(JSObject())
-    }
-
+    /** Always posts the break notification, and additionally shows the
+     * native draw-over-other-apps overlay (NativeOverlayManager) when that
+     * permission is granted -- deliberately not either/or: the overlay
+     * survives Home/app-switching and has no OS-level dismiss gesture at
+     * all, but the notification is a real fallback path if the overlay
+     * doesn't render for any reason (a permission edge case, an OEM
+     * quirk blocking WindowManager.addView outright, etc.) -- the user
+     * confirmed they want both rather than relying on the overlay alone.
+     * A no-op if the app is already resumed, matching the existing
+     * behavior: the frontend's own overlay://state listener already handles
+     * that case -- except immediately after BreakAlarmReceiver's recovery
+     * auto-launch, where isResumed is already true by the time this runs
+     * even though the user never chose to look at this app (confirmed via
+     * logcat on a real device). MainActivity.recoveryLaunchPending, read and
+     * cleared here, bypasses isResumed for exactly that one call. */
     @Command
     fun triggerBreakScreen(invoke: Invoke) {
-        if (!MainActivity.isResumed) {
+        val bypassResumedGuard = MainActivity.recoveryLaunchPending
+        if (bypassResumedGuard) MainActivity.recoveryLaunchPending = false
+        if (!MainActivity.isResumed || bypassResumedGuard) {
             val args = invoke.parseArgs(TriggerBreakScreenArgs::class.java)
             postBreakNotification(activity, args.persistent)
+            if (canDrawOverlaysGranted()) {
+                NativeOverlayManager.show(activity, args.state, overlayChannel)
+            }
         }
         invoke.resolve(JSObject())
     }
@@ -94,6 +109,51 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun cancelBreakNotification(invoke: Invoke) {
         cancelBreakNotification(activity)
+        NativeOverlayManager.hide()
+        invoke.resolve(JSObject())
+    }
+
+    /** Pushes updated OverlayState into the native overlay if it's currently
+     * showing -- harmless no-op otherwise (e.g. the notification fallback
+     * was used instead, or nothing is open right now). */
+    @Command
+    fun updateNativeOverlay(invoke: Invoke) {
+        if (NativeOverlayManager.isShowing()) {
+            val args = invoke.parseArgs(UpdateNativeOverlayArgs::class.java)
+            NativeOverlayManager.update(args.state)
+        }
+        invoke.resolve(JSObject())
+    }
+
+    @Command
+    fun initNativeOverlayChannel(invoke: Invoke) {
+        val args = invoke.parseArgs(InitNativeOverlayChannelArgs::class.java)
+        overlayChannel = args.channel
+        invoke.resolve(JSObject())
+    }
+
+    private fun canDrawOverlaysGranted(): Boolean {
+        return Settings.canDrawOverlays(activity)
+    }
+
+    /** "Display over other apps" needs this explicit grant on every
+     * supported version (minSdk 29 is well past the API 23 floor where the
+     * requirement was introduced -- unlike exact-alarm's SDK_INT check,
+     * there's no in-range version where this behaves differently). Checked
+     * here and requested below via a Settings deep link -- there's no
+     * in-app runtime-dialog form of this permission, same as exact-alarm. */
+    @Command
+    fun canDrawOverlays(invoke: Invoke) {
+        val ret = JSObject()
+        ret.put("value", canDrawOverlaysGranted())
+        invoke.resolve(ret)
+    }
+
+    @Command
+    fun requestDrawOverlaysPermission(invoke: Invoke) {
+        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+        intent.data = Uri.parse("package:" + activity.packageName)
+        activity.startActivity(intent)
         invoke.resolve(JSObject())
     }
 

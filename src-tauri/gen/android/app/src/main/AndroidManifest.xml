@@ -15,8 +15,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Backs the native draw-over-other-apps break overlay
+         (NativeOverlayManager.kt); a special-access permission granted via
+         a one-time Settings toggle, not a runtime dialog. Falls back to a
+         break notification (postBreakNotification, BreakScheduling.kt) when
+         not granted; see triggerBreakScreen in NativeBridgePlugin.kt. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

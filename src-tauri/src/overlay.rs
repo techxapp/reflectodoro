@@ -131,7 +131,8 @@ pub fn spawn_or_update_overlay(app: &AppHandle) {
     {
         let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
         let persistent = crate::BREAK_NOTIFICATION_PERSISTENT_ENABLED.load(Ordering::SeqCst);
-        if let Err(e) = bridge.trigger_break_screen(persistent) {
+        let state_json = overlay_state_json_for_android(app);
+        if let Err(e) = bridge.trigger_break_screen(persistent, state_json) {
             log::error!("trigger_break_screen failed: {e:?}");
         }
     }
@@ -139,9 +140,38 @@ pub fn spawn_or_update_overlay(app: &AppHandle) {
     emit_state(app);
 }
 
+/// OverlayState serialized with an extra `dev_mode` field -- the native
+/// overlay's plain WebView has no Tauri command access of its own to call
+/// `is_dev_mode` the way the regular /overlay page does, so it needs this
+/// riding along in every state push instead (see NativeOverlayManager.kt's
+/// dev-close button).
+#[cfg(target_os = "android")]
+fn overlay_state_json_for_android(app: &AppHandle) -> serde_json::Value {
+    let state = app.state::<AppState>();
+    let snapshot = state.overlay.lock().unwrap().clone();
+    let mut json = serde_json::to_value(&snapshot).unwrap_or_default();
+    if let serde_json::Value::Object(map) = &mut json {
+        map.insert("dev_mode".into(), serde_json::json!(state.dev_mode));
+    }
+    json
+}
+
 pub fn emit_state(app: &AppHandle) {
     let state = app.state::<AppState>();
     let snapshot = state.overlay.lock().unwrap().clone();
+
+    // Keeps the native WindowManager overlay (if it's currently showing --
+    // Kotlin decides that, not Rust) in sync with every state change: the
+    // breakit counter, reflection_entered flipping, or a merged slot's new
+    // challenge. Harmless no-op JNI round trip when it isn't showing.
+    #[cfg(target_os = "android")]
+    {
+        let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+        if let Err(e) = bridge.update_native_overlay(overlay_state_json_for_android(app)) {
+            log::error!("update_native_overlay failed: {e:?}");
+        }
+    }
+
     let _ = app.emit("overlay://state", snapshot);
 }
 

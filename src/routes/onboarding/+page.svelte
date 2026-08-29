@@ -5,17 +5,24 @@
   import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
   import { markOnboardingCompleted } from "$lib/db";
 
+  let overlayGranted = $state(false);
+  let overlayChecked = $state(false);
   let notificationGranted = $state(false);
   let notificationChecked = $state(false);
-  let exactAlarmGranted = $state(false);
-  let exactAlarmChecked = $state(false);
   let finishing = $state(false);
 
   async function refreshStatus() {
+    overlayGranted = await invoke<boolean>("can_draw_overlays");
+    overlayChecked = true;
     notificationGranted = await isPermissionGranted();
     notificationChecked = true;
-    exactAlarmGranted = await invoke<boolean>("can_schedule_exact_alarms");
-    exactAlarmChecked = true;
+  }
+
+  async function grantOverlay() {
+    // No in-app dialog exists for this one -- opens the system settings
+    // screen instead. Re-checked via the visibilitychange listener below
+    // once the user comes back.
+    await invoke("request_draw_overlays_permission");
   }
 
   async function grantNotifications() {
@@ -23,17 +30,10 @@
     await refreshStatus();
   }
 
-  async function grantExactAlarm() {
-    // No in-app dialog exists for this one -- opens the system settings
-    // screen instead. Re-checked via the visibilitychange listener below
-    // once the user comes back.
-    await invoke("request_exact_alarm_permission");
-  }
-
-  // Catches the return from either permission's flow: the notification
-  // request dialog and the exact-alarm settings screen both take the user
-  // out of (and back into) the app, and neither reliably resolves its own
-  // promise with the final state on every Android version.
+  // Catches the return from the overlay settings screen or the notification
+  // request dialog, both of which take the user out of (and back into) the
+  // app, and neither reliably resolves its own promise with the final state
+  // on every Android version.
   function onVisibilityChange() {
     if (document.visibilityState === "visible") void refreshStatus();
   }
@@ -58,9 +58,28 @@
   <div class="content">
     <h1>Set up Reflectodoro</h1>
     <p class="intro">
-      Two optional permissions make break reminders more reliable. Both are skippable &mdash;
-      Reflectodoro keeps working without them, just less precisely in the background.
+      A few optional permissions make break enforcement more reliable. All are skippable &mdash;
+      Reflectodoro keeps working without them, just less effectively in the background.
     </p>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Break screen</h2>
+        {#if overlayChecked}
+          <span class="status" class:ok={overlayGranted}>
+            {overlayGranted ? "Granted" : "Not granted"}
+          </span>
+        {/if}
+      </div>
+      <p class="hint">
+        Recommended. Lets the break screen appear directly over whatever else you're doing when a
+        break starts, instead of just a notification you could miss or dismiss. It can't wake or
+        take over a locked screen &mdash; only interrupts active use.
+      </p>
+      {#if !overlayGranted}
+        <button type="button" onclick={grantOverlay}>Open settings&hellip;</button>
+      {/if}
+    </section>
 
     <section class="card">
       <div class="card-head">
@@ -77,24 +96,6 @@
       </p>
       {#if !notificationGranted}
         <button type="button" onclick={grantNotifications}>Enable notifications</button>
-      {/if}
-    </section>
-
-    <section class="card">
-      <div class="card-head">
-        <h2>Precise break timing</h2>
-        {#if exactAlarmChecked}
-          <span class="status" class:ok={exactAlarmGranted}>
-            {exactAlarmGranted ? "Granted" : "Not granted"}
-          </span>
-        {/if}
-      </div>
-      <p class="hint">
-        Keeps break reminders firing exactly on schedule, even while the phone is idle. Without
-        it, they can drift by a few minutes under battery-saving conditions.
-      </p>
-      {#if !exactAlarmGranted}
-        <button type="button" onclick={grantExactAlarm}>Open settings&hellip;</button>
       {/if}
     </section>
 

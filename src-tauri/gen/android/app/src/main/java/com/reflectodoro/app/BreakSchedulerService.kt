@@ -76,6 +76,25 @@ class BreakSchedulerService : Service() {
     if (instance === this) instance = null
   }
 
+  /** Fires when the user swipes this app's task away from Recents -- by
+   * default that kills the process, service included, with nothing to
+   * revive it until the next BreakAlarmReceiver-triggered ping (the next
+   * grid boundary, potentially tens of minutes away). Restarting
+   * immediately here is the standard Android idiom for a foreground
+   * service that should survive a Recents-swipe the same way it survives
+   * plain backgrounding (Home) -- Recents-swipe was never meant to be a
+   * *harder* escape hatch than Home, just a different one. It still isn't
+   * unbeatable: Force Stop (Settings) remains the one true kill switch
+   * that no app can override, by OS design -- see CLAUDE.md's Kill
+   * switches section, same category as Task Manager on Windows. Whether
+   * this self-revival actually survives is also OEM-dependent: some
+   * manufacturers' battery/process managers (Huawei/Honor's in particular)
+   * can still prevent it regardless of what the app does here. */
+  override fun onTaskRemoved(rootIntent: Intent?) {
+    super.onTaskRemoved(rootIntent)
+    startForegroundService(Intent(applicationContext, BreakSchedulerService::class.java))
+  }
+
   private fun setBreakMode(breakMode: Boolean) {
     inBreakMode = breakMode
     startForeground(NOTIFICATION_ID, buildNotification())
