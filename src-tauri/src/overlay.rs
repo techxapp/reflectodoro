@@ -225,6 +225,27 @@ pub fn schedule_auto_close(app: &AppHandle, slot_start: String) {
     });
 }
 
+/// Immediately closes the overlay if one is open, bypassing both the unlock
+/// formula and the `OVERLAY_AUTO_CLOSE_MINUTES` grace period -- called from
+/// `run_scheduler` the moment it detects the process just resumed from a
+/// suspend/hibernate gap. Unlike the grace-period auto-close
+/// (`schedule_auto_close`), this doesn't depend on a Work-phase transition
+/// ever firing to get scheduled, which matters because a resume that lands
+/// back inside a Break window never triggers one (`last_phase` already reads
+/// Break) and the stale overlay would otherwise sit there, still showing
+/// last occurrence's challenge, until the next real grid boundary. Same
+/// downstream behavior as any other force-close: no reflection was entered,
+/// so no wellness check-in opens, and the slot stays uncovered until a later
+/// reflection's `findMissedSlots` cascade sweeps it up -- no data is lost,
+/// only the on-screen prompt for that specific occurrence.
+pub fn force_close_stale_overlay(app: &AppHandle) {
+    let open = app.state::<AppState>().overlay.lock().unwrap().open;
+    if open {
+        log::info!("force_close_stale_overlay: closing overlay left open across a suspend gap");
+        close_overlay(app);
+    }
+}
+
 /// On mobile there's no separate window to hide -- `emit_state` below tells
 /// `+layout.svelte`'s listener to route the single window back to `/`
 /// instead (desktop doesn't need this: hiding the overlay window already

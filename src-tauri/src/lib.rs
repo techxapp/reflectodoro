@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration as StdDuration;
 
-use chrono::Local;
+use chrono::{DateTime, Local};
 #[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 #[cfg(desktop)]
@@ -96,11 +96,48 @@ pub(crate) static LAST_WELLNESS_CHECK_AT: Mutex<Option<String>> = Mutex::new(Non
 /// completes. See `overlay::schedule_auto_close`.
 pub(crate) static OVERLAY_AUTO_CLOSE_MINUTES: AtomicU32 = AtomicU32::new(5);
 
+/// How far past its intended wake instant a loop iteration has to land
+/// before it's treated as "the process was just suspended/hibernated
+/// through this", rather than ordinary scheduling jitter. `tokio::time::sleep`
+/// is driven by a monotonic clock that itself stops ticking across a real
+/// suspend, so comparing wall-clock `Local::now()` against the wake instant
+/// computed *before* sleeping is what actually detects the gap.
+const SUSPEND_GAP_THRESHOLD: StdDuration = StdDuration::from_secs(120);
+
 async fn run_scheduler(app: AppHandle) {
     let mut last_phase: Option<Phase> = None;
+    let mut expected_wake: Option<DateTime<Local>> = None;
 
     loop {
         let now = Local::now();
+
+        // If we woke up much later than the last iteration scheduled for,
+        // the process was almost certainly suspended/hibernated in between.
+        // A stale overlay left open from before the gap won't necessarily
+        // hit the normal Work-phase-transition path below (e.g. if `now`
+        // happens to land back inside a Break window, `last_phase` already
+        // reads Break and no transition fires at all) -- so it's handled
+        // directly here instead of relying on that path or the
+        // OVERLAY_AUTO_CLOSE_MINUTES grace timer, which wouldn't even get
+        // scheduled in that case.
+        if let Some(expected) = expected_wake {
+            let overslept = (now - expected).to_std().unwrap_or(StdDuration::ZERO);
+            if overslept > SUSPEND_GAP_THRESHOLD {
+                log::info!(
+                    "scheduler: woke {}s later than expected -- treating as a suspend/hibernate gap",
+                    overslept.as_secs()
+                );
+                overlay::force_close_stale_overlay(&app);
+                // Forces the transition check below to run regardless of
+                // whether `now`'s phase nominally matches what it was before
+                // the gap -- otherwise a resume that happens to land back
+                // inside a Break window would see last_phase == Break, skip
+                // the transition entirely, and leave the (now-closed)
+                // overlay unreplaced for the rest of that live break.
+                last_phase = None;
+            }
+        }
+
         let slot = grid::slot_for(now);
 
         if last_phase != Some(slot.phase) {
@@ -157,6 +194,7 @@ async fn run_scheduler(app: AppHandle) {
         let sleep_dur = (slot.end - Local::now())
             .to_std()
             .unwrap_or(StdDuration::from_secs(1));
+        expected_wake = Some(slot.end);
         tokio::time::sleep(sleep_dur).await;
     }
 }
