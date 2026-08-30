@@ -90,7 +90,7 @@ fn build_overlay_window(app: &AppHandle, visible: bool) -> WebviewWindow {
 /// `WebviewWindow` doesn't layer over "main" there the way it does on
 /// desktop (confirmed empirically: it replaces the single Activity's
 /// visible content instead).
-pub fn spawn_or_update_overlay(app: &AppHandle) {
+pub async fn spawn_or_update_overlay(app: &AppHandle) {
     #[cfg(desktop)]
     {
         let win = match app.get_webview_window(OVERLAY_LABEL) {
@@ -129,6 +129,13 @@ pub fn spawn_or_update_overlay(app: &AppHandle) {
     // BREAK_NOTIFICATION_PERSISTENT_ENABLED's doc comment.
     #[cfg(target_os = "android")]
     {
+        // Refreshed here, not just once at process start: this is the last
+        // point before the overlay's WebView is actually created, so it's
+        // what makes the task list show whatever the user most recently
+        // saved in the main app rather than a stale value from launch. See
+        // AppState.task_list's doc comment for why a plain cache read is
+        // safe for every push after this one.
+        crate::native_overlay::refresh_task_list_cache(app).await;
         let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
         let persistent = crate::BREAK_NOTIFICATION_PERSISTENT_ENABLED.load(Ordering::SeqCst);
         let state_json = overlay_state_json_for_android(app);
@@ -152,6 +159,10 @@ fn overlay_state_json_for_android(app: &AppHandle) -> serde_json::Value {
     let mut json = serde_json::to_value(&snapshot).unwrap_or_default();
     if let serde_json::Value::Object(map) = &mut json {
         map.insert("dev_mode".into(), serde_json::json!(state.dev_mode));
+        map.insert(
+            "task_list_content".into(),
+            serde_json::json!(state.task_list.lock().unwrap().clone()),
+        );
     }
     json
 }

@@ -15,13 +15,13 @@
 //! actual unlock-formula logic (state.rs) stays in exactly one place.
 #![cfg(target_os = "android")]
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Local, SecondsFormat, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::SqlitePool;
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::OnceCell;
 
 use crate::android_bridge::AndroidBridge;
@@ -143,11 +143,76 @@ async fn save_reflection(pool: &SqlitePool, covered_slots: &[String], text: &str
     }
 }
 
+/// Mirrors db.ts's `localDateStamp()` exactly (local calendar date, zero
+/// padded) -- `daily_task_list.date` is keyed on this string, so this module
+/// has to match it byte-for-byte or it'll read/write a different row than
+/// the frontend's own `getTaskList`/`saveTaskList` calls do for "today".
+fn local_date_stamp() -> String {
+    Local::now().format("%Y-%m-%d").to_string()
+}
+
+async fn load_task_list(pool: &SqlitePool, date: &str) -> String {
+    sqlx::query_scalar::<_, String>("SELECT content FROM daily_task_list WHERE date = ?")
+        .bind(date)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Mirrors db.ts's `saveTaskList` upsert exactly (see that function's own
+/// comment for why the `sourceLabel` broadcast below matters).
+async fn persist_task_list(pool: &SqlitePool, date: &str, content: &str) {
+    let updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let _ = sqlx::query(
+        "INSERT INTO daily_task_list (date, content, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
+    )
+    .bind(date)
+    .bind(content)
+    .bind(&updated_at)
+    .execute(pool)
+    .await;
+}
+
+/// Refreshes `AppState.task_list` from SQLite -- called right before the
+/// overlay is triggered (`overlay::spawn_or_update_overlay`'s Android arm) so
+/// it shows whatever the user last saved in the main app, not a stale cache
+/// from process start. See the field's doc comment in state.rs for why a
+/// one-shot refresh here is enough (nothing else can write to today's row
+/// while the overlay is up).
+pub async fn refresh_task_list_cache(app: &AppHandle) {
+    let date = local_date_stamp();
+    let content = load_task_list(pool(app).await, &date).await;
+    *app.state::<AppState>().task_list.lock().unwrap() = content;
+}
+
+async fn handle_save_task_list(app: AppHandle, content: String) {
+    let date = local_date_stamp();
+    persist_task_list(pool(&app).await, &date, &content).await;
+    *app.state::<AppState>().task_list.lock().unwrap() = content.clone();
+    // Keeps the main Activity's own webview in sync in the (rare but
+    // possible) case it's still mounted on a task-list-showing route behind
+    // this overlay -- see saveTaskList/listenForTaskListUpdates in db.ts.
+    // sourceLabel isn't a real window label, so the frontend's own
+    // self-clobber guard never filters it out.
+    let _ = app.emit(
+        "tasklist://updated",
+        serde_json::json!({
+            "date": date,
+            "content": content,
+            "sourceLabel": "android-native-overlay",
+        }),
+    );
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum NativeOverlayEvent {
     SubmitReflection { text: String },
     BreakitAttempt { input: String },
+    SaveTaskList { content: String },
     DevForceClose,
 }
 
@@ -181,6 +246,12 @@ fn handle_channel_event(app: &AppHandle, value: Value) {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 handle_submit_reflection(app, text).await;
+            });
+        }
+        NativeOverlayEvent::SaveTaskList { content } => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                handle_save_task_list(app, content).await;
             });
         }
         NativeOverlayEvent::BreakitAttempt { input } => {

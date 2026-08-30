@@ -7,13 +7,19 @@
 <style>
   html, body {
     margin: 0;
-    height: 100%;
+    min-height: 100%;
     background: #0b0b12;
   }
 
   body {
-    position: fixed;
-    inset: 0;
+    /* Deliberately NOT position: fixed + its own overflow-y: auto -- that
+       makes body a nested scroll container instead of letting the document
+       itself scroll, and on-device that nested container didn't reliably
+       take touch-scroll gestures inside this WindowManager-hosted WebView
+       (no scrollbar, dragging did nothing). Plain document-level scrolling
+       (the browser engine's most basic, universally-supported path) is used
+       instead: body just flows normally and grows past one screen's height
+       when content + the keyboard spacer need it. */
     background: linear-gradient(160deg, #10111a 0%, #1b1c2b 100%);
     color: #f3f3f7;
     display: flex;
@@ -23,7 +29,6 @@
     -webkit-user-select: none;
     user-select: none;
     box-sizing: border-box;
-    overflow-y: auto;
     /* Fixed top padding rather than env(safe-area-inset-*): this WebView is
        added directly to WindowManager, not laid out through the Activity's
        own edge-to-edge/WindowInsets pipeline, so safe-area-inset support
@@ -56,14 +61,41 @@
     opacity: 0.55;
   }
 
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: min(480px, 100%);
+    /* Centers when everything fits; once the keyboard/spacer push total
+       content taller than the viewport, the auto margins collapse to 0 and
+       scrolling (body's overflow-y: auto) takes over instead. */
+    margin: auto 0;
+  }
+
   .panel {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 16px;
     padding: 24px;
-    width: min(480px, 100%);
-    margin: auto 0;
     box-sizing: border-box;
+  }
+
+  h2 {
+    font-size: 15px;
+    margin: 0 0 12px;
+    opacity: 0.85;
+  }
+
+  /* Blank scroll room at the end of the content so a field near the bottom
+     (breakit input, task list) can still be scrolled up above the on-screen
+     keyboard. Height is set from JS -- a generous static minimum plus
+     whatever visualViewport reports the keyboard is actually covering, since
+     this WebView is added straight to WindowManager rather than hosted by an
+     Activity, and it's unverified whether keyboard-triggered resize behaves
+     identically to the regular in-app /overlay page in that context. */
+  .spacer {
+    flex-shrink: 0;
+    width: 100%;
   }
 
   .timer {
@@ -156,27 +188,37 @@
   <button id="dev-close" class="dev-close" style="display:none">Close (DEV)</button>
   <p id="clock" class="clock"></p>
 
-  <section class="panel">
-    <p class="timer" id="timer">--:--</p>
-    <h1>What did I do since your last break?</h1>
+  <div class="stack">
+    <section class="panel">
+      <p class="timer" id="timer">--:--</p>
+      <h1>What did I do since your last break?</h1>
 
-    <textarea id="reflection" rows="5" placeholder="Write a couple of bullet points or type 'Skip' to skip it."></textarea>
-    <div id="reflection-actions">
-      <button id="submit-reflection" disabled>Submit reflection</button>
-    </div>
-    <p id="reflection-saved" class="hint ok" style="display:none">Saved. Waiting on the other condition to finish the break.</p>
-
-    <div class="breakit">
-      <div id="breakit-pending">
-        <label for="breakit-input">To close this window early, type this code and press Enter</label>
-        <p class="challenge" id="challenge"></p>
-        <input id="breakit-input" type="text" autocomplete="off" spellcheck="false"
-          placeholder="type the code above, then press Enter" />
+      <textarea id="reflection" rows="5" placeholder="Write a couple of bullet points or type 'Skip' to skip it."></textarea>
+      <div id="reflection-actions">
+        <button id="submit-reflection" disabled>Submit reflection</button>
       </div>
-      <p id="breakit-matched" class="hint ok" style="display:none">Code matched.</p>
-      <p class="hint">Reflection is still required either way.</p>
-    </div>
-  </section>
+      <p id="reflection-saved" class="hint ok" style="display:none">Saved. Waiting on the other condition to finish the break.</p>
+
+      <div class="breakit">
+        <div id="breakit-pending">
+          <label for="breakit-input">To close this window early, type this code and press Enter</label>
+          <p class="challenge" id="challenge"></p>
+          <input id="breakit-input" type="text" autocomplete="off" spellcheck="false"
+            placeholder="type the code above, then press Enter" />
+        </div>
+        <p id="breakit-matched" class="hint ok" style="display:none">Code matched.</p>
+        <p class="hint">Reflection is still required either way.</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Most Important Tasks Today</h2>
+      <textarea id="task-list" rows="6" placeholder="1.&#10;2.&#10;3."></textarea>
+      <p class="hint">Auto-saves as you type.</p>
+    </section>
+  </div>
+
+  <div id="spacer" class="spacer"></div>
 
   <script>
     var state = {
@@ -187,8 +229,10 @@
       time_expired: false,
       current_slot_start: "",
       dev_mode: false,
+      task_list_content: "",
     };
     var pendingBreakitCheck = false;
+    var taskSaveTimer = null;
 
     var reflectionEl = document.getElementById("reflection");
     var submitBtn = document.getElementById("submit-reflection");
@@ -200,6 +244,8 @@
     var clockEl = document.getElementById("clock");
     var timerEl = document.getElementById("timer");
     var devCloseEl = document.getElementById("dev-close");
+    var taskListEl = document.getElementById("task-list");
+    var spacerEl = document.getElementById("spacer");
 
     function pad(n) { return String(n).padStart(2, "0"); }
 
@@ -238,6 +284,13 @@
           setTimeout(function () { breakitInputEl.classList.remove("shake"); }, 300);
         }
       }
+
+      // Never while the field has focus -- a push triggered by something
+      // unrelated (e.g. a breakit attempt) would otherwise clobber
+      // in-progress typing with the last value Rust knew about.
+      if (document.activeElement !== taskListEl) {
+        taskListEl.value = state.task_list_content;
+      }
     }
 
     // Called by NativeOverlayManager.pushState via evaluateJavascript.
@@ -246,6 +299,9 @@
         var next = JSON.parse(json);
         var newSlot = next.current_slot_start !== state.current_slot_start;
         state = next;
+        // Reflection/breakit are per-slot and reset on a new one; the task
+        // list is per-day, not per-slot, so it deliberately isn't cleared
+        // here.
         if (newSlot) {
           reflectionEl.value = "";
           breakitInputEl.value = "";
@@ -294,6 +350,72 @@
     devCloseEl.addEventListener("click", function () {
       window.AndroidBridge.devForceClose();
     });
+
+    taskListEl.addEventListener("input", function () {
+      if (taskSaveTimer) clearTimeout(taskSaveTimer);
+      taskSaveTimer = setTimeout(function () {
+        window.AndroidBridge.saveTaskList(taskListEl.value);
+      }, 800);
+    });
+
+    /** window.innerHeight never shrinks when the keyboard opens here (see
+     * __setKeyboardInset below for why), so a plain scrollIntoView({block:
+     * "center"}) would center against the *full* screen height and could
+     * still land a field behind the keyboard. This scrolls only as far as needed
+     * to clear whatever nativeKeyboardInset currently says is covered,
+     * measured against the field's actual position. */
+    function scrollFieldAboveKeyboard(el) {
+      var rect = el.getBoundingClientRect();
+      var visibleBottom = window.innerHeight - nativeKeyboardInset;
+      var margin = 16;
+      if (rect.bottom > visibleBottom - margin) {
+        window.scrollBy({ top: rect.bottom - visibleBottom + margin, behavior: "smooth" });
+      } else if (rect.top < margin) {
+        window.scrollBy({ top: rect.top - margin, behavior: "smooth" });
+      }
+    }
+    function onFieldFocus(e) {
+      // Handles the case where the keyboard is already up (switching focus
+      // between fields); __setKeyboardInset handles the case where focus
+      // triggers the keyboard to open in the first place, since the real
+      // height isn't known yet at focus time.
+      setTimeout(function () { scrollFieldAboveKeyboard(e.currentTarget); }, 150);
+    }
+    reflectionEl.addEventListener("focus", onFieldFocus);
+    breakitInputEl.addEventListener("focus", onFieldFocus);
+    taskListEl.addEventListener("focus", onFieldFocus);
+
+    /** Sizes the trailing spacer so there's always room to scroll a focused
+     * field above the on-screen keyboard, and re-scrolls the focused field
+     * once the real height is known. visualViewport is left wired up but
+     * doesn't fix this on its own: this WebView sits in a
+     * TYPE_APPLICATION_OVERLAY window, and Android's automatic IME
+     * resize/pan (what visualViewport's resize event depends on) only
+     * applies to application window types, not system overlay ones -- a
+     * real device test showed the keyboard covering fields with only the
+     * visualViewport/static-floor spacer in place. The real height instead
+     * comes from Kotlin (NativeOverlayManager's getWindowVisibleDisplayFrame
+     * -based listener, which isn't gated on window type the same way),
+     * with visualViewport and a static floor kept as harmless extra
+     * signals in case either ever does help. */
+    var nativeKeyboardInset = 0;
+    window.__setKeyboardInset = function (px) {
+      nativeKeyboardInset = px || 0;
+      updateSpacer();
+      var active = document.activeElement;
+      if (nativeKeyboardInset > 0 && (active === reflectionEl || active === breakitInputEl || active === taskListEl)) {
+        scrollFieldAboveKeyboard(active);
+      }
+    };
+    function updateSpacer() {
+      var vv = window.visualViewport;
+      var vvInset = vv ? Math.max(0, window.innerHeight - vv.height) : 0;
+      spacerEl.style.height = Math.max(220, nativeKeyboardInset, vvInset) + "px";
+    }
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", updateSpacer);
+    }
+    updateSpacer();
 
     render();
   </script>

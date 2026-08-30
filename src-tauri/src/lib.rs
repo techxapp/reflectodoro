@@ -128,7 +128,7 @@ async fn run_scheduler(app: AppHandle) {
                         // when the app boots straight into a live break --
                         // a no-op once the app's been running a while.
                         overlay::wait_for_webview_warmup(&app).await;
-                        overlay::spawn_or_update_overlay(&app);
+                        overlay::spawn_or_update_overlay(&app).await;
                     }
                     Phase::Work => {
                         let slot_start = {

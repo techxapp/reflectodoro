@@ -3,9 +3,11 @@ package com.reflectodoro.app
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -32,6 +34,7 @@ object NativeOverlayManager {
   private val mainHandler = Handler(Looper.getMainLooper())
   private var webView: WebView? = null
   private var windowManager: WindowManager? = null
+  private var keyboardLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
 
   fun isShowing(): Boolean = webView != null
 
@@ -77,6 +80,28 @@ object NativeOverlayManager {
       wm.addView(wv, params)
       webView = wv
       windowManager = wm
+
+      // softInputMode's ADJUST_RESIZE/ADJUST_PAN only auto-applies to
+      // "application" window types -- TYPE_APPLICATION_OVERLAY is a system
+      // window type, so it never resizes/pans on its own when the IME shows.
+      // A real device (API 29) confirmed this: native_overlay.html's
+      // visualViewport-based spacer never grew beyond its static floor, and
+      // the keyboard covered the focused field. getWindowVisibleDisplayFrame
+      // () is the older, window-type-independent mechanism (the same one
+      // keyboard-visibility libraries use for popups/overlays) -- it reports
+      // the actual IME-adjusted visible frame for this window regardless, so
+      // this measures the real keyboard height and feeds it to the page
+      // directly.
+      val listener = ViewTreeObserver.OnGlobalLayoutListener {
+        val visibleFrame = Rect()
+        wv.getWindowVisibleDisplayFrame(visibleFrame)
+        val screenHeightPx = wv.resources.displayMetrics.heightPixels
+        val keyboardPx = (screenHeightPx - visibleFrame.bottom).coerceAtLeast(0)
+        val keyboardDp = keyboardPx / wv.resources.displayMetrics.density
+        wv.evaluateJavascript("window.__setKeyboardInset && window.__setKeyboardInset($keyboardDp)", null)
+      }
+      wv.viewTreeObserver.addOnGlobalLayoutListener(listener)
+      keyboardLayoutListener = listener
     }
   }
 
@@ -98,6 +123,10 @@ object NativeOverlayManager {
     mainHandler.post {
       val wv = webView ?: return@post
       val wm = windowManager ?: return@post
+      keyboardLayoutListener?.let {
+        if (wv.viewTreeObserver.isAlive) wv.viewTreeObserver.removeOnGlobalLayoutListener(it)
+      }
+      keyboardLayoutListener = null
       wm.removeView(wv)
       wv.destroy()
       webView = null
@@ -120,6 +149,11 @@ class OverlayJsBridge(private val channel: Channel?) {
   @JavascriptInterface
   fun breakitAttempt(input: String) {
     channel?.sendObject(mapOf("kind" to "breakit_attempt", "input" to input))
+  }
+
+  @JavascriptInterface
+  fun saveTaskList(content: String) {
+    channel?.sendObject(mapOf("kind" to "save_task_list", "content" to content))
   }
 
   @JavascriptInterface
