@@ -1,6 +1,8 @@
 package com.reflectodoro.app
 
+import android.graphics.Rect
 import android.os.Bundle
+import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
@@ -52,5 +54,26 @@ class MainActivity : TauriActivity() {
   override fun onPause() {
     super.onPause()
     isResumed = false
+  }
+
+  /** enableEdgeToEdge() above (WindowCompat.setDecorFitsSystemWindows(false))
+   * means the classic windowSoftInputMode adjustResize/adjustPan never
+   * kicks in -- confirmed on a real API 29 device: window.innerHeight and
+   * visualViewport.height stayed identical with the keyboard visibly
+   * covering the page. Same fix as the native break overlay
+   * (NativeOverlayManager.show): measure the real keyboard height via
+   * getWindowVisibleDisplayFrame, which isn't gated on
+   * decorFitsSystemWindows/softInputMode the way the automatic resize is,
+   * and push it to the page directly. */
+  override fun onWebViewCreate(webView: WebView) {
+    super.onWebViewCreate(webView)
+    webView.viewTreeObserver.addOnGlobalLayoutListener {
+      val visibleFrame = Rect()
+      webView.getWindowVisibleDisplayFrame(visibleFrame)
+      val screenHeightPx = webView.resources.displayMetrics.heightPixels
+      val keyboardPx = (screenHeightPx - visibleFrame.bottom).coerceAtLeast(0)
+      val keyboardDp = keyboardPx / webView.resources.displayMetrics.density
+      webView.evaluateJavascript("window.__setKeyboardInset && window.__setKeyboardInset($keyboardDp)", null)
+    }
   }
 }

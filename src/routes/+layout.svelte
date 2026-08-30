@@ -11,6 +11,54 @@
 
   let { children } = $props();
 
+  // How much of the viewport the on-screen keyboard is currently covering.
+  // visualViewport's resize event is wired up here but doesn't actually fire
+  // on its own: MainActivity.kt's enableEdgeToEdge() opts this Activity out
+  // of the classic windowSoftInputMode adjustResize/adjustPan behavior
+  // (confirmed on a real API 29 device -- window.innerHeight and
+  // visualViewport.height stayed identical with the keyboard visibly up).
+  // The real height instead comes from MainActivity's own
+  // getWindowVisibleDisplayFrame-based listener via __setKeyboardInset,
+  // with visualViewport kept as a harmless extra signal in case it ever
+  // does fire (e.g. on non-edge-to-edge builds).
+  let keyboardInset = $state(0);
+  let nativeKeyboardInset = 0;
+  let mainEl: HTMLElement | undefined = $state();
+
+  function updateKeyboardInset() {
+    const vv = window.visualViewport;
+    const vvInset = vv ? Math.max(0, window.innerHeight - vv.height) : 0;
+    keyboardInset = Math.max(vvInset, nativeKeyboardInset);
+  }
+
+  /** window.innerHeight never shrinks here (see keyboardInset above), so
+   * el.scrollIntoView({block:"center"}) would center against the *full*
+   * screen height and could still land a field behind the keyboard. This
+   * scrolls `main` (the actual scroll container) only as far as needed to
+   * clear whatever keyboardInset currently says is covered. */
+  function scrollFieldAboveKeyboard(el: HTMLElement) {
+    const rect = el.getBoundingClientRect();
+    const visibleBottom = window.innerHeight - keyboardInset;
+    const margin = 16;
+    if (rect.bottom > visibleBottom - margin) {
+      mainEl?.scrollBy({ top: rect.bottom - visibleBottom + margin, behavior: "smooth" });
+    } else if (rect.top < margin) {
+      mainEl?.scrollBy({ top: rect.top - margin, behavior: "smooth" });
+    }
+  }
+
+  /** Delegated to `main` (focusin bubbles, unlike focus) so every regular
+   * tab's inputs get keyboard-avoidance for free instead of each page
+   * wiring its own focus handler. */
+  function onMainFocusIn(e: FocusEvent) {
+    const el = e.target as HTMLElement;
+    if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
+    // Gives the keyboard's open animation a moment to start -- scrolling
+    // immediately can land at the pre-keyboard scroll position, and
+    // __setKeyboardInset (below) re-scrolls once the real height is known.
+    setTimeout(() => scrollFieldAboveKeyboard(el), 150);
+  }
+
   const links = [
     { href: "/", label: "Timer" },
     { href: "/entries", label: "Entries" },
@@ -73,13 +121,24 @@
     await listen("checkin://slot", () => {
       if ($page.url.pathname !== "/checkin") void goto("/checkin");
     });
+
+    (window as unknown as Record<string, unknown>).__setKeyboardInset = (px: number) => {
+      nativeKeyboardInset = px || 0;
+      updateKeyboardInset();
+      const active = document.activeElement;
+      if (nativeKeyboardInset > 0 && active instanceof HTMLElement && active !== document.body) {
+        scrollFieldAboveKeyboard(active);
+      }
+    };
+    window.visualViewport?.addEventListener("resize", updateKeyboardInset);
+    updateKeyboardInset();
   });
 </script>
 
 {#if isSpecialWindow}
   {@render children()}
 {:else}
-  <div class="app-shell">
+  <div class="app-shell" style="--kb-inset: {keyboardInset}px">
     <nav>
       <span class="brand">Reflectodoro</span>
       <div class="links">
@@ -88,7 +147,7 @@
         {/each}
       </div>
     </nav>
-    <main>
+    <main bind:this={mainEl} onfocusin={onMainFocusIn}>
       {@render children()}
     </main>
   </div>
@@ -150,9 +209,12 @@
   main {
     flex: 1;
     overflow-y: auto;
-    /* Bottom inset keeps content clear of the gesture-nav bar; left/right
-       cover a notch/cutout in landscape. Top is handled on `nav` instead. */
-    padding-bottom: var(--safe-bottom);
+    /* Bottom inset keeps content clear of the gesture-nav bar, plus
+       --kb-inset's extra room so a focused field near the bottom (e.g. the
+       Timer tab's task list) can still be scrolled up above an open
+       keyboard; left/right cover a notch/cutout in landscape. Top is
+       handled on `nav` instead. */
+    padding-bottom: calc(var(--safe-bottom) + var(--kb-inset, 0px));
     padding-left: var(--safe-left);
     padding-right: var(--safe-right);
   }
