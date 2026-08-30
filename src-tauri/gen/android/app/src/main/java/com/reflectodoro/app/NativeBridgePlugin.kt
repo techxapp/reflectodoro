@@ -109,7 +109,23 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun cancelBreakNotification(invoke: Invoke) {
         cancelBreakNotification(activity)
+        // The native overlay is a WindowManager layer drawn over whatever
+        // app the user was actually in (Home, another app) -- unlike the
+        // regular in-app /overlay route, hiding it does not by itself bring
+        // MainActivity back in front of anything. Without this, a reflection
+        // submitted while backgrounded would close the overlay straight back
+        // to Home/the other app, and the wellness check-in that close_overlay
+        // just triggered (checkin://slot, routed by +layout.svelte) would be
+        // rendered on a webview nobody is looking at. Captured before hide()
+        // since isShowing() always reads false afterward.
+        val wasShowingNativeOverlay = NativeOverlayManager.isShowing()
         NativeOverlayManager.hide()
+        if (wasShowingNativeOverlay) {
+            val intent = Intent(activity, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            activity.startActivity(intent)
+        }
         invoke.resolve(JSObject())
     }
 
