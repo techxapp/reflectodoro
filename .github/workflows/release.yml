@@ -105,3 +105,55 @@ jobs:
             ${{ steps.commit_notes.outputs.body }}
           releaseDraft: false
           prerelease: false
+
+  android:
+    # Waits for every desktop leg above so the GitHub Release already exists
+    # (created by tauri-action) before this uploads an extra asset to it --
+    # a separate job because the Android toolchain (JDK, Android SDK/NDK,
+    # Gradle) has nothing in common with the desktop matrix's native deps.
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;36.0.0 ndk;26.1.10909125"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # --debug, not a release build: there's no signing keystore configured
+      # in this repo yet, so a release-type Gradle variant has nothing to
+      # sign itself with. Same tradeoff as the currently-unsigned macOS
+      # build -- see CLAUDE.md's "Not built yet / explicitly deferred".
+      - name: Build Android APK
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          export ANDROID_NDK_HOME="$NDK_HOME"
+          npm run tauri android build -- --debug
+
+      - name: Upload APK to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk \
+            --clobber
