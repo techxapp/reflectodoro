@@ -106,6 +106,96 @@ jobs:
           releaseDraft: false
           prerelease: false
 
+      # linuxdeploy (which tauri-action's `tauri build` just ran) bundles
+      # THIS RUNNER's libwayland-client/cursor/egl/server into the AppImage,
+      # not just the app's real dependencies. That's fine when the AppImage
+      # is built and run on the same machine, but this runner's Ubuntu image
+      # has a different Wayland/Mesa stack than wherever the AppImage is
+      # actually installed -- which is exactly what produced
+      # `undefined symbol: wl_fixes_interface` / `EGL_BAD_PARAMETER` in
+      # testing (see src-tauri/scripts/fix-appimage.sh's header comment for
+      # the full story). Stripping those bundled libs here means the release
+      # artifact behaves like the manually-patched AppImages that were
+      # confirmed to work, instead of shipping the same bug to every user.
+      #
+      # Re-signing: this repo has createUpdaterArtifacts on, so the step
+      # above already produced a .sig for the ORIGINAL AppImage; repackaging
+      # changes the bytes, so that .sig is now stale. fix-appimage.sh
+      # re-signs automatically whenever TAURI_SIGNING_PRIVATE_KEY is set
+      # (it is, below) -- same script, same env vars as a local build.
+      #
+      # Deliberately only replaces this leg's own AppImage/.sig assets here
+      # (uniquely named per architecture, so no risk of the two Linux legs
+      # colliding). It does NOT touch latest.json -- ubuntu-latest and
+      # ubuntu-24.04-arm run concurrently, and the GitHub Releases API has
+      # no compare-and-swap, so two legs racing to read-modify-write the
+      # same shared file could silently drop one platform's entry. See the
+      # separate fix-linux-updater-manifest job below, which waits for the
+      # whole matrix and patches latest.json exactly once.
+      - name: Fix and re-sign Linux AppImage
+        if: startsWith(matrix.os, 'ubuntu')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          bash src-tauri/scripts/fix-appimage.sh
+          gh release upload "${{ github.ref_name }}" \
+            src-tauri/target/release/bundle/appimage/*.AppImage \
+            src-tauri/target/release/bundle/appimage/*.AppImage.sig \
+            --clobber
+
+  # Runs once, after every leg of the matrix above has finished (same
+  # `needs: release` pattern the android job below already uses) -- see the
+  # "Fix and re-sign Linux AppImage" step's comment for why patching the
+  # shared latest.json can't safely happen inside either Linux leg directly.
+  # By the time this job starts, both Linux legs have already replaced their
+  # own AppImage/.sig assets on the release with the fixed, re-signed
+  # versions; this job's only work is teaching latest.json about the new
+  # signatures (the .sig file's raw content is exactly what the updater
+  # manifest's "signature" field expects -- see
+  # https://v2.tauri.app/plugin/updater/).
+  fix-linux-updater-manifest:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Patch latest.json with the re-signed Linux signatures
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          rm -rf manifest-fix && mkdir manifest-fix
+          gh release download "${{ github.ref_name }}" -R "${{ github.repository }}" \
+            --pattern 'latest.json' --pattern '*.AppImage.sig' --dir manifest-fix
+          cd manifest-fix
+
+          patched=false
+          for sig in *.AppImage.sig; do
+            [ -f "$sig" ] || continue
+            case "$sig" in
+              *aarch64*|*arm64*) key=linux-aarch64 ;;
+              *amd64*|*x86_64*|*x86-64*) key=linux-x86_64 ;;
+              *)
+                echo "::warning::couldn't tell which platform $sig belongs to (unrecognized arch token in filename) -- leaving latest.json's entry for it untouched"
+                continue
+                ;;
+            esac
+            signature="$(cat "$sig")"
+            jq --arg key "$key" --arg sig "$signature" \
+              '.platforms[$key].signature = $sig' latest.json > latest.json.tmp
+            mv latest.json.tmp latest.json
+            echo "patched $key from $sig"
+            patched=true
+          done
+
+          if [ "$patched" != true ]; then
+            echo "::error::no *.AppImage.sig assets found on the release -- nothing to patch, refusing to re-upload latest.json unchanged"
+            exit 1
+          fi
+
+          gh release upload "${{ github.ref_name }}" -R "${{ github.repository }}" \
+            latest.json --clobber
+
   android:
     # Waits for every desktop leg above so the GitHub Release already exists
     # (created by tauri-action) before this uploads an extra asset to it --

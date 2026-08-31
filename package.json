@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "tauri": "tauri",
+    "tauri": "bash src-tauri/scripts/tauri-wrapper.sh",
     "tauri:build:linux": "tauri build && bash src-tauri/scripts/fix-appimage.sh"
   },
   "license": "MIT",
