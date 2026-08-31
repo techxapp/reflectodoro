@@ -1,6 +1,6 @@
 [package]
 name = "reflectodoro"
-version = "0.7.0"
+version = "0.10.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -56,3 +56,13 @@ objc2-foundation = "0.3.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris = "2"
 x11rb = "0.13"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# A second connection to the same pomodoro.db tauri-plugin-sql already
+# manages, opened directly rather than reaching into that plugin's internal
+# (non-public) pool -- needed because the native overlay's plain WebView (see
+# native_overlay.rs) has no Tauri IPC of its own, so its reflection-submit
+# path runs entirely in Rust instead of going through $lib/db.ts like the
+# regular /overlay page does. SQLite handles multiple connections to one file
+# fine at this app's write volume (a handful of inserts per break).
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }

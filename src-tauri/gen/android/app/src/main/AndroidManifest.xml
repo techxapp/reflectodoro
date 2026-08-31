@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Foreground service + AlarmManager backup that keep the wall-clock
+         Pomodoro scheduler alive/revivable in the background (see
+         BreakSchedulerService.kt/BreakScheduling.kt). READ_PHONE_STATE is
+         deliberately NOT requested here; see the Android release plan's
+         Context section for why it would add permission surface for zero
+         behavioral gain. POST_NOTIFICATIONS is declared now so the app can
+         request it once the permissions-onboarding phase wires that up;
+         until granted, notifications from this app silently don't show,
+         which the foreground service and wake notification degrade into
+         safely (the service itself keeps running either way). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Backs the native draw-over-other-apps break overlay
+         (NativeOverlayManager.kt); a special-access permission granted via
+         a one-time Settings toggle, not a runtime dialog. Falls back to a
+         break notification (postBreakNotification, BreakScheduling.kt) when
+         not granted; see triggerBreakScreen in NativeBridgePlugin.kt. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- AndroidTV support -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+
+    <application
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.reflectodoro"
+        android:usesCleartextTraffic="${usesCleartextTraffic}">
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:launchMode="singleTask"
+            android:label="@string/main_activity_title"
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <!-- AndroidTV support -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <provider
+          android:name="androidx.core.content.FileProvider"
+          android:authorities="${applicationId}.fileprovider"
+          android:exported="false"
+          android:grantUriPermissions="true">
+          <meta-data
+            android:name="android.support.FILE_PROVIDER_PATHS"
+            android:resource="@xml/file_paths" />
+        </provider>
+
+        <service
+            android:name=".BreakSchedulerService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="pomodoro_wall_clock_scheduler" />
+        </service>
+
+        <!-- Only ever triggered by our own PendingIntent (see
+             scheduleNextAlarm in BreakScheduling.kt), never by another app. -->
+        <receiver
+            android:name=".BreakAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".BootCompletedReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

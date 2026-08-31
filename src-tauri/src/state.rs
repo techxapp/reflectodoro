@@ -76,6 +76,16 @@ pub struct AppState {
     /// which sidesteps it. See `overlay::wait_for_webview_warmup`.
     pub started_at: std::time::Instant,
     pub dev_mode: bool,
+    /// Cache of today's `daily_task_list.content`, Android only -- the native
+    /// WindowManager overlay's plain WebView has no Tauri command/DB access of
+    /// its own (see native_overlay.rs), so it can't fetch this itself the way
+    /// the regular /overlay page calls `getTaskList` directly. Refreshed from
+    /// SQLite right before the overlay is triggered (`native_overlay::
+    /// refresh_task_list_cache`) and kept current by the overlay's own saves;
+    /// safe to read synchronously from `overlay_state_json_for_android`
+    /// because nothing else can write to today's row while the overlay --
+    /// which captures all touch input -- is the only thing on screen.
+    pub task_list: Mutex<String>,
 }
 
 impl AppState {
@@ -86,6 +96,7 @@ impl AppState {
             checkin_slot: Mutex::new(None),
             started_at: std::time::Instant::now(),
             dev_mode,
+            task_list: Mutex::new(String::new()),
         }
     }
 }

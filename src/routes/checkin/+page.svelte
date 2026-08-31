@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { goto } from "$app/navigation";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -166,6 +167,20 @@
     clearAutoCloseTimer();
   });
 
+  /** Desktop: this window has its own close-requested handler (overlay.rs's
+   * build_popup_window) that hides rather than destroys it, so .close() is
+   * the right call there. Android has no separate checkin window at all
+   * (see +layout.svelte) -- this same route is just navigated to within the
+   * single window, so "closing" it means navigating back to "/" instead. */
+  async function dismiss() {
+    const os = await invoke<string>("current_os");
+    if (os === "android") {
+      await goto("/");
+    } else {
+      await getCurrentWindow().close();
+    }
+  }
+
   async function submit(e: Event) {
     e.preventDefault();
     if (!slot || saving) return;
@@ -179,7 +194,7 @@
       // media.rs. Deliberately not called from skip()/auto-close: those
       // don't save a wellness_check row, so they shouldn't reset it either.
       await syncLastWellnessCheckAtToBackend(createdAt);
-      await getCurrentWindow().close();
+      await dismiss();
     } catch (e) {
       // Surface it on-page rather than failing silently -- a save that
       // just does nothing is indistinguishable from a broken button.
@@ -193,7 +208,7 @@
 
   async function skip() {
     clearAutoCloseTimer();
-    await getCurrentWindow().close();
+    await dismiss();
   }
 </script>
 
@@ -253,14 +268,20 @@
   .checkin {
     height: 100%;
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    padding: 20px;
     box-sizing: border-box;
+    overflow-y: auto;
+    /* Same reasoning as overlay/+page.svelte: scrollable rather than a hard
+       centered box, and insets to clear the status bar / gesture nav on
+       Android (0 on desktop). */
+    padding: calc(20px + var(--safe-top)) calc(20px + var(--safe-right))
+      calc(20px + var(--safe-bottom)) calc(20px + var(--safe-left));
   }
 
   .panel {
     width: min(480px, 100%);
+    margin: auto 0;
   }
 
   h1 {

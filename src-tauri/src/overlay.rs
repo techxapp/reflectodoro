@@ -1,8 +1,8 @@
 use std::sync::atomic::Ordering;
 
-use tauri::{
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
-};
+use tauri::{AppHandle, Emitter, Manager};
+#[cfg(desktop)]
+use tauri::{WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 use crate::state::{AppState, OverlayState};
 
@@ -32,6 +32,13 @@ pub async fn wait_for_webview_warmup(app: &AppHandle) {
 /// has as much of a head start as possible on `WEBVIEW_WARMUP` before
 /// anything ever tries to show them. Safe to call more than once (e.g. after
 /// a window was destroyed) -- no-ops if the label already exists.
+///
+/// Desktop only: on mobile there is exactly one Activity/window, and
+/// empirically creating a second `WebviewWindow` doesn't layer a new
+/// surface over it the way a second OS window would on desktop -- it
+/// replaces the single Activity's visible content, leaving "main" empty and
+/// detached. See the module-level note on `spawn_or_update_overlay`.
+#[cfg(desktop)]
 pub fn precreate_windows(app: &AppHandle) {
     if app.get_webview_window(OVERLAY_LABEL).is_none() {
         log::info!("precreate_windows: building {OVERLAY_LABEL}");
@@ -43,15 +50,19 @@ pub fn precreate_windows(app: &AppHandle) {
     }
 }
 
+#[cfg(mobile)]
+pub fn precreate_windows(_app: &AppHandle) {}
+
+#[cfg(desktop)]
 fn build_overlay_window(app: &AppHandle, visible: bool) -> WebviewWindow {
     let win = WebviewWindowBuilder::new(app, OVERLAY_LABEL, WebviewUrl::App("overlay".into()))
         .title("Break")
+        .resizable(false)
+        .visible(visible)
         .fullscreen(true)
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
-        .resizable(false)
-        .visible(visible)
         .focused(visible)
         .build()
         .expect("failed to build overlay window");
@@ -72,30 +83,106 @@ fn build_overlay_window(app: &AppHandle, visible: bool) -> WebviewWindow {
 /// (the merge case, where an already-open overlay gets a new prompt covering
 /// an additional slot). Callers that are showing it for the first time this
 /// break should `wait_for_webview_warmup` first; see `run_scheduler`.
-pub fn spawn_or_update_overlay(app: &AppHandle) {
-    let win = match app.get_webview_window(OVERLAY_LABEL) {
-        Some(win) => win,
-        None => build_overlay_window(app, false),
-    };
+///
+/// On mobile there's no window to show at all -- the single window's own
+/// frontend reacts to the `overlay://state` event emitted below by
+/// navigating itself to `/overlay` (see `+layout.svelte`), since a second
+/// `WebviewWindow` doesn't layer over "main" there the way it does on
+/// desktop (confirmed empirically: it replaces the single Activity's
+/// visible content instead).
+pub async fn spawn_or_update_overlay(app: &AppHandle) {
+    #[cfg(desktop)]
+    {
+        let win = match app.get_webview_window(OVERLAY_LABEL) {
+            Some(win) => win,
+            None => build_overlay_window(app, false),
+        };
 
-    if !win.is_visible().unwrap_or(false) {
-        let dev_mode = app.state::<AppState>().dev_mode;
-        let _ = win.show();
-        let _ = win.set_focus();
-        if crate::MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst) {
-            crate::media::pause_playing_sessions(app);
+        if !win.is_visible().unwrap_or(false) {
+            let dev_mode = app.state::<AppState>().dev_mode;
+            let _ = win.show();
+            let _ = win.set_focus();
+            if crate::MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst) {
+                crate::media::pause_playing_sessions(app);
+            }
+            if !dev_mode {
+                crate::hook::install();
+            }
         }
-        if !dev_mode {
-            crate::hook::install();
+    }
+
+    // No "already showing" guard to mirror on mobile: this is only ever
+    // called on an actual Work->Break transition (see run_scheduler), never
+    // while already in Break, so there's no merge case to detect here.
+    #[cfg(mobile)]
+    if crate::MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst) {
+        crate::media::pause_playing_sessions(app);
+    }
+
+    // Posts a break notification if the app isn't already visible -- a
+    // no-op (decided Kotlin-side) if it is, since the frontend's own
+    // overlay://state listener (about to fire below) already handles
+    // showing /overlay for an app the user is already looking at. Not a
+    // full-screen-intent/auto-launch: Android only honors that over a
+    // *locked* screen, and the point here is specifically to interrupt
+    // active phone use, not to wake an idle/locked one -- see
+    // BREAK_NOTIFICATION_PERSISTENT_ENABLED's doc comment.
+    #[cfg(target_os = "android")]
+    {
+        // Refreshed here, not just once at process start: this is the last
+        // point before the overlay's WebView is actually created, so it's
+        // what makes the task list show whatever the user most recently
+        // saved in the main app rather than a stale value from launch. See
+        // AppState.task_list's doc comment for why a plain cache read is
+        // safe for every push after this one.
+        crate::native_overlay::refresh_task_list_cache(app).await;
+        let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+        let persistent = crate::BREAK_NOTIFICATION_PERSISTENT_ENABLED.load(Ordering::SeqCst);
+        let state_json = overlay_state_json_for_android(app);
+        if let Err(e) = bridge.trigger_break_screen(persistent, state_json) {
+            log::error!("trigger_break_screen failed: {e:?}");
         }
     }
 
     emit_state(app);
 }
 
+/// OverlayState serialized with an extra `dev_mode` field -- the native
+/// overlay's plain WebView has no Tauri command access of its own to call
+/// `is_dev_mode` the way the regular /overlay page does, so it needs this
+/// riding along in every state push instead (see NativeOverlayManager.kt's
+/// dev-close button).
+#[cfg(target_os = "android")]
+fn overlay_state_json_for_android(app: &AppHandle) -> serde_json::Value {
+    let state = app.state::<AppState>();
+    let snapshot = state.overlay.lock().unwrap().clone();
+    let mut json = serde_json::to_value(&snapshot).unwrap_or_default();
+    if let serde_json::Value::Object(map) = &mut json {
+        map.insert("dev_mode".into(), serde_json::json!(state.dev_mode));
+        map.insert(
+            "task_list_content".into(),
+            serde_json::json!(state.task_list.lock().unwrap().clone()),
+        );
+    }
+    json
+}
+
 pub fn emit_state(app: &AppHandle) {
     let state = app.state::<AppState>();
     let snapshot = state.overlay.lock().unwrap().clone();
+
+    // Keeps the native WindowManager overlay (if it's currently showing --
+    // Kotlin decides that, not Rust) in sync with every state change: the
+    // breakit counter, reflection_entered flipping, or a merged slot's new
+    // challenge. Harmless no-op JNI round trip when it isn't showing.
+    #[cfg(target_os = "android")]
+    {
+        let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+        if let Err(e) = bridge.update_native_overlay(overlay_state_json_for_android(app)) {
+            log::error!("update_native_overlay failed: {e:?}");
+        }
+    }
+
     let _ = app.emit("overlay://state", snapshot);
 }
 
@@ -138,6 +225,31 @@ pub fn schedule_auto_close(app: &AppHandle, slot_start: String) {
     });
 }
 
+/// Immediately closes the overlay if one is open, bypassing both the unlock
+/// formula and the `OVERLAY_AUTO_CLOSE_MINUTES` grace period -- called from
+/// `run_scheduler` the moment it detects the process just resumed from a
+/// suspend/hibernate gap. Unlike the grace-period auto-close
+/// (`schedule_auto_close`), this doesn't depend on a Work-phase transition
+/// ever firing to get scheduled, which matters because a resume that lands
+/// back inside a Break window never triggers one (`last_phase` already reads
+/// Break) and the stale overlay would otherwise sit there, still showing
+/// last occurrence's challenge, until the next real grid boundary. Same
+/// downstream behavior as any other force-close: no reflection was entered,
+/// so no wellness check-in opens, and the slot stays uncovered until a later
+/// reflection's `findMissedSlots` cascade sweeps it up -- no data is lost,
+/// only the on-screen prompt for that specific occurrence.
+pub fn force_close_stale_overlay(app: &AppHandle) {
+    let open = app.state::<AppState>().overlay.lock().unwrap().open;
+    if open {
+        log::info!("force_close_stale_overlay: closing overlay left open across a suspend gap");
+        close_overlay(app);
+    }
+}
+
+/// On mobile there's no separate window to hide -- `emit_state` below tells
+/// `+layout.svelte`'s listener to route the single window back to `/`
+/// instead (desktop doesn't need this: hiding the overlay window already
+/// reveals "main" underneath without any frontend action).
 pub fn close_overlay(app: &AppHandle) {
     let (slot_start, had_reflection) = {
         let state = app.state::<AppState>();
@@ -147,12 +259,34 @@ pub fn close_overlay(app: &AppHandle) {
         *overlay = OverlayState::closed();
         (slot_start, had_reflection)
     };
-    // Hidden, not destroyed: keeps the webview warm so the *next* break
-    // doesn't have to pay the creation cost (or risk the startup blank-page
-    // race) all over again.
-    if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
-        let _ = win.hide();
+
+    if crate::MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst) {
+        crate::media::resume_playing_sessions(app);
     }
+
+    #[cfg(desktop)]
+    {
+        // Hidden, not destroyed: keeps the webview warm so the *next* break
+        // doesn't have to pay the creation cost (or risk the startup
+        // blank-page race) all over again.
+        if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
+            let _ = win.hide();
+        }
+    }
+    #[cfg(mobile)]
+    emit_state(app);
+
+    // Clears a break notification the user resolved some other way than
+    // tapping it (e.g. they'd already switched back to the app on their
+    // own) so it doesn't linger after the fact.
+    #[cfg(target_os = "android")]
+    {
+        let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+        if let Err(e) = bridge.cancel_break_notification() {
+            log::error!("cancel_break_notification failed: {e:?}");
+        }
+    }
+
     crate::hook::uninstall();
 
     // Only prompt for the wellness check-in when a reflection was actually
@@ -170,12 +304,15 @@ pub fn close_overlay(app: &AppHandle) {
 /// keyboard hook, no close-requested trap): by the time this window is
 /// shown, there's no timer left to enforce, just an optional follow-up the
 /// user can dismiss.
+///
+/// Desktop only -- see `precreate_windows`.
+#[cfg(desktop)]
 fn build_popup_window(app: &AppHandle, label: &str, page: &str, title: &str, visible: bool) -> WebviewWindow {
     let win = WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
         .title(title)
+        .visible(visible)
         .maximized(true)
         .always_on_top(true)
-        .visible(visible)
         .focused(visible)
         .build()
         .expect("failed to build popup window");
@@ -194,12 +331,17 @@ fn build_popup_window(app: &AppHandle, label: &str, page: &str, title: &str, vis
     win
 }
 
+#[cfg(desktop)]
 fn build_checkin_window(app: &AppHandle, visible: bool) -> WebviewWindow {
     build_popup_window(app, CHECKIN_LABEL, "checkin", "Wellness Check-in", visible)
 }
 
 /// Shows the (already pre-created) check-in window, or builds it fresh if it
-/// was destroyed some other way.
+/// was destroyed some other way. On mobile this is a no-op: the caller,
+/// `open_checkin_for_slot`, already emits `checkin://slot` unconditionally,
+/// which `+layout.svelte` listens for to navigate the single window to
+/// `/checkin` itself.
+#[cfg(desktop)]
 pub fn spawn_checkin_window(app: &AppHandle) {
     match app.get_webview_window(CHECKIN_LABEL) {
         Some(win) => {
@@ -211,6 +353,9 @@ pub fn spawn_checkin_window(app: &AppHandle) {
         }
     }
 }
+
+#[cfg(mobile)]
+pub fn spawn_checkin_window(_app: &AppHandle) {}
 
 /// Triggers the wellness check-in, called from `close_overlay` when the live
 /// break overlay finishes with a reflection saved. Stores the slot for the

@@ -92,11 +92,45 @@
       border-color: var(--border);
       color: var(--text);
     }
+    .install-details {
+      margin-bottom: 56px;
+    }
+    .install-details summary {
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text);
+      padding: 12px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .install-details summary::-webkit-details-marker { display: none; }
+    .install-details summary::before {
+      content: "\25B8";
+      color: var(--accent);
+      transition: transform 0.15s ease;
+    }
+    .install-details[open] summary::before {
+      transform: rotate(90deg);
+    }
+    .install-details[open] summary {
+      border-radius: 10px 10px 0 0;
+      border-bottom: none;
+    }
     .note {
       font-size: 13px;
       color: var(--text-dim);
-      margin-top: -44px;
-      margin-bottom: 56px;
+      margin: 0;
+      padding: 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-top: none;
+      border-radius: 0 0 10px 10px;
     }
     .features {
       display: grid;
@@ -261,11 +295,11 @@
 </head>
 <body>
   <div class="wrap">
-    <span class="eyebrow">Windows &amp; macOS</span>
+    <span class="eyebrow">Windows, macOS, Linux &amp; Android</span>
     <h1>Reflectodoro</h1>
     <p class="tagline">
-      A Pomodoro app whose real point is forcing a short self-reflection at the end of
-      every break &mdash; "what did I do?" &mdash; enforced by a hard-to-dismiss overlay.
+      A Pomodoro app to force a short break and self-reflection at the end of
+      every session.
     </p>
 
     <div class="cta-row">
@@ -275,16 +309,36 @@
       <a class="btn btn-primary" href="https://github.com/techxapp/reflectodoro/releases/latest">
         Download for macOS (.dmg)
       </a>
+      <a class="btn btn-primary" href="https://github.com/techxapp/reflectodoro/releases/latest">
+        Download for Linux (.AppImage)
+      </a>
+      <a class="btn btn-primary" href="https://github.com/techxapp/reflectodoro/releases/latest/download/app-universal-debug.apk">
+        Download for Android (.apk)
+      </a>
       <a class="btn btn-secondary" href="https://github.com/techxapp/reflectodoro">
         View source on GitHub
       </a>
     </div>
-    <p class="note">
-      Windows may show a SmartScreen "unknown publisher" warning on first run &mdash;
-      choose <em>More info &rarr; Run anyway</em>. <br/> On macOS, the app isn't notarized yet,
-      so Gatekeeper will block it the first time &mdash; right-click the app and choose
-      <em>Open</em>, or run <code>xattr -cr /Applications/Reflectodoro.app</code> in Terminal.
-    </p>
+
+    <details class="install-details">
+      <summary>Installation instructions</summary>
+      <p class="note">
+        Windows may show a SmartScreen "unknown publisher" warning on first run &mdash;
+        choose <em>More info &rarr; Run anyway</em>. <br/><br/> On macOS, the app isn't notarized yet,
+        so Gatekeeper will block it the first time &mdash; right-click the app and choose
+        <em>Open</em>, or run <code>xattr -cr /Applications/Reflectodoro.app</code> in Terminal.
+        <br/><br/> On Linux, make the AppImage executable first (<code>chmod +x Reflectodoro*.AppImage</code>);
+        some distros also need <code>libfuse2</code> installed for it to run.
+        <br/><br/> The Android build is a debug-signed APK (no Play Store listing or release
+        keystore yet) &mdash; you'll need to allow "install from unknown sources" for your
+        browser/file manager, and Play Protect may warn about an unrecognized developer.
+        <br/>For reliable break enforcement in the background, also grant <strong>Display over
+        other apps</strong> and <strong>Notifications</strong> when onboarding asks, and
+        disable battery optimization for Reflectodoro in Settings (on Xiaomi/Oppo/Vivo
+        phones, also enable its "auto-start" toggle) &mdash; otherwise some OEMs can kill
+        the background timer.
+      </p>
+    </details>
 
     <div class="features">
       <div class="card">
@@ -313,8 +367,8 @@
       </div>
       <div class="card">
         <h3>Cross-platform support &#128241;</h3>
-        <p>Windows, MacOS</p>
-        <p>Coming soon: Linux, IOS, Android</p>
+        <p>Windows, macOS, Linux, Android</p>
+        <p>Coming soon: iOS</p>
       </div>
     </div>
 
@@ -339,6 +393,8 @@
             <th>Feature</th>
             <th>Windows</th>
             <th>macOS<br/>(Early Release)</th>
+            <th>Linux</th>
+            <th>Android<br/>(Early Release)</th>
           </tr>
         </thead>
         <tbody>
@@ -346,14 +402,20 @@
             <td>Wall-clock breaks</td>
             <td class="yes">&#10003;</td>
             <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
           </tr>
           <tr>
             <td>No free pass (reflection required)</td>
             <td class="yes">&#10003;</td>
             <td class="partial">&#10003;<span class="table-note">Best efforts</span></td>
+            <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
           </tr>
           <tr>
             <td>Emergency exit challenge</td>
+            <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
             <td class="yes">&#10003;</td>
             <td class="yes">&#10003;</td>
           </tr>
@@ -361,9 +423,13 @@
             <td>Wellness check</td>
             <td class="yes">&#10003;</td>
             <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
           </tr>
           <tr>
             <td>Fully local and private</td>
+            <td class="yes">&#10003;</td>
+            <td class="yes">&#10003;</td>
             <td class="yes">&#10003;</td>
             <td class="yes">&#10003;</td>
           </tr>
@@ -371,11 +437,15 @@
             <td>Alt+Tab / Cmd+Tab suppression during break</td>
             <td class="yes">&#10003;</td>
             <td class="no">&#10007;<span class="table-note">planned</span></td>
+            <td class="partial">&#10003;<span class="table-note">X11 only</span></td>
+            <td class="no">&#10007;</td>
           </tr> -->
           <tr>
             <td>Auto-pause media on break</td>
             <td class="yes">&#10003;</td>
             <td class="partial">&#10003;<span class="table-note">Best efforts (Toggle support)</span></td>
+            <td class="yes">&#10003;</td>
+            <td class="partial">&#10003;<span class="table-note">Best efforts (audio focus request)</span></td>
           </tr>
         </tbody>
       </table>

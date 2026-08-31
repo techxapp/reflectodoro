@@ -71,6 +71,28 @@ async function ensureFirstRunMarker(): Promise<string> {
 }
 
 /**
+ * Android-only: whether the user has been through the permissions
+ * onboarding screen (src/routes/onboarding/+page.svelte) at least once.
+ * Written once and never updated, same pattern as the first-run marker
+ * above -- set on "Continue" regardless of whether the permissions were
+ * actually granted, so a user who declines isn't nagged on every launch.
+ */
+export async function isOnboardingCompleted(): Promise<boolean> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = 'android_onboarding_completed'`,
+  );
+  return rows[0]?.value === "1";
+}
+
+export async function markOnboardingCompleted(): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ('android_onboarding_completed', '1') ON CONFLICT(key) DO NOTHING`,
+  );
+}
+
+/**
  * Off by default -- the OS registration state (Windows Run key) is the sole
  * record of the user's choice, toggled only from the Settings page. Nothing
  * auto-enables this on first run.
@@ -376,6 +398,46 @@ export async function syncMediaPauseOnBreakToBackend(enabled: boolean): Promise<
 export async function loadAndSyncMediaPauseOnBreakSetting(): Promise<boolean> {
   const enabled = await getMediaPauseOnBreakEnabled();
   await syncMediaPauseOnBreakToBackend(enabled);
+  return enabled;
+}
+
+// --- Android break-notification persistence toggle (Settings) ----------
+// Android only in effect (see overlay.rs's spawn_or_update_overlay /
+// BreakScheduling.kt's postBreakNotification) -- whether the break
+// notification can be swiped away or only clears once the break itself
+// resolves. Read/settable cross-platform like the other toggles so the
+// Settings page doesn't need its own platform branching just to persist a
+// value.
+
+const BREAK_NOTIFICATION_PERSISTENT_KEY = "break_notification_persistent_enabled";
+
+export async function getBreakNotificationPersistentEnabled(): Promise<boolean> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [BREAK_NOTIFICATION_PERSISTENT_KEY],
+  );
+  return (rows[0]?.value ?? "true") === "true";
+}
+
+export async function saveBreakNotificationPersistentEnabled(enabled: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [BREAK_NOTIFICATION_PERSISTENT_KEY, String(enabled)],
+  );
+  await syncBreakNotificationPersistentToBackend(enabled);
+}
+
+export async function syncBreakNotificationPersistentToBackend(enabled: boolean): Promise<void> {
+  await invoke("set_break_notification_persistent_enabled", { enabled });
+}
+
+/** Call once on app boot (main window) so Rust's in-memory flag matches SQLite. */
+export async function loadAndSyncBreakNotificationPersistentSetting(): Promise<boolean> {
+  const enabled = await getBreakNotificationPersistentEnabled();
+  await syncBreakNotificationPersistentToBackend(enabled);
   return enabled;
 }
 

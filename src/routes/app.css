@@ -8,6 +8,15 @@
   --accent: #5865f2;
   --accent-soft: rgba(88, 101, 242, 0.12);
   --danger: #c4372f;
+  /* Android status bar / gesture nav / notch insets (0 on desktop, where
+     there's nothing to inset around -- env() itself already resolves to 0
+     there, the fallback is only for browsers too old to know env() at all).
+     Requires viewport-fit=cover in app.html's meta viewport tag, or these
+     stay 0 even on a device that has real insets to report. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
 }
 

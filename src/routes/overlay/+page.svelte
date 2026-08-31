@@ -28,6 +28,11 @@
   let taskListContent = $state("");
   let missedSlots = $state<string[]>([]);
   let nowTick = $state(Date.now());
+  // How much of the viewport the on-screen keyboard is currently covering.
+  // Android's WebView doesn't reliably auto-scroll a focused input above the
+  // keyboard the way native views do, so this pads the scroll area instead
+  // (see updateKeyboardInset/scrollFieldIntoView below).
+  let keyboardInset = $state(0);
 
   let unlisten: UnlistenFn | null = null;
   let unlistenTasks: UnlistenFn | null = null;
@@ -64,6 +69,20 @@
     if (!reflectionText.trim() || !overlayState) return;
     await saveReflection(missedSlots, reflectionText.trim());
     overlayState = await invoke<OverlayState>("mark_reflection_entered");
+  }
+
+  function updateKeyboardInset() {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    keyboardInset = Math.max(0, window.innerHeight - vv.height);
+  }
+
+  /** Gives the on-screen keyboard's resize/animation a moment to start
+   * before scrolling -- scrolling immediately on focus can land at the
+   * pre-keyboard scroll position instead of the post-keyboard one. */
+  function scrollFieldIntoView(e: FocusEvent) {
+    const el = e.currentTarget as HTMLElement;
+    setTimeout(() => el.scrollIntoView({ block: "center", behavior: "smooth" }), 150);
   }
 
   function blockPaste(e: ClipboardEvent) {
@@ -129,6 +148,9 @@
     });
 
     tickInterval = setInterval(() => (nowTick = Date.now()), 1000);
+
+    window.visualViewport?.addEventListener("resize", updateKeyboardInset);
+    updateKeyboardInset();
   });
 
   onDestroy(() => {
@@ -136,10 +158,11 @@
     unlistenTasks?.();
     if (tickInterval) clearInterval(tickInterval);
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
+    window.visualViewport?.removeEventListener("resize", updateKeyboardInset);
   });
 </script>
 
-<div class="overlay">
+<div class="overlay" style="--kb-inset: {keyboardInset}px">
   {#if devMode}
     <button class="dev-close" onclick={devClose}>Close (DEV)</button>
   {/if}
@@ -157,6 +180,7 @@
           placeholder="Write a couple of bullet points or type 'Skip' to skip it. "
           rows="5"
           disabled={overlayState?.reflection_entered}
+          onfocus={scrollFieldIntoView}
         ></textarea>
         {#if overlayState?.reflection_entered}
           <p class="hint ok">Saved. Waiting on the other condition to finish the break.</p>
@@ -182,6 +206,7 @@
             onpaste={blockPaste}
             ondrop={blockDrop}
             oncontextmenu={blockContextMenu}
+            onfocus={scrollFieldIntoView}
             placeholder="type the code above, then press Enter"
           />
         {/if}
@@ -196,6 +221,7 @@
         oninput={scheduleTaskSave}
         placeholder="1.&#10;2.&#10;3."
         rows="10"
+        onfocus={scrollFieldIntoView}
       ></textarea>
       <p class="hint">Auto-saves as you type.</p>
     </section>
@@ -215,16 +241,29 @@
     background: linear-gradient(160deg, #10111a 0%, #1b1c2b 100%);
     color: #f3f3f7;
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
     font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
     user-select: none;
+    box-sizing: border-box;
+    /* Scrollable rather than a hard-centered box: on a short/narrow phone,
+       or once the keyboard opens, the reflection/breakit content can be
+       taller than the viewport, and the mandatory reflection field must
+       stay reachable either way. --kb-inset is set from JS (see
+       updateKeyboardInset) since Android's WebView doesn't reliably shrink
+       the layout viewport under an open keyboard the way it does for
+       visualViewport. */
+    overflow-y: auto;
+    padding: calc(20px + var(--safe-top)) calc(20px + var(--safe-right))
+      calc(20px + var(--safe-bottom) + var(--kb-inset, 0px)) calc(20px + var(--safe-left));
   }
 
   .dev-close {
-    position: absolute;
-    top: 12px;
-    right: 12px;
+    /* Fixed to the viewport, not .overlay's (scrollable) content box, so it
+       stays put while the user scrolls to reach the submit button. */
+    position: fixed;
+    top: calc(12px + var(--safe-top));
+    right: calc(12px + var(--safe-right));
     background: #b3261e;
     color: white;
     border: none;
@@ -235,9 +274,9 @@
   }
 
   .clock {
-    position: absolute;
-    top: 16px;
-    left: 20px;
+    position: fixed;
+    top: calc(16px + var(--safe-top));
+    left: calc(20px + var(--safe-left));
     margin: 0;
     font-variant-numeric: tabular-nums;
     font-size: 13px;
@@ -250,6 +289,10 @@
     grid-template-columns: 2fr 1fr;
     gap: 24px;
     width: min(1000px, 90vw);
+    /* Vertically centers when it fits; unlike justify-content: center on
+       the parent, margin: auto on a flex child keeps the top/bottom edges
+       reachable by scroll once content is taller than the viewport. */
+    margin: auto 0;
   }
 
   .panel {
@@ -257,6 +300,18 @@
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 16px;
     padding: 28px;
+  }
+
+  @media (max-width: 600px) {
+    .grid {
+      grid-template-columns: 1fr;
+      width: 100%;
+      gap: 16px;
+    }
+
+    .panel {
+      padding: 20px;
+    }
   }
 
   .timer {

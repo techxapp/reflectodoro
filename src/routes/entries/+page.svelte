@@ -178,6 +178,14 @@
     margin: 0 auto;
   }
 
+  @media (max-width: 600px) {
+    .page {
+      grid-template-columns: 1fr;
+      padding: 16px;
+      gap: 16px;
+    }
+  }
+
   .card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -229,6 +237,12 @@
     font-size: 13px;
   }
 
+  @media (max-width: 600px) {
+    .day {
+      min-height: 40px;
+    }
+  }
+
   .day:hover {
     background: var(--surface-2);
   }
@@ -246,6 +260,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    row-gap: 8px;
     margin-bottom: 16px;
   }
 
@@ -263,11 +279,32 @@
     font-size: 13px;
   }
 
+  @media (max-width: 600px) {
+    /* Date heading gets its own full-width row above the prev/next
+       buttons instead of squeezing between them -- a long localized date
+       string ("Saturday, August 29") doesn't leave much room otherwise. */
+    .day-nav h2 {
+      order: -1;
+      width: 100%;
+      text-align: center;
+    }
+
+    .day-nav button {
+      padding: 8px 14px;
+    }
+  }
+
   .wellness-summary {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 10px;
     margin-bottom: 20px;
+  }
+
+  @media (max-width: 600px) {
+    .wellness-summary {
+      grid-template-columns: repeat(2, 1fr);
+    }
   }
 
   .stat {
