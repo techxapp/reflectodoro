@@ -280,7 +280,32 @@ pub fn run() {
     let dev_mode = resolve_dev_mode();
 
     #[allow(unused_mut)]
-    let mut builder = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // Single Instance must be the very first plugin registered (per the
+    // plugin's own docs) so it can intercept a second launch before
+    // anything else -- window/tray/overlay setup, the scheduler, etc. --
+    // has a chance to run. When a second instance starts (e.g. an autostart
+    // entry firing while a previous instance is still shutting down, or the
+    // user double-launching the AppImage), this callback runs in the
+    // *existing* instance and the new process exits immediately instead of
+    // standing up a second WebView/EGL/tray/scheduler in parallel -- which
+    // is what produced the "two instances fighting over the same state"
+    // symptoms seen after enabling autostart. Desktop-only for the same
+    // reason as the autostart/global-shortcut/updater/process block below:
+    // no Android/iOS equivalent, and Cargo.toml already excludes the crate
+    // from that target.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }));
+    }
+
+    builder = builder
         .manage(AppState::new(dev_mode))
         .plugin(tauri_plugin_notification::init())
         .plugin(

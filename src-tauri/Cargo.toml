@@ -38,6 +38,11 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# Desktop-only, like the plugins above: enforces a single running instance
+# (see run() in src/lib.rs) so a second launch -- e.g. from an autostart
+# entry racing a still-running instance -- focuses the existing window
+# instead of spawning a second Tauri/WebView runtime.
+tauri-plugin-single-instance = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
