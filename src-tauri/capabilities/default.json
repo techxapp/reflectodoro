@@ -16,6 +16,14 @@
     "updater:default",
     "process:default",
     "dialog:default",
-    "log:default"
+    "log:default",
+    "http:allow-fetch",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://api.github.com/*" },
+        { "url": "https://github.com/*" }
+      ]
+    }
   ]
 }
