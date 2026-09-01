@@ -277,6 +277,26 @@ fn setup_dev_kill_switch(app: &AppHandle) -> anyhow::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WebView2's GPU-accelerated compositor loses its DirectX swapchain when
+    // the physical display powers off (monitor sleep/blank, distinct from
+    // the process-suspend gap SUSPEND_GAP_THRESHOLD handles) and never
+    // requests a repaint when the display comes back -- so a webview left
+    // showing across a monitor-off/on cycle (most consequentially: the break
+    // overlay, which is meant to be inescapable) renders solid white until
+    // something else forces a repaint (right-click's context menu, a
+    // reload). Disabling GPU acceleration for WebView2's own subprocess
+    // sidesteps the whole bug class; must be set before the first
+    // WebviewWindow is built, since WebView2 reads it only when its
+    // environment is created, so this has to run before any window --
+    // including ones tauri.conf.json declares -- comes into existence.
+    // Windows-only: WebView2 is the Windows-only webview backend (macOS/
+    // Linux use WKWebView/WebKitGTK, unaffected). Safety: single-threaded at
+    // this point, before the Tokio runtime or any other thread starts.
+    #[cfg(target_os = "windows")]
+    unsafe {
+        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu");
+    }
+
     let dev_mode = resolve_dev_mode();
 
     #[allow(unused_mut)]
