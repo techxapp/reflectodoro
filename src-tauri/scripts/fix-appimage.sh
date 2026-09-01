@@ -41,19 +41,19 @@
 #   2. Extracts each one (--appimage-extract) into a scratch dir.
 #   3. Deletes libwayland-{client,cursor,egl,server}.so* wherever they
 #      appear under the AppDir's lib directories.
-#   4. Repackages the AppDir back into a single-file AppImage (appimagetool
-#      if available, else Tauri's own cached linuxdeploy AppImage) and
-#      replaces the original file in place.
+#   4. Repackages the AppDir back into a single-file AppImage with
+#      appimagetool (downloaded on demand if not already on PATH -- see
+#      find_repackager below for why it's the ONLY repackager this script
+#      uses) and replaces the original file in place.
 #   5. If TAURI_SIGNING_PRIVATE_KEY is set, re-signs the new file with the
 #      Tauri CLI (`npm run tauri signer sign`) so tauri-plugin-updater's
 #      signature matches the modified bytes -- the original .sig from
 #      `tauri build` was computed before this script ran and is now stale.
 #
-# SCOPE / KNOWN LIMITATION (see chat with the user, 2026-08-31): this script
-# is for local/manual `tauri build` runs right now. It does NOT update
-# latest.json's signature/size fields, and it is not yet wired into
-# .github/workflows/release.yml -- a real release still needs that done as
-# a follow-up before this fix applies to published auto-update artifacts.
+# WIRED INTO CI: .github/workflows/release.yml's "Fix and re-sign Linux
+# AppImage" step runs this on every release build, so this fix does apply
+# to published auto-update artifacts, not just local/manual `tauri build`
+# runs.
 #
 # USAGE
 #   bash src-tauri/scripts/fix-appimage.sh [bundle-dir]
@@ -87,21 +87,46 @@ command -v patchelf >/dev/null 2>&1 || log "warning: patchelf not found on PATH 
 mapfile -t APPIMAGES < <(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.AppImage' | sort)
 [ "${#APPIMAGES[@]}" -gt 0 ] || die "no *.AppImage files found in $BUNDLE_DIR"
 
+# Deliberately appimagetool-only -- do NOT fall back to Tauri's cached
+# linuxdeploy AppImage here. `linuxdeploy --appdir DIR --output appimage`
+# doesn't just squash the directory: linuxdeploy's whole job is to walk the
+# ELF dependencies of everything already in the AppDir and copy back in
+# whatever it finds "missing" from the host. Something else still bundled
+# under usr/lib (GTK's Wayland GDK backend, Mesa's EGL driver, webkit2gtk
+# itself) still has a NEEDED entry for libwayland-client.so.0, so using
+# linuxdeploy to repackage silently re-bundles the exact library this
+# script just deleted -- confirmed as the reason the CI-built AppImage kept
+# shipping libwayland-client.so.0 even with this script wired into
+# release.yml (GitHub runners have no appimagetool on PATH, so the old
+# code always hit this fallback). appimagetool has no dependency-resolution
+# step, so it's the only repackager that can't undo the strip above.
 find_repackager() {
   if command -v appimagetool >/dev/null 2>&1; then
     echo "appimagetool"
     return
   fi
-  local cached="$HOME/.cache/tauri/linuxdeploy-$ARCH.AppImage"
+
+  local cache_dir="$HOME/.cache/reflectodoro"
+  local cached="$cache_dir/appimagetool-$ARCH.AppImage"
   if [ -x "$cached" ]; then
     echo "$cached"
     return
   fi
+
+  mkdir -p "$cache_dir"
+  local url="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$ARCH.AppImage"
+  log "appimagetool not found on PATH -- downloading from $url"
+  if curl -fsSL -o "$cached" "$url" && chmod +x "$cached"; then
+    echo "$cached"
+    return
+  fi
+
+  rm -f "$cached"
   echo ""
 }
 
 REPACKAGER="$(find_repackager)"
-[ -n "$REPACKAGER" ] || die "no repackaging tool found: install appimagetool (https://github.com/AppImage/appimagetool) or ensure \$HOME/.cache/tauri/linuxdeploy-$ARCH.AppImage exists (created by a prior 'tauri build')"
+[ -n "$REPACKAGER" ] || die "no repackaging tool found and could not download appimagetool (network unavailable?): install it from https://github.com/AppImage/appimagetool or ensure network access to github.com"
 log "using repackager: $REPACKAGER"
 
 for APPIMAGE in "${APPIMAGES[@]}"; do
@@ -135,18 +160,12 @@ for APPIMAGE in "${APPIMAGES[@]}"; do
   fi
 
   NEW_APPIMAGE="$WORKDIR/$(basename "$APPIMAGE")"
-  if [ "$REPACKAGER" = "appimagetool" ]; then
-    ARCH="$ARCH" appimagetool "$APPDIR" "$NEW_APPIMAGE" >/dev/null
-  else
-    (
-      cd "$WORKDIR"
-      ARCH="$ARCH" "$REPACKAGER" --appimage-extract-and-run --appdir "$APPDIR" --output appimage >/dev/null
-      # linuxdeploy names its output after the .desktop file; pick up
-      # whatever *.AppImage it produced in WORKDIR.
-      produced="$(find "$WORKDIR" -maxdepth 1 -type f -name '*.AppImage' ! -name "$(basename "$APPIMAGE")" | head -n1)"
-      [ -n "$produced" ] && mv "$produced" "$NEW_APPIMAGE"
-    )
-  fi
+  # --appimage-extract-and-run: appimagetool ships (and is installed here)
+  # as an AppImage itself, and CI runners (e.g. GitHub Actions) typically
+  # have no FUSE, so running it directly would fail with a libfuse dlopen
+  # error. This flag makes it extract itself and run without needing FUSE
+  # -- harmless on machines that do have FUSE.
+  ARCH="$ARCH" "$REPACKAGER" --appimage-extract-and-run "$APPDIR" "$NEW_APPIMAGE" >/dev/null
   [ -f "$NEW_APPIMAGE" ] || die "repackaging did not produce an AppImage for $APPIMAGE"
 
   chmod +x "$NEW_APPIMAGE"
