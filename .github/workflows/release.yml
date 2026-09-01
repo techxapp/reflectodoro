@@ -222,10 +222,14 @@ jobs:
         with:
           packages: "platform-tools platforms;android-36 build-tools;36.0.0 ndk;26.1.10909125"
 
+      # arm64-v8a covers virtually every real Android phone since ~2017;
+      # armeabi-v7a covers what's left of older 32-bit phones. i686/x86_64
+      # only matter for Android emulators, not real devices, so they're
+      # skipped here to cut build time and release-asset count.
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi
 
       - name: Install frontend dependencies
         run: npm ci
@@ -259,7 +263,7 @@ jobs:
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
           export ANDROID_NDK_HOME="$NDK_HOME"
-          npm run tauri android build -- --apk --split-per-abi
+          npm run tauri android build -- --apk --split-per-abi --target aarch64 armv7
 
       - name: Upload APK to release
         env:

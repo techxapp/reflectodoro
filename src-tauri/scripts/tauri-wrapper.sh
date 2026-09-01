@@ -17,6 +17,12 @@
 # `npm run tauri dev`, `npm run tauri icon`, etc. all pass through unchanged
 # and untouched; the extra step only fires for a Linux `build`.
 #
+# Only the desktop `build` subcommand qualifies (checked via "$1", not a
+# scan of every arg) -- `tauri android build` / `tauri ios build` also
+# contain the word "build" but produce no AppImage, so a match-anywhere
+# check would run fix-appimage.sh against a bundle/appimage directory that
+# was never created and fail the whole mobile build for no reason.
+#
 # Wired in via package.json's "tauri" script pointing here instead of at
 # the raw `tauri` binary.
 
@@ -29,12 +35,9 @@ npx tauri "$@"
 STATUS=$?
 
 is_build=false
-for arg in "$@"; do
-  if [ "$arg" = "build" ]; then
-    is_build=true
-    break
-  fi
-done
+if [ "${1:-}" = "build" ]; then
+  is_build=true
+fi
 
 if [ "$STATUS" -eq 0 ] && [ "$is_build" = true ] && [ "$(uname -s)" = "Linux" ]; then
   if ! bash "$SCRIPT_DIR/fix-appimage.sh"; then
