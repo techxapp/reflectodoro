@@ -86,6 +86,9 @@ pub struct AppState {
     /// because nothing else can write to today's row while the overlay --
     /// which captures all touch input -- is the only thing on screen.
     pub task_list: Mutex<String>,
+    /// Cache of today's `not_to_do_list.content`, Android only -- mirrors
+    /// `task_list` above for the same reason (see its doc comment).
+    pub not_to_do_list: Mutex<String>,
 }
 
 impl AppState {
@@ -97,6 +100,7 @@ impl AppState {
             started_at: std::time::Instant::now(),
             dev_mode,
             task_list: Mutex::new(String::new()),
+            not_to_do_list: Mutex::new(String::new()),
         }
     }
 }

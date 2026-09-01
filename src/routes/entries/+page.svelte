@@ -4,9 +4,11 @@
     clusterReflectionRows,
     getReflectionsForDate,
     getTaskList,
+    getNotToDoList,
     getWellnessSummaryForDate,
     localDateStamp,
     saveTaskList,
+    saveNotToDoList,
     updateReflectionText,
     type ReflectionRow,
     type WellnessSummary,
@@ -23,6 +25,7 @@
   let selected = $state(new Date());
   let reflectionRows = $state<ReflectionRow[]>([]);
   let taskList = $state("");
+  let notToDo = $state("");
   let wellnessSummary = $state<WellnessSummary>(EMPTY_WELLNESS_SUMMARY);
   let calendarMonth = $state(new Date());
   let loading = $state(false);
@@ -30,6 +33,7 @@
   let editingId = $state<number | null>(null);
   let editText = $state("");
   let taskSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let notToDoSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
   const selectedStamp = $derived(localDateStamp(selected));
   const isToday = $derived(selectedStamp === localDateStamp(new Date()));
@@ -38,13 +42,15 @@
   async function load() {
     loading = true;
     const stamp = selectedStamp;
-    const [r, t, w] = await Promise.all([
+    const [r, t, n, w] = await Promise.all([
       getReflectionsForDate(stamp),
       getTaskList(stamp),
+      getNotToDoList(stamp),
       getWellnessSummaryForDate(stamp),
     ]);
     reflectionRows = r;
     taskList = t;
+    notToDo = n;
     wellnessSummary = w;
     loading = false;
   }
@@ -77,6 +83,15 @@
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
     taskSaveTimer = setTimeout(() => {
       void saveTaskList(stamp, content);
+    }, 800);
+  }
+
+  /** Same "capture the date at call time" pattern as scheduleTaskSave above. */
+  function scheduleNotToDoSave(content: string) {
+    const stamp = selectedStamp;
+    if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
+    notToDoSaveTimer = setTimeout(() => {
+      void saveNotToDoList(stamp, content);
     }, 800);
   }
 
@@ -193,7 +208,19 @@
           placeholder="1.
 2.
 3."
-          rows="6"
+          rows="5"
+        ></textarea>
+      </div>
+
+      <div class="task-list">
+        <h3>Not To Do Tasks</h3>
+        <textarea
+          bind:value={notToDo}
+          oninput={() => scheduleNotToDoSave(notToDo)}
+          placeholder="1.
+2.
+3."
+          rows="3"
         ></textarea>
       </div>
 

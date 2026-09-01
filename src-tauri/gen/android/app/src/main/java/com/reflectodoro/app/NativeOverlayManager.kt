@@ -157,6 +157,11 @@ class OverlayJsBridge(private val channel: Channel?) {
   }
 
   @JavascriptInterface
+  fun saveNotToDoList(content: String) {
+    channel?.sendObject(mapOf("kind" to "save_not_to_do_list", "content" to content))
+  }
+
+  @JavascriptInterface
   fun devForceClose() {
     channel?.sendObject(mapOf("kind" to "dev_force_close"))
   }

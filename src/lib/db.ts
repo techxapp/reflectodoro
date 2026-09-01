@@ -324,6 +324,51 @@ export async function listenForTaskListUpdates(
   });
 }
 
+// --- "Not to do" list (mirrors the Most Important Tasks list above) ---
+
+export async function getNotToDoList(dateStamp: string): Promise<string> {
+  const db = await getDb();
+  const rows = await db.select<{ content: string }[]>(
+    `SELECT content FROM not_to_do_list WHERE date = $1`,
+    [dateStamp],
+  );
+  return rows[0]?.content ?? "";
+}
+
+export interface NotToDoUpdate {
+  date: string;
+  content: string;
+  sourceLabel: string;
+}
+
+export async function saveNotToDoList(dateStamp: string, content: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO not_to_do_list (date, content, updated_at) VALUES ($1, $2, $3)
+     ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
+    [dateStamp, content, new Date().toISOString()],
+  );
+  const sourceLabel = getCurrentWindow().label;
+  await emit("nottodolist://updated", { date: dateStamp, content, sourceLabel } satisfies NotToDoUpdate);
+}
+
+/**
+ * Subscribes to not-to-do-list edits made in other windows for today's date,
+ * ignoring the window's own broadcasts (see `saveNotToDoList`). Call from
+ * `onMount` in any window that displays the list; call the returned unlisten
+ * function from `onDestroy`.
+ */
+export async function listenForNotToDoListUpdates(
+  onUpdate: (content: string) => void,
+): Promise<UnlistenFn> {
+  const selfLabel = getCurrentWindow().label;
+  return listen<NotToDoUpdate>("nottodolist://updated", (event) => {
+    const { date, content, sourceLabel } = event.payload;
+    if (sourceLabel === selfLabel) return;
+    if (date === localDateStamp()) onUpdate(content);
+  });
+}
+
 export interface BreakitSettings {
   length: number;
   includeSpecial: boolean;
@@ -672,6 +717,12 @@ interface TaskListRow {
   updated_at: string;
 }
 
+interface NotToDoRow {
+  date: string;
+  content: string;
+  updated_at: string;
+}
+
 interface SettingRow {
   key: string;
   value: string;
@@ -694,6 +745,7 @@ export interface ExportPayload {
   data: {
     reflection: ReflectionRow[];
     daily_task_list: TaskListRow[];
+    not_to_do_list: NotToDoRow[];
     app_setting: SettingRow[];
     wellness_check: WellnessCheckRow[];
   };
@@ -701,9 +753,10 @@ export interface ExportPayload {
 
 export async function exportAllData(includeSettings: boolean = true): Promise<ExportPayload> {
   const db = await getDb();
-  const [reflection, daily_task_list, app_setting, wellness_check] = await Promise.all([
+  const [reflection, daily_task_list, not_to_do_list, app_setting, wellness_check] = await Promise.all([
     db.select<ReflectionRow[]>(`SELECT id, created_at, slot_start_at, text FROM reflection`),
     db.select<TaskListRow[]>(`SELECT date, content, updated_at FROM daily_task_list`),
+    db.select<NotToDoRow[]>(`SELECT date, content, updated_at FROM not_to_do_list`),
     includeSettings
       ? db.select<SettingRow[]>(`SELECT key, value FROM app_setting`)
       : Promise.resolve([]),
@@ -715,7 +768,7 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
     app: "reflectodoro",
     export_format_version: EXPORT_FORMAT_VERSION,
     exported_at: new Date().toISOString(),
-    data: { reflection, daily_task_list, app_setting, wellness_check },
+    data: { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check },
   };
 }
 
@@ -788,6 +841,18 @@ export function parseAndValidateExport(raw: string): ExportPayload {
     };
   });
 
+  const notToDoListRaw = data.not_to_do_list;
+  if (!Array.isArray(notToDoListRaw)) throw new Error("data.not_to_do_list is missing or not an array");
+  const not_to_do_list: NotToDoRow[] = notToDoListRaw.map((row, i) => {
+    if (typeof row !== "object" || row === null) throw new Error(`not_to_do_list[${i}] is not an object`);
+    const r = row as Record<string, unknown>;
+    return {
+      date: assertString(r.date, `not_to_do_list[${i}].date`),
+      content: assertString(r.content, `not_to_do_list[${i}].content`),
+      updated_at: assertString(r.updated_at, `not_to_do_list[${i}].updated_at`),
+    };
+  });
+
   const settingRaw = data.app_setting;
   if (!Array.isArray(settingRaw)) throw new Error("data.app_setting is missing or not an array");
   const app_setting: SettingRow[] = settingRaw.map((row, i) => {
@@ -824,7 +889,7 @@ export function parseAndValidateExport(raw: string): ExportPayload {
     app: "reflectodoro",
     export_format_version: obj.export_format_version,
     exported_at: obj.exported_at,
-    data: { reflection, daily_task_list, app_setting, wellness_check },
+    data: { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check },
   };
 }
 
@@ -833,13 +898,14 @@ export type ImportMode = "replace" | "merge";
 export interface ImportResult {
   reflectionCount: number;
   taskListCount: number;
+  notToDoListCount: number;
   settingCount: number;
   wellnessCheckCount: number;
 }
 
 /**
- * Applies a validated export payload to the DB. "replace" wipes all four
- * tables first; "merge" upserts daily_task_list/app_setting (imported wins
+ * Applies a validated export payload to the DB. "replace" wipes all five
+ * tables first; "merge" upserts daily_task_list/not_to_do_list/app_setting (imported wins
  * on key conflict, untouched rows keep their existing value) and always
  * appends reflection/wellness_check rows fresh -- reflection has no natural
  * dedupe key, and any timestamp-based heuristic risks silently discarding a
@@ -863,13 +929,14 @@ export async function importData(
   includeSettings: boolean = true,
 ): Promise<ImportResult> {
   const db = await getDb();
-  const { reflection, daily_task_list, app_setting, wellness_check } = payload.data;
+  const { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check } = payload.data;
 
   if (mode === "replace") {
     // Child table first: wellness_check references reflection(id).
     await db.execute(`DELETE FROM wellness_check`);
     await db.execute(`DELETE FROM reflection`);
     await db.execute(`DELETE FROM daily_task_list`);
+    await db.execute(`DELETE FROM not_to_do_list`);
     if (includeSettings) await db.execute(`DELETE FROM app_setting`);
   }
 
@@ -898,6 +965,16 @@ export async function importData(
         ? `INSERT INTO daily_task_list (date, content, updated_at) VALUES ($1, $2, $3)
            ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`
         : `INSERT INTO daily_task_list (date, content, updated_at) VALUES ($1, $2, $3)`,
+      [row.date, row.content, row.updated_at],
+    );
+  }
+
+  for (const row of not_to_do_list) {
+    await db.execute(
+      mode === "merge"
+        ? `INSERT INTO not_to_do_list (date, content, updated_at) VALUES ($1, $2, $3)
+           ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`
+        : `INSERT INTO not_to_do_list (date, content, updated_at) VALUES ($1, $2, $3)`,
       [row.date, row.content, row.updated_at],
     );
   }
@@ -931,6 +1008,7 @@ export async function importData(
   return {
     reflectionCount: reflection.length,
     taskListCount: daily_task_list.length,
+    notToDoListCount: not_to_do_list.length,
     settingCount: includeSettings ? app_setting.length : 0,
     wellnessCheckCount: wellness_check.length,
   };

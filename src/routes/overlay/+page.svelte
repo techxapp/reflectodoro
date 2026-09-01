@@ -7,8 +7,11 @@
     saveReflection,
     getTaskList,
     saveTaskList,
+    getNotToDoList,
+    saveNotToDoList,
     localDateStamp,
     listenForTaskListUpdates,
+    listenForNotToDoListUpdates,
   } from "$lib/db";
 
   interface OverlayState {
@@ -26,6 +29,7 @@
   let breakitInput = $state("");
   let breakitShake = $state(false);
   let taskListContent = $state("");
+  let notToDoContent = $state("");
   let missedSlots = $state<string[]>([]);
   let nowTick = $state(Date.now());
   // How much of the viewport the on-screen keyboard is currently covering.
@@ -36,7 +40,9 @@
 
   let unlisten: UnlistenFn | null = null;
   let unlistenTasks: UnlistenFn | null = null;
+  let unlistenNotToDo: UnlistenFn | null = null;
   let taskSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let notToDoSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let tickInterval: ReturnType<typeof setInterval> | null = null;
 
   const promptLabel = $derived(
@@ -124,6 +130,13 @@
     }, 800);
   }
 
+  function scheduleNotToDoSave() {
+    if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
+    notToDoSaveTimer = setTimeout(() => {
+      void saveNotToDoList(localDateStamp(), notToDoContent);
+    }, 800);
+  }
+
   async function devClose() {
     await invoke("dev_force_close");
   }
@@ -133,6 +146,7 @@
     overlayState = await invoke<OverlayState>("get_overlay_state");
     await refreshCoverage();
     taskListContent = await getTaskList(localDateStamp());
+    notToDoContent = await getNotToDoList(localDateStamp());
 
     unlisten = await listen<OverlayState>("overlay://state", async (event) => {
       const prevSlot = overlayState?.current_slot_start;
@@ -146,6 +160,9 @@
     unlistenTasks = await listenForTaskListUpdates((content) => {
       taskListContent = content;
     });
+    unlistenNotToDo = await listenForNotToDoListUpdates((content) => {
+      notToDoContent = content;
+    });
 
     tickInterval = setInterval(() => (nowTick = Date.now()), 1000);
 
@@ -156,8 +173,10 @@
   onDestroy(() => {
     unlisten?.();
     unlistenTasks?.();
+    unlistenNotToDo?.();
     if (tickInterval) clearInterval(tickInterval);
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
+    if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
     window.visualViewport?.removeEventListener("resize", updateKeyboardInset);
   });
 </script>
@@ -214,17 +233,31 @@
       </div>
     </section>
 
-    <section class="panel side">
-      <h2>Most Important Tasks Today</h2>
-      <textarea
-        bind:value={taskListContent}
-        oninput={scheduleTaskSave}
-        placeholder="1.&#10;2.&#10;3."
-        rows="10"
-        onfocus={scrollFieldIntoView}
-      ></textarea>
-      <p class="hint">Auto-saves as you type.</p>
-    </section>
+    <div class="side-col">
+      <section class="panel side">
+        <h2>Most Important Tasks Today</h2>
+        <textarea
+          bind:value={taskListContent}
+          oninput={scheduleTaskSave}
+          placeholder="1.&#10;2.&#10;3."
+          rows="5"
+          onfocus={scrollFieldIntoView}
+        ></textarea>
+        <p class="hint">Auto-saves as you type.</p>
+      </section>
+
+      <section class="panel side">
+        <h2>Not To Do Tasks Today</h2>
+        <textarea
+          bind:value={notToDoContent}
+          oninput={scheduleNotToDoSave}
+          placeholder="1.&#10;2.&#10;3."
+          rows="3"
+          onfocus={scrollFieldIntoView}
+        ></textarea>
+        <p class="hint">Auto-saves as you type.</p>
+      </section>
+    </div>
   </div>
 </div>
 
@@ -300,6 +333,12 @@
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 16px;
     padding: 28px;
+  }
+
+  .side-col {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
   }
 
   @media (max-width: 600px) {

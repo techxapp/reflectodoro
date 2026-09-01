@@ -188,6 +188,37 @@ pub async fn refresh_task_list_cache(app: &AppHandle) {
     *app.state::<AppState>().task_list.lock().unwrap() = content;
 }
 
+async fn load_not_to_do_list(pool: &SqlitePool, date: &str) -> String {
+    sqlx::query_scalar::<_, String>("SELECT content FROM not_to_do_list WHERE date = ?")
+        .bind(date)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Mirrors db.ts's `saveNotToDoList` upsert exactly.
+async fn persist_not_to_do_list(pool: &SqlitePool, date: &str, content: &str) {
+    let updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let _ = sqlx::query(
+        "INSERT INTO not_to_do_list (date, content, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
+    )
+    .bind(date)
+    .bind(content)
+    .bind(&updated_at)
+    .execute(pool)
+    .await;
+}
+
+/// Mirrors `refresh_task_list_cache` above for `AppState.not_to_do_list`.
+pub async fn refresh_not_to_do_list_cache(app: &AppHandle) {
+    let date = local_date_stamp();
+    let content = load_not_to_do_list(pool(app).await, &date).await;
+    *app.state::<AppState>().not_to_do_list.lock().unwrap() = content;
+}
+
 async fn handle_save_task_list(app: AppHandle, content: String) {
     let date = local_date_stamp();
     persist_task_list(pool(&app).await, &date, &content).await;
@@ -207,12 +238,27 @@ async fn handle_save_task_list(app: AppHandle, content: String) {
     );
 }
 
+async fn handle_save_not_to_do_list(app: AppHandle, content: String) {
+    let date = local_date_stamp();
+    persist_not_to_do_list(pool(&app).await, &date, &content).await;
+    *app.state::<AppState>().not_to_do_list.lock().unwrap() = content.clone();
+    let _ = app.emit(
+        "nottodolist://updated",
+        serde_json::json!({
+            "date": date,
+            "content": content,
+            "sourceLabel": "android-native-overlay",
+        }),
+    );
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum NativeOverlayEvent {
     SubmitReflection { text: String },
     BreakitAttempt { input: String },
     SaveTaskList { content: String },
+    SaveNotToDoList { content: String },
     DevForceClose,
 }
 
@@ -252,6 +298,12 @@ fn handle_channel_event(app: &AppHandle, value: Value) {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 handle_save_task_list(app, content).await;
+            });
+        }
+        NativeOverlayEvent::SaveNotToDoList { content } => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                handle_save_not_to_do_list(app, content).await;
             });
         }
         NativeOverlayEvent::BreakitAttempt { input } => {

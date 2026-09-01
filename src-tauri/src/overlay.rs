@@ -136,6 +136,7 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
         // AppState.task_list's doc comment for why a plain cache read is
         // safe for every push after this one.
         crate::native_overlay::refresh_task_list_cache(app).await;
+        crate::native_overlay::refresh_not_to_do_list_cache(app).await;
         let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
         let persistent = crate::BREAK_NOTIFICATION_PERSISTENT_ENABLED.load(Ordering::SeqCst);
         let state_json = overlay_state_json_for_android(app);
@@ -162,6 +163,10 @@ fn overlay_state_json_for_android(app: &AppHandle) -> serde_json::Value {
         map.insert(
             "task_list_content".into(),
             serde_json::json!(state.task_list.lock().unwrap().clone()),
+        );
+        map.insert(
+            "not_to_do_content".into(),
+            serde_json::json!(state.not_to_do_list.lock().unwrap().clone()),
         );
     }
     json

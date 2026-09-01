@@ -6,6 +6,8 @@
   import {
     getTaskList,
     saveTaskList,
+    getNotToDoList,
+    saveNotToDoList,
     localDateStamp,
     loadAndSyncBreakitSettings,
     loadAndSyncForceCloseShortcutSetting,
@@ -14,17 +16,21 @@
     loadAndSyncBreakNotificationPersistentSetting,
     loadAndSyncMediaToggleGuard,
     listenForTaskListUpdates,
+    listenForNotToDoListUpdates,
     listenForMediaToggleRecorded,
   } from "$lib/db";
 
   let now = $state(new Date());
   let enabled = $state(true);
   let taskListContent = $state("");
+  let notToDoContent = $state("");
   let unlisten: UnlistenFn | null = null;
   let unlistenTasks: UnlistenFn | null = null;
+  let unlistenNotToDo: UnlistenFn | null = null;
   let unlistenMediaToggle: UnlistenFn | null = null;
   let tickInterval: ReturnType<typeof setInterval> | null = null;
   let taskSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let notToDoSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
   const slot = $derived(slotFor(now));
   const remainingLabel = $derived.by(() => {
@@ -42,6 +48,13 @@
     }, 800);
   }
 
+  function scheduleNotToDoSave() {
+    if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
+    notToDoSaveTimer = setTimeout(() => {
+      void saveNotToDoList(localDateStamp(), notToDoContent);
+    }, 800);
+  }
+
   async function toggleEnabled() {
     enabled = !enabled;
     await invoke("set_enabled", { enabled });
@@ -56,12 +69,16 @@
     await loadAndSyncMediaToggleGuard();
     enabled = await invoke<boolean>("get_enabled");
     taskListContent = await getTaskList(localDateStamp());
+    notToDoContent = await getNotToDoList(localDateStamp());
 
     unlisten = await listen<boolean>("pomodoro://enabled-changed", (event) => {
       enabled = event.payload;
     });
     unlistenTasks = await listenForTaskListUpdates((content) => {
       taskListContent = content;
+    });
+    unlistenNotToDo = await listenForNotToDoListUpdates((content) => {
+      notToDoContent = content;
     });
     unlistenMediaToggle = await listenForMediaToggleRecorded();
 
@@ -71,20 +88,18 @@
   onDestroy(() => {
     unlisten?.();
     unlistenTasks?.();
+    unlistenNotToDo?.();
     unlistenMediaToggle?.();
     if (tickInterval) clearInterval(tickInterval);
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
+    if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
   });
 </script>
 
 <div class="page">
   <section class="card timer-card">
     <p class="label">{slot.phase === "work" ? "Working" : "On break"}</p>
-    <p class="big">{remainingLabel}</p>
-    <p class="sub">
-      &middot; {slot.phase === "work" ? "until break" : "until work resumes"}
-      &middot; 
-    </p>
+    <p class="big">{remainingLabel}</p><br/>
     <button class="toggle" class:off={!enabled} onclick={toggleEnabled}>
       {enabled ? "Pomodoro mode: On" : "Pomodoro mode: Off"}
     </button>
@@ -98,7 +113,20 @@
       placeholder="1.
 2.
 3."
-      rows="8"
+      rows="5"
+    ></textarea>
+    <p class="hint">Shared with the break overlay &mdash; auto-saves as you type.</p>
+  </section>
+
+  <section class="card">
+    <h2>Not To Do Tasks Today</h2>
+    <textarea
+      bind:value={notToDoContent}
+      oninput={scheduleNotToDoSave}
+      placeholder="1.
+2.
+3."
+      rows="3"
     ></textarea>
     <p class="hint">Shared with the break overlay &mdash; auto-saves as you type.</p>
   </section>

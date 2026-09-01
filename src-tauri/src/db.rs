@@ -124,5 +124,21 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 10,
+            description: "create not_to_do_list table",
+            sql: r#"
+                -- date is TEXT (not a SQLite date type -- SQLite has none), storing
+                -- the same local 'YYYY-MM-DD' string localDateStamp() produces, same
+                -- as daily_task_list.date -- keeps it a drop-in string-equality join
+                -- against the rest of the schema (see CLAUDE.md's Data model).
+                CREATE TABLE not_to_do_list (
+                    date TEXT PRIMARY KEY,
+                    content TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                );
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
