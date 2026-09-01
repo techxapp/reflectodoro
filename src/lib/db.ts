@@ -12,10 +12,21 @@ function getDb() {
   return dbPromise;
 }
 
-export interface ReflectionEntry {
+export interface ReflectionRow {
+  id: number;
   created_at: string;
+  slot_start_at: string;
   text: string;
-  slot_count: number;
+}
+
+/** A run of rows for display purposes: consecutive break slots (30 minutes
+ * apart, no gap) carrying identical text. Computed client-side from the flat
+ * row list rather than stored -- deliberately NOT keyed off `created_at`
+ * (which rows share when saved together by saveReflection's slot-merge
+ * logic), because editing one row's text should immediately split it off
+ * from unedited neighbors, not stay bundled under the original save event. */
+export interface ReflectionCluster {
+  rows: ReflectionRow[];
 }
 
 export function localDateStamp(d: Date = new Date()): string {
@@ -222,15 +233,48 @@ export async function getWellnessSummaryForDate(dateStamp: string): Promise<Well
   };
 }
 
-export async function getReflectionsForDate(dateStamp: string): Promise<ReflectionEntry[]> {
+export async function getReflectionsForDate(dateStamp: string): Promise<ReflectionRow[]> {
   const db = await getDb();
-  return db.select<ReflectionEntry[]>(
-    `SELECT created_at, text, COUNT(*) as slot_count FROM reflection
+  return db.select<ReflectionRow[]>(
+    `SELECT id, created_at, slot_start_at, text FROM reflection
      WHERE date(created_at) = $1
-     GROUP BY created_at, text
-     ORDER BY created_at ASC`,
+     ORDER BY slot_start_at ASC`,
     [dateStamp],
   );
+}
+
+const SLOT_INTERVAL_MS = 30 * 60 * 1000;
+
+/** Groups a flat, slot_start_at-ordered row list into runs of consecutive
+ * slots sharing identical (current) text. Pure and re-run on every render
+ * (see the Entries page's $derived), so editing a row's text re-clusters
+ * immediately -- an edited row that no longer matches its neighbor's text
+ * splits into its own cluster without any explicit "ungroup" step. */
+export function clusterReflectionRows(rows: ReflectionRow[]): ReflectionCluster[] {
+  const clusters: ReflectionCluster[] = [];
+  for (const row of rows) {
+    const current = clusters[clusters.length - 1];
+    const prevRow = current?.rows[current.rows.length - 1];
+    const contiguous =
+      prevRow !== undefined &&
+      new Date(row.slot_start_at).getTime() - new Date(prevRow.slot_start_at).getTime() === SLOT_INTERVAL_MS;
+    if (current && contiguous && prevRow!.text === row.text) {
+      current.rows.push(row);
+    } else {
+      clusters.push({ rows: [row] });
+    }
+  }
+  return clusters;
+}
+
+/** Edits one covered slot's text in place, independent of any sibling slots
+ * that were saved together in the same saveReflection call -- keyed by id,
+ * not created_at, so editing one slot never touches the others (and, per
+ * clusterReflectionRows above, immediately splits it out of its display
+ * cluster if the new text no longer matches). */
+export async function updateReflectionText(id: number, text: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(`UPDATE reflection SET text = $1 WHERE id = $2`, [text, id]);
 }
 
 export async function getTaskList(dateStamp: string): Promise<string> {
@@ -621,13 +665,6 @@ export async function writeTextFile(path: string, contents: string): Promise<voi
 }
 
 export const EXPORT_FORMAT_VERSION = 1;
-
-interface ReflectionRow {
-  id: number;
-  created_at: string;
-  slot_start_at: string;
-  text: string;
-}
 
 interface TaskListRow {
   date: string;

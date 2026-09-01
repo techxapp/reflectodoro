@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
+    clusterReflectionRows,
     getReflectionsForDate,
     getTaskList,
     getWellnessSummaryForDate,
     localDateStamp,
-    type ReflectionEntry,
+    updateReflectionText,
+    type ReflectionRow,
     type WellnessSummary,
   } from "$lib/db";
 
@@ -18,14 +20,18 @@
   };
 
   let selected = $state(new Date());
-  let reflections = $state<ReflectionEntry[]>([]);
+  let reflectionRows = $state<ReflectionRow[]>([]);
   let taskList = $state("");
   let wellnessSummary = $state<WellnessSummary>(EMPTY_WELLNESS_SUMMARY);
   let calendarMonth = $state(new Date());
   let loading = $state(false);
+  let expandedClusters = $state<Set<number>>(new Set());
+  let editingId = $state<number | null>(null);
+  let editText = $state("");
 
   const selectedStamp = $derived(localDateStamp(selected));
   const isToday = $derived(selectedStamp === localDateStamp(new Date()));
+  const clusters = $derived(clusterReflectionRows(reflectionRows));
 
   async function load() {
     loading = true;
@@ -35,7 +41,7 @@
       getTaskList(stamp),
       getWellnessSummaryForDate(stamp),
     ]);
-    reflections = r;
+    reflectionRows = r;
     taskList = t;
     wellnessSummary = w;
     loading = false;
@@ -59,6 +65,32 @@
 
   function formatTime(iso: string): string {
     return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function toggleExpanded(clusterKey: number) {
+    const next = new Set(expandedClusters);
+    if (next.has(clusterKey)) next.delete(clusterKey);
+    else next.add(clusterKey);
+    expandedClusters = next;
+  }
+
+  function startEdit(row: { id: number; text: string }) {
+    editingId = row.id;
+    editText = row.text;
+  }
+
+  function cancelEdit() {
+    editingId = null;
+    editText = "";
+  }
+
+  async function saveEdit(row: { id: number }) {
+    const text = editText.trim();
+    if (!text) return;
+    await updateReflectionText(row.id, text);
+    reflectionRows = reflectionRows.map((r) => (r.id === row.id ? { ...r, text } : r));
+    editingId = null;
+    editText = "";
   }
 
   const calendarDays = $derived.by(() => {
@@ -147,19 +179,67 @@
         </div>
       {/if}
 
-      {#if reflections.length === 0}
+      {#snippet editButton(row: { id: number; text: string })}
+        {#if editingId !== row.id}
+          <button class="icon-btn" onclick={() => startEdit(row)} aria-label="Edit reflection" title="Edit">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+            </svg>
+          </button>
+        {/if}
+      {/snippet}
+
+      {#snippet reflectionRow(row: { id: number; text: string })}
+        {#if editingId === row.id}
+          <div class="edit-row">
+            <textarea bind:value={editText} rows="3"></textarea>
+            <div class="edit-actions">
+              <button class="save" disabled={!editText.trim()} onclick={() => saveEdit(row)}>Save</button>
+              <button class="cancel" onclick={cancelEdit}>Cancel</button>
+            </div>
+          </div>
+        {:else}
+          <p>{row.text}</p>
+        {/if}
+      {/snippet}
+
+      {#if clusters.length === 0}
         <p class="hint">No reflections logged for this day.</p>
       {:else}
         <ul class="reflection-list">
-          {#each reflections as row (row.created_at)}
+          {#each clusters as cluster (cluster.rows[0].id)}
+            {@const clusterKey = cluster.rows[0].id}
             <li>
               <div class="meta">
-                <span class="time">{formatTime(row.created_at)}</span>
-                {#if row.slot_count > 1}
-                  <span class="badge">covers {row.slot_count} pomodoros</span>
+                <span class="time">{formatTime(cluster.rows[0].created_at)}</span>
+                {#if cluster.rows.length === 1}
+                  {@render editButton(cluster.rows[0])}
+                {:else}
+                  <span class="badge">covers {cluster.rows.length} pomodoros</span>
+                  <button class="chevron" onclick={() => toggleExpanded(clusterKey)}>
+                    {expandedClusters.has(clusterKey) ? "Collapse" : "Expand"}
+                  </button>
                 {/if}
               </div>
-              <p>{row.text}</p>
+
+              {#if cluster.rows.length === 1}
+                {@render reflectionRow(cluster.rows[0])}
+              {:else}
+                <p>{cluster.rows[0].text}</p>
+                {#if expandedClusters.has(clusterKey)}
+                  <ul class="slot-list">
+                    {#each cluster.rows as row (row.id)}
+                      <li>
+                        <div class="slot-meta">
+                          <span class="slot-time">{formatTime(row.slot_start_at)}</span>
+                          {@render editButton(row)}
+                        </div>
+                        {@render reflectionRow(row)}
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              {/if}
             </li>
           {/each}
         </ul>
@@ -384,10 +464,110 @@
     border-radius: 999px;
   }
 
+  .chevron {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    margin-left: auto;
+  }
+
+  .chevron:hover {
+    background: var(--surface);
+    color: inherit;
+  }
+
   .reflection-list p {
     margin: 0;
     font-size: 14px;
     white-space: pre-wrap;
+  }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    padding: 4px;
+    border-radius: 6px;
+    margin-left: auto;
+  }
+
+  .icon-btn:hover {
+    background: var(--surface);
+    color: var(--accent);
+  }
+
+  .edit-row textarea {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: inherit;
+    padding: 10px 12px;
+    font-size: 14px;
+    resize: vertical;
+  }
+
+  .edit-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .edit-actions .save {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+  }
+
+  .edit-actions .save:disabled {
+    opacity: 0.5;
+  }
+
+  .edit-actions .cancel {
+    background: none;
+    border: 1px solid var(--border);
+    color: inherit;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+  }
+
+  .slot-list {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 10px 0 0;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .slot-list li {
+    padding-left: 12px;
+    border-left: 2px solid var(--border);
+  }
+
+  .slot-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .slot-time {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
   }
 
   .hint {
