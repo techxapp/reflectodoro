@@ -24,6 +24,22 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    // Sourced entirely from env vars (ANDROID_KEYSTORE_PATH/_PASSWORD,
+    // ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD) rather than a checked-in
+    // keystore.properties -- CI sets these from repo secrets, and a local
+    // release build without them set just falls through to unsigned (see
+    // below), same as before this config existed.
+    val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+    signingConfigs {
+        if (releaseKeystorePath != null) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -38,6 +54,10 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = true
+            isShrinkResources = true
+            if (releaseKeystorePath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))

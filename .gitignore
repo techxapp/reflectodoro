@@ -25,3 +25,9 @@ vite.config.ts.timestamp-*
 # updater signing keypair -- private key must never be committed
 /src-tauri/*.key
 /src-tauri/*.key.pub
+
+# Android release upload keystore -- private signing key, must never be
+# committed. CI decodes it from a secret into a temp file instead (see
+# .github/workflows/release.yml's android job).
+*.keystore
+*.jks

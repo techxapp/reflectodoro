@@ -230,20 +230,41 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # --debug, not a release build: there's no signing keystore configured
-      # in this repo yet, so a release-type Gradle variant has nothing to
-      # sign itself with. Same tradeoff as the currently-unsigned macOS
-      # build -- see CLAUDE.md's "Not built yet / explicitly deferred".
+      # Decodes the release upload keystore from a repo secret into a temp
+      # file outside the repo tree (never written into the checkout, never
+      # committed). build.gradle.kts's release signingConfig only activates
+      # when ANDROID_KEYSTORE_PATH is set, so a fork/PR build without this
+      # secret still falls back to the previous unsigned-debug behavior
+      # instead of failing.
+      - name: Decode Android signing keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/reflectodoro-release.keystore"
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/reflectodoro-release.keystore" >> "$GITHUB_ENV"
+          fi
+
+      # Real release build now that a signing keystore is configured (see
+      # the decode step above and build.gradle.kts's signingConfigs block).
+      # --split-per-abi avoids bundling all 4 ABIs' native libs into one
+      # universal APK; combined with the release profile's strip/LTO
+      # (Cargo.toml) this is what actually fixes the ~600MB debug/universal
+      # APK the old --debug build produced.
       - name: Build Android APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
           export ANDROID_NDK_HOME="$NDK_HOME"
-          npm run tauri android build -- --debug
+          npm run tauri android build -- --apk --split-per-abi
 
       - name: Upload APK to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ github.ref_name }}" \
-            src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk \
+            src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk \
             --clobber

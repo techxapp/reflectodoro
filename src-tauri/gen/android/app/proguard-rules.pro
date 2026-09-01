@@ -5,12 +5,15 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# OverlayJsBridge is registered as window.AndroidBridge and called by method
+# name from native_overlay.html's JS (see addJavascriptInterface in
+# NativeOverlayManager.kt and the class's own doc comment there) --
+# minification only started actually running in a shipped build once release
+# CI stopped using --debug, so this keep rule is what stops R8 from
+# renaming/stripping those methods.
+-keepclassmembers class com.reflectodoro.app.OverlayJsBridge {
+    @android.webkit.JavascriptInterface public *;
+}
 
 # Uncomment this to preserve the line number information for
 # debugging stack traces.
