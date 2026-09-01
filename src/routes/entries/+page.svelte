@@ -6,6 +6,7 @@
     getTaskList,
     getWellnessSummaryForDate,
     localDateStamp,
+    saveTaskList,
     updateReflectionText,
     type ReflectionRow,
     type WellnessSummary,
@@ -28,6 +29,7 @@
   let expandedClusters = $state<Set<number>>(new Set());
   let editingId = $state<number | null>(null);
   let editText = $state("");
+  let taskSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
   const selectedStamp = $derived(localDateStamp(selected));
   const isToday = $derived(selectedStamp === localDateStamp(new Date()));
@@ -65,6 +67,17 @@
 
   function formatTime(iso: string): string {
     return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  }
+
+  /** Captures the date and content at call time (not read fresh when the
+   * timer fires) so a debounced save always lands on the day it was typed
+   * on, even if the user has since navigated to a different day. */
+  function scheduleTaskSave(content: string) {
+    const stamp = selectedStamp;
+    if (taskSaveTimer) clearTimeout(taskSaveTimer);
+    taskSaveTimer = setTimeout(() => {
+      void saveTaskList(stamp, content);
+    }, 800);
   }
 
   function toggleExpanded(clusterKey: number) {
@@ -172,12 +185,17 @@
         </div>
       {/if}
 
-      {#if taskList.trim()}
-        <div class="task-list">
-          <h3>Most Important Tasks</h3>
-          <pre>{taskList}</pre>
-        </div>
-      {/if}
+      <div class="task-list">
+        <h3>Most Important Tasks</h3>
+        <textarea
+          bind:value={taskList}
+          oninput={() => scheduleTaskSave(taskList)}
+          placeholder="1.
+2.
+3."
+          rows="6"
+        ></textarea>
+      </div>
 
       {#snippet editButton(row: { id: number; text: string })}
         {#if editingId !== row.id}
@@ -421,11 +439,17 @@
     color: var(--text-dim);
   }
 
-  .task-list pre {
-    margin: 0;
-    font-family: inherit;
-    white-space: pre-wrap;
+  .task-list textarea {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: inherit;
+    padding: 10px 12px;
     font-size: 14px;
+    font-family: inherit;
+    resize: vertical;
   }
 
   .reflection-list {
