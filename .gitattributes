@@ -1,0 +1,4 @@
+# Shell scripts must always be checked out with LF, regardless of a
+# developer's local core.autocrlf setting -- they run on Linux/WSL/macOS
+# and CRLF breaks bash with "$'\r': command not found".
+*.sh text eol=lf
