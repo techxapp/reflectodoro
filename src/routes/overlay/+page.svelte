@@ -5,6 +5,7 @@
   import {
     findMissedSlots,
     saveReflection,
+    getLastReflectionText,
     getTaskList,
     saveTaskList,
     getNotToDoList,
@@ -26,6 +27,7 @@
   let overlayState = $state<OverlayState | null>(null);
   let devMode = $state(false);
   let reflectionText = $state("");
+  let hasPrefill = $state(false);
   let breakitInput = $state("");
   let breakitShake = $state(false);
   let taskListContent = $state("");
@@ -68,6 +70,17 @@
   async function refreshCoverage() {
     if (!overlayState?.current_slot_start) return;
     missedSlots = await findMissedSlots(overlayState.current_slot_start);
+  }
+
+  /** Pre-fills (never saves) the reflection field with the last entry saved
+   * to the DB, so the user has something to glance at/edit rather than a
+   * blank box -- skipped once a reflection has already been submitted for
+   * this slot, since the textarea goes read-only at that point anyway. */
+  async function prefillReflection() {
+    if (!overlayState || overlayState.reflection_entered) return;
+    const last = await getLastReflectionText();
+    reflectionText = last ?? "";
+    hasPrefill = last !== null;
   }
 
   async function submitReflection(e: Event) {
@@ -145,6 +158,7 @@
     devMode = await invoke<boolean>("is_dev_mode");
     overlayState = await invoke<OverlayState>("get_overlay_state");
     await refreshCoverage();
+    await prefillReflection();
     taskListContent = await getTaskList(localDateStamp());
     notToDoContent = await getNotToDoList(localDateStamp());
 
@@ -152,9 +166,9 @@
       const prevSlot = overlayState?.current_slot_start;
       overlayState = event.payload;
       if (overlayState.current_slot_start !== prevSlot) {
-        reflectionText = "";
         breakitInput = "";
         await refreshCoverage();
+        await prefillReflection();
       }
     });
     unlistenTasks = await listenForTaskListUpdates((content) => {
@@ -204,6 +218,9 @@
         {#if overlayState?.reflection_entered}
           <p class="hint ok">Saved. Waiting on the other condition to finish the break.</p>
         {:else}
+          {#if hasPrefill}
+            <p class="hint">Pre-filled with your last entry -- edit it or write a new one.</p>
+          {/if}
           <button type="submit" disabled={!reflectionText.trim()}>Submit reflection</button>
         {/if}
       </form>

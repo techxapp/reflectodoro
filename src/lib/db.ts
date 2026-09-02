@@ -152,6 +152,18 @@ export async function saveReflection(coveredSlots: string[], text: string): Prom
   }
 }
 
+/** Text of the most recently saved reflection row, across all slots -- used
+ * to pre-populate (never auto-save) the overlay's reflection textarea so the
+ * user can see/tweak what they wrote last time instead of starting blank.
+ * Returns null when no reflection has ever been saved (fresh install). */
+export async function getLastReflectionText(): Promise<string | null> {
+  const db = await getDb();
+  const rows = await db.select<{ text: string }[]>(
+    `SELECT text FROM reflection ORDER BY id DESC LIMIT 1`,
+  );
+  return rows[0]?.text ?? null;
+}
+
 /** The reflection row most recently saved for a given slot -- throws rather than returning null/undefined so a missing row (which shouldn't happen; the check-in popup only ever opens after a reflection was saved) fails loudly instead of silently no-opping. */
 export async function getReflectionIdForSlot(slotStartIso: string): Promise<number> {
   const db = await getDb();
