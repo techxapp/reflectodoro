@@ -1,15 +1,18 @@
 # Reflectodoro
 
-A Pomodoro app whose real point is forcing a short self-reflection ("what did I do?") at the end of every break, enforced via a hard-to-dismiss overlay. Ships for **Windows, macOS, and Linux**; Android/iOS are planned later on the same stack, but not yet started. The macOS build is currently unsigned/non-notarized (no Apple Developer account yet) and uses a best-effort media-pause toggle instead of Windows' state-aware pause. Alt-Tab/Win-key suppression is Windows-only plus X11-only-on-Linux — never on macOS, never on Linux-under-Wayland (a protocol-level limitation, not a scope cut) — see "Media pause-on-break" and "Not built yet / explicitly deferred" below. Sync across devices and auth are explicitly deferred — this build is fully local, single-device, no server/DB service of any kind.
+A Pomodoro app whose real point is forcing a short self-reflection ("what did I do?") at the end of every break, enforced via a hard-to-dismiss overlay. Ships as signed releases for **Windows, macOS, Linux, and Android** (see "Android" below); iOS is planned on the same stack but not yet started. The macOS build is currently unsigned/non-notarized (no Apple Developer account yet) and uses a best-effort media-pause toggle instead of Windows'/Linux's state-aware pause. Alt-Tab/Win-key suppression is Windows-only plus X11-only-on-Linux — never on macOS, never on Linux-under-Wayland (a protocol-level limitation, not a scope cut), and has no equivalent on Android — see "Media pause-on-break", "Android", and "Not built yet / explicitly deferred" below. Sync across devices and auth are explicitly deferred — this build is fully local, single-device, no server/DB service of any kind.
 
-Full original design exploration/rationale (superseded in details by this file where they conflict): `C:\Users\gursi\.claude\plans\i-want-to-create-glowing-abelson.md`.
+
+## Keeping this file current
+
+This file drifts from the code easily — several sections have gone stale before (Android status, breakit's character set, where the media-pause toggle lives in the UI). **After any change that alters behavior described here** (a new platform capability, a moved/renamed UI control, a changed data model, a new deferred/not-deferred item, a new kill switch or gotcha), update the relevant section of this file in the same session/PR as the code change — don't let it wait for a later audit. When in doubt about whether a change is "major" enough to warrant an update, err toward updating; a short, accurate line beats a stale paragraph.
 
 ## Stack
 
 - **Shell**: Tauri 2.0 (Rust backend, `src-tauri/`)
 - **Frontend**: SvelteKit (Svelte 5 runes) + TypeScript + Vite, `adapter-static` in SPA mode (`ssr = false` at the root layout)
 - **Storage**: SQLite via `tauri-plugin-sql`, fully local — no server, no cloud, no serverless functions in this MVP
-- Chosen deliberately over Electron+React Native: Tauri 2 supports Android/iOS from the same codebase, keeping the door open for the other platforms without committing to that work now.
+- Chosen deliberately over Electron+React Native: Tauri 2 supports Android/iOS from the same codebase. Android is now a real signed release target built on this (see "Android" below); iOS remains not started, kept open by the same choice.
 
 ## Run it
 
@@ -43,7 +46,11 @@ On entering a break slot, the Rust backend spawns a second Tauri window (label `
 
 ### breakit: random challenge, not a fixed phrase
 
-Originally designed as a fixed word ("breakit") typed a configurable number of times. **Changed by the user** to: a random string (`src-tauri/src/breakit.rs::generate_challenge`), default 15 characters from `[a-zA-Z0-9]`, optionally including special characters, generated fresh for every new overlay and shown in the UI. The user must type it exactly (no paste — blocked via `paste`/`drop`/`contextmenu` handlers and Ctrl+V/Shift+Insert interception in the overlay page) to flip `breakit_matched`. Configurable in Settings (`breakit_length`, `breakit_include_special` in `app_setting`); being random rather than fixed means it can't become muscle memory.
+Originally designed as a fixed word ("breakit") typed a configurable number of times. **Changed by the user** to: a random string (`src-tauri/src/breakit.rs::generate_challenge`), default 15 characters from a reduced alphanumeric set (`ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789`) that deliberately excludes visually ambiguous characters — `0`/`O` and `1`/`l`/`I` — which render near-identically in several monospace fonts, including the Android overlay's plain `monospace` fallback; optionally also including special characters (`!@#$%^&*()-_=+[]{}`). Generated fresh for every new overlay and shown in the UI. The user must type it exactly (no paste — blocked via `paste`/`drop`/`contextmenu` handlers and Ctrl+V/Shift+Insert interception in the overlay page) to flip `breakit_matched`. Configurable in Settings (`breakit_length`, `breakit_include_special` in `app_setting`, length clamped to `[4, 64]`); being random rather than fixed means it can't become muscle memory.
+
+### Reflection field pre-fill
+
+The overlay's reflection textarea pre-fills with the text of the most recently saved reflection (`prefillReflection()` in `src/routes/overlay/+page.svelte`, via `getLastReflectionText` in `src/lib/db.ts`) whenever a new break slot starts and no reflection has been entered for it yet — a UI convenience only, shown with a "Pre-filled with your last entry" hint; nothing is written to the database until the user actually submits.
 
 ## Inactivity / merge behavior
 
@@ -51,7 +58,7 @@ Because the overlay never auto-closes without a reflection, "what did I do in th
 
 ## Media pause-on-break
 
-`src-tauri/src/media.rs`, gated on `app_setting.media_pause_on_break_enabled`. Two entirely different mechanisms per platform, both "strong deterrent, not an absolute lock" like the rest of the overlay:
+`src-tauri/src/media.rs`, gated on `app_setting.media_pause_on_break_enabled`. Toggled from a button on the **main window** (`src/routes/+page.svelte`, below the Pomodoro mode toggle) — moved out of Settings since it's a frequently-adjusted control, not a one-time preference. Four entirely different mechanisms per platform, all "strong deterrent, not an absolute lock" like the rest of the overlay:
 
 - **Windows**: queries System Media Transport Controls (SMTC) for every registered session and pauses only the ones actually playing (`GlobalSystemMediaTransportControlsSessionManager`). State-aware — never resumes something that was already paused.
 - **macOS**: no public API can query playback state the way SMTC does (only the private, undocumented `MediaRemote.framework` can), so this posts a synthetic hardware Play/Pause media-key event instead (`NX_KEYTYPE_PLAY`, via an AppKit `NSEvent` bridge — see `media.rs`'s doc comment for why that needs AppKit and not plain Core Graphics). This is a **blind toggle**: it can incorrectly *resume* media that was already paused before the break started. Explicit, confirmed tradeoff — not a bug.
@@ -85,10 +92,24 @@ Migrations live in `src-tauri/src/db.rs` (`tauri-plugin-sql` migration list). Ap
 
 ## Kill switches (must always work, tested explicitly)
 
+These are desktop-specific (Windows/macOS/Linux); Android has no tray, no `Alt+F4`-style close, and no global-shortcut plugin (see "Android" below) — its enforcement relies on the OS's own notification/overlay-permission controls instead.
+
 1. **Task Manager** (Ctrl+Shift+Esc on Windows; Activity Monitor / Cmd+Option+Esc Force Quit on macOS) — never blocked, by design.
 2. **Tray → Quit** — `std::process::exit(0)`, deliberately *not* `app.exit()` or a window `.close()`, so it can't get caught by the overlay's close-requested prevention.
 3. **Ctrl+Alt+Shift+F12** (Windows/Linux) / **Cmd+Option+Shift+F12** (macOS) — global shortcut, force-destroys the overlay, registered unconditionally (not just in dev builds). Platform-selected at runtime via `cfg!(target_os = "macos")` in `setup_dev_kill_switch` (`src-tauri/src/lib.rs`); the Settings UI label is driven by the `current_os` command so it always matches what's actually registered.
 4. **Dev mode** (`cfg!(debug_assertions)` by default, override with `POMODORO_DEV_MODE=0/1`): shows a visible "Close (DEV)" button on the overlay and skips installing the keyboard hook entirely.
+
+## Android
+
+Android is a real, signed release target, not experimental scaffolding — `src-tauri/gen/android/` is fully generated and committed, with custom Kotlin sources beyond the Tauri template. Because the generated Android WebView shell doesn't get the same low-level window control as desktop (no separate undecorated always-on-top window, no `WH_KEYBOARD_LL`-style hook), break enforcement is implemented natively rather than by reusing the desktop overlay window:
+
+- **Native overlay + notification fallback**: `NativeOverlayManager.kt` draws a system overlay over other apps when the user has granted "Display over other apps" permission (`canDrawOverlays`/`requestDrawOverlaysPermission`, exposed via `NativeBridgePlugin.kt`); without that permission it falls back to a break notification instead.
+- **`NativeBridgePlugin.kt`** (`src-tauri/gen/android/app/src/main/java/com/reflectodoro/app/`, a `@TauriPlugin`) is the Rust↔Kotlin bridge, wrapped on the Rust side by `src-tauri/src/android_bridge.rs::AndroidBridge<Wry>`. It exposes `ping`, `startForegroundService`/`stopForegroundService`, `triggerBreakScreen`, `cancelBreakNotification`, `updateNativeOverlay`, `initNativeOverlayChannel`, `canDrawOverlays`/`requestDrawOverlaysPermission`, and `pauseAudioFocus`/`resumeAudioFocus` (see "Media pause-on-break" above).
+- **Scheduling survives process death and reboot**: `BreakSchedulerService.kt` runs as a foreground service; `BreakScheduling.kt` independently mirrors the `grid::slot_for` boundary rule in Kotlin to compute the next wake time via `AlarmManager.setAlarmClock` — deliberately *not* `setExactAndAllowWhileIdle`, since only `setAlarmClock` is exempt from Android 10+ background-activity-launch restrictions (confirmed on-device). Side effect: a persistent alarm-clock icon in the status bar whenever Pomodoro mode is on. `BootCompletedReceiver.kt` restarts the scheduler service on `ACTION_BOOT_COMPLETED`, since Pomodoro-mode-enabled state isn't persisted anywhere and defaults to on at process start — this is Android's own reboot-recovery mechanism and is unrelated to the desktop login-item autostart below.
+- **A second, direct SQLite connection on Android only**: the native overlay is a plain WebView with no Tauri IPC bridge, so it needs its own path to write a reflection row directly from Rust. `Cargo.toml`'s `[target.'cfg(target_os = "android")'.dependencies]` pulls in `sqlx` for this.
+- **Desktop-only plugins are excluded on mobile**: `tauri-plugin-global-shortcut`, `tauri-plugin-autostart`, `tauri-plugin-updater`, `tauri-plugin-process`, and `tauri-plugin-single-instance` are all gated out via `[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]` in `Cargo.toml`. So desktop login-item autostart (`commands.rs::set_autostart_enabled`, which returns "not supported on this platform" off-desktop) and the Ctrl+Alt+Shift+F12 kill switch have no Android equivalent — `settings/+page.svelte` hides the force-close-shortcut section on Android (`isAndroid`) and instead shows Android-only controls for the overlay-permission and persistent-break-notification settings.
+- **Signed CI releases**: `.github/workflows/release.yml`'s `android` job sets up JDK 17 + the Android SDK/NDK, decodes a signing keystore from the `ANDROID_KEYSTORE_BASE64` secret, runs `npm run tauri android build -- --apk --split-per-abi --target aarch64 armv7`, and uploads signed release APKs to the GitHub Release.
+- **iOS has none of the above** — it's excluded from the same Cargo `cfg` groups as Android but has zero implementation behind it. "Planned but not yet started" (the phrase this doc used to apply to Android as a whole) is accurate only for iOS now.
 
 ## Known gotchas already hit in this codebase
 
@@ -103,7 +124,7 @@ Both bugs were silent (no thrown error visible to the user) — diagnosed by que
 
 - Sync across devices, auth/pairing — deferred by user decision. If revisited, the recommended direction (not designed in detail) is an end-to-end-encrypted, short-TTL serverless mailbox rather than a permanent central DB.
 - Configurable work/break durations (currently fixed 25/5 constants).
-- Android/iOS builds.
+- iOS builds — Android ships as a signed release APK already (see "Android" above); iOS has no implementation at all yet, only `cfg` exclusions alongside Android's.
 - **macOS Alt-Tab/Win-key-equivalent suppression** — `src-tauri/src/hook.rs`'s `WH_KEYBOARD_LL` hook is Windows-only. On macOS this is a no-op: the nearest equivalent (`CGEventTap`) requires the user to grant Accessibility permission, real UX friction Apple scrutinizes apps for. The overlay's unlock formula still fully enforces itself without it — this was always a deterrent, not the mechanism holding the lock together.
 - **Wayland Alt-Tab/Win-key-equivalent suppression** — `hook.rs`'s `linux_impl` implements real suppression via `XGrabKey`, but only on X11 sessions (detected at runtime via `XDG_SESSION_TYPE`/`WAYLAND_DISPLAY`). Wayland sessions get the same no-op as macOS, deliberately: no client can suppress global shortcuts under Wayland by design, so an X11-only implementation is the ceiling here, not a gap to fast-follow on. Same "deterrent, not the lock itself" reasoning as macOS applies.
 - **State-aware macOS media pause** — `src-tauri/src/media.rs` pauses media on Windows (via SMTC) and Linux (via MPRIS) with true query-then-pause, but the macOS path is a best-effort toggle (see "Media pause-on-break" below). A state-aware macOS implementation is possible later via the private, undocumented `MediaRemote.framework` (the technique tools like `nowplaying-cli` use), which would eliminate the toggle's known limitation — not built yet: real scope (a new Rust module) and depends on an API Apple could change without notice.
@@ -113,5 +134,6 @@ Both bugs were silent (no thrown error visible to the user) — diagnosed by que
 
 ## Best practices
 
-- Refer best_pratices.md file best_pratices and checks for code changes.
+- Refer to `best_practices.md` (repo root) for the Tauri/Svelte async-and-race-condition checklist — treat `invoke`/`listen`/Svelte reactivity as concurrent and unordered, check it before and after touching async code.
 - Try to make variable values configurable wherever feasible and appropriate.
+- Update this file (`CLAUDE.md`) alongside any major change — see "Keeping this file current" at the top.

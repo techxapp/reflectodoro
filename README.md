@@ -1,13 +1,22 @@
 # Reflectodoro
 
 A Pomodoro app whose real point is forcing a short self-reflection ("what did I do?") at
-the end of every break, enforced via a hard-to-dismiss overlay. Windows, macOS, and Linux,
-built with Tauri 2 + SvelteKit.
+the end of every break, enforced via a hard-to-dismiss overlay. Windows, macOS, Linux, and
+Android, built with Tauri 2 + SvelteKit. iOS is planned on the same stack but not started.
 
 [Download the latest release](https://github.com/techxapp/reflectodoro/releases/latest) &middot;
 [Project page](https://reflectodoro.droplee.com)
 
-See [CLAUDE.md](./CLAUDE.md) for architecture, the unlock formula, and data model.
+See [CLAUDE.md](./CLAUDE.md) for architecture and data model.
+
+## Pre-requisite
+
+https://v2.tauri.app/start/prerequisites/
+
+For Android, you additionally need the mobile prerequisites (Android Studio, an Android SDK
+with API 36 + build-tools 36.0.0, the NDK, and a JDK 17): see
+https://v2.tauri.app/start/prerequisites/#android. Set `ANDROID_HOME`/`NDK_HOME` per that
+guide before running any `tauri android` command.
 
 ## Run it in development
 
@@ -15,6 +24,17 @@ See [CLAUDE.md](./CLAUDE.md) for architecture, the unlock formula, and data mode
 npm install
 npm run tauri dev
 ```
+
+### Run the Android app in development
+
+```
+npm run tauri android dev
+```
+
+This launches the app in an Android emulator or a connected device over USB debugging.
+Some behavior is native-only and can't be exercised this way from a desktop emulator alone
+(the "Display over other apps" permission prompt, persistent break notifications, and audio
+focus pausing) — see [CLAUDE.md](./CLAUDE.md)'s "Android" section for how those work.
 
 ## Build a production installer
 
@@ -39,6 +59,22 @@ Gatekeeper-equivalent signing gate on Linux, so this is comparatively simpler th
 workaround. Note the tray icon needs the AppIndicator/KStatusNotifierItem extension to
 appear at all on a vanilla GNOME (especially under Wayland) — KDE/XFCE work out of the
 box.
+
+The Android build produces signed release APKs (one per ABI: `arm64-v8a`, `armeabi-v7a`) via
+CI when a `vX.Y.Z` tag is pushed, using a release keystore stored in repo secrets — see the
+`android` job in `.github/workflows/release.yml`. To build a signed APK locally you need
+your own keystore and to set `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`,
+`ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` (see `src-tauri/gen/android/app/build.gradle.kts`'s
+`signingConfigs` block); without those, the build falls back to an unsigned debug APK:
+
+```
+npm run tauri android build -- --apk --split-per-abi --target aarch64 armv7
+```
+
+Produces APKs under `src-tauri/gen/android/app/build/outputs/apk/`. On first install, the
+app needs the "Display over other apps" permission granted manually in Android system
+settings for the break overlay to draw over other apps (it falls back to a notification
+otherwise) — see [CLAUDE.md](./CLAUDE.md)'s "Android" section.
 
 ## Recommended IDE Setup
 
