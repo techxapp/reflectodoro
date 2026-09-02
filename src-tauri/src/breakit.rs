@@ -1,6 +1,10 @@
 use rand::Rng;
 
-const ALPHANUMERIC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+// Excludes 0/O, 1/l/I -- those pairs render near-identically in several
+// monospace fonts (including the Android overlay's plain "monospace"
+// fallback), so a generated challenge could show an "O" indistinguishable
+// from "0" and never be typeable correctly.
+const ALPHANUMERIC: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
 const SPECIAL: &[u8] = b"!@#$%^&*()-_=+[]{}";
 
 /// Fresh random string generated per overlay -- typing it out (no paste
