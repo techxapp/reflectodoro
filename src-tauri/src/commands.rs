@@ -153,7 +153,7 @@ pub fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String
 #[cfg(not(desktop))]
 #[tauri::command]
 pub fn set_autostart_enabled(_app: AppHandle, _enabled: bool) -> Result<(), String> {
-    Err("autostart is not supported on this platform".into())
+    Err("autostart is not supported on this platform currently.".into())
 }
 
 /// Mirrors app_setting.force_close_shortcut_enabled -- loaded and pushed here
