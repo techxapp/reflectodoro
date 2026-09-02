@@ -472,6 +472,7 @@
   </section>
 
 
+  {#if !isAndroid}
   <section class="card">
     <h2>If the overlay ever gets stuck</h2>
     <ul class="hint">
@@ -515,8 +516,9 @@
       {/if}
     {/if}
   </section>
+  {/if}
 
-  
+
   <section class="card">
     <h2>Startup</h2>
     <p class="hint">Launch Reflectodoro automatically when you log in.</p>
