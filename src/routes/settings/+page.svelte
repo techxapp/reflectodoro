@@ -17,8 +17,6 @@
     saveWellnessTextExclusions,
     getForceCloseShortcutEnabled,
     saveForceCloseShortcutEnabled,
-    getMediaPauseOnBreakEnabled,
-    saveMediaPauseOnBreakEnabled,
     getBreakNotificationPersistentEnabled,
     saveBreakNotificationPersistentEnabled,
     getOverlayAutoCloseMinutes,
@@ -56,10 +54,6 @@
   let forceCloseShortcutBusy = $state(false);
   // Windows/Linux default; overwritten on macOS once current_os resolves.
   let forceCloseShortcutLabel = $state("Ctrl+Alt+Shift+F12");
-
-  let mediaPauseOnBreakEnabled = $state(true);
-  let mediaPauseOnBreakLoaded = $state(false);
-  let mediaPauseOnBreakBusy = $state(false);
 
   let isAndroid = $state(false);
   let breakNotificationPersistentEnabled = $state(true);
@@ -107,11 +101,6 @@
     const os = await invoke<string>("current_os");
     if (os === "macos") forceCloseShortcutLabel = "Cmd+Option+Shift+F12";
     isAndroid = os === "android";
-  });
-
-  onMount(async () => {
-    mediaPauseOnBreakEnabled = await getMediaPauseOnBreakEnabled();
-    mediaPauseOnBreakLoaded = true;
   });
 
   onMount(async () => {
@@ -210,17 +199,6 @@
     if (e.key !== "Enter" && e.key !== " ") return;
     e.preventDefault();
     void commitForceCloseShortcut(!forceCloseShortcutEnabled);
-  }
-
-  async function toggleMediaPauseOnBreak() {
-    const next = !mediaPauseOnBreakEnabled;
-    mediaPauseOnBreakBusy = true;
-    try {
-      await saveMediaPauseOnBreakEnabled(next);
-      mediaPauseOnBreakEnabled = next;
-    } finally {
-      mediaPauseOnBreakBusy = false;
-    }
   }
 
   async function toggleBreakNotificationPersistent() {
@@ -380,20 +358,6 @@
           <span class="hint saved">Saved</span>
         {/if}
       </form>
-    {/if}
-
-    {#if mediaPauseOnBreakLoaded}
-      <div class="data-row">
-        <label class="checkbox">
-          <input
-            type="checkbox"
-            checked={mediaPauseOnBreakEnabled}
-            disabled={mediaPauseOnBreakBusy}
-            onchange={toggleMediaPauseOnBreak}
-          />
-          Pause playing media (video/music) when a break starts
-        </label>
-      </div>
     {/if}
 
     {#if isAndroid && overlayChecked}

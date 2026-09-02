@@ -13,6 +13,7 @@
     loadAndSyncForceCloseShortcutSetting,
     loadAndSyncOverlayAutoClose,
     loadAndSyncMediaPauseOnBreakSetting,
+    saveMediaPauseOnBreakEnabled,
     loadAndSyncBreakNotificationPersistentSetting,
     loadAndSyncMediaToggleGuard,
     listenForTaskListUpdates,
@@ -22,6 +23,9 @@
 
   let now = $state(new Date());
   let enabled = $state(true);
+  let mediaPauseOnBreakEnabled = $state(true);
+  let mediaPauseOnBreakLoaded = $state(false);
+  let mediaPauseOnBreakBusy = $state(false);
   let taskListContent = $state("");
   let notToDoContent = $state("");
   let unlisten: UnlistenFn | null = null;
@@ -60,11 +64,23 @@
     await invoke("set_enabled", { enabled });
   }
 
+  async function toggleMediaPauseOnBreak() {
+    const next = !mediaPauseOnBreakEnabled;
+    mediaPauseOnBreakBusy = true;
+    try {
+      await saveMediaPauseOnBreakEnabled(next);
+      mediaPauseOnBreakEnabled = next;
+    } finally {
+      mediaPauseOnBreakBusy = false;
+    }
+  }
+
   onMount(async () => {
     await loadAndSyncBreakitSettings();
     await loadAndSyncForceCloseShortcutSetting();
     await loadAndSyncOverlayAutoClose();
-    await loadAndSyncMediaPauseOnBreakSetting();
+    mediaPauseOnBreakEnabled = await loadAndSyncMediaPauseOnBreakSetting();
+    mediaPauseOnBreakLoaded = true;
     await loadAndSyncBreakNotificationPersistentSetting();
     await loadAndSyncMediaToggleGuard();
     enabled = await invoke<boolean>("get_enabled");
@@ -103,6 +119,17 @@
     <button class="toggle" class:off={!enabled} onclick={toggleEnabled}>
       {enabled ? "Pomodoro mode: On" : "Pomodoro mode: Off"}
     </button>
+
+    {#if mediaPauseOnBreakLoaded}
+      <button
+        class="toggle media-toggle"
+        class:off={!mediaPauseOnBreakEnabled}
+        disabled={mediaPauseOnBreakBusy}
+        onclick={toggleMediaPauseOnBreak}
+      >
+        {mediaPauseOnBreakEnabled ? "Pause media on break: On" : "Pause media on break: Off"}
+      </button>
+    {/if}
   </section>
 
   <section class="card">
@@ -115,7 +142,7 @@
 3."
       rows="5"
     ></textarea>
-    <p class="hint">Shared with the break overlay &mdash; auto-saves as you type.</p>
+    <p class="hint">Auto-saves as you type.</p>
   </section>
 
   <section class="card">
@@ -128,7 +155,7 @@
 3."
       rows="3"
     ></textarea>
-    <p class="hint">Shared with the break overlay &mdash; auto-saves as you type.</p>
+    <p class="hint">Auto-saves as you type.</p>
   </section>
 </div>
 
@@ -195,6 +222,11 @@
   .toggle.off {
     background: var(--surface-2);
     color: var(--text-dim);
+  }
+
+  .media-toggle {
+    display: block;
+    margin: 14px auto 0;
   }
 
   h2 {
