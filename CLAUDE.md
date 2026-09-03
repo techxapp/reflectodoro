@@ -7,6 +7,18 @@ A Pomodoro app whose real point is forcing a short self-reflection ("what did I 
 
 This file drifts from the code easily — several sections have gone stale before (Android status, breakit's character set, where the media-pause toggle lives in the UI). **After any change that alters behavior described here** (a new platform capability, a moved/renamed UI control, a changed data model, a new deferred/not-deferred item, a new kill switch or gotcha), update the relevant section of this file in the same session/PR as the code change — don't let it wait for a later audit. When in doubt about whether a change is "major" enough to warrant an update, err toward updating; a short, accurate line beats a stale paragraph.
 
+## Keeping the landing page's development journey current
+
+`docs/index.html` has a "Development journey" section: a vertical timeline (`.timeline`) grouped **by week** (Monday–Sunday, ISO week), summarizing real work from git history. Each `.timeline-week` block's `.timeline-date` reads "Week of *start* &ndash; *end*, YYYY" (cross-month weeks read "Week of Aug 31 &ndash; Sep 6, 2026"; use just the day range plus one year when both ends fall in the same month, e.g. "Week of Aug 24 &ndash; 30, 2026").
+
+**Whenever you make a commit (or a batch of commits in one session) that a user-facing changelog would care about** — new features, fixes, platform support changes, UI changes — update `docs/index.html` in the same session:
+
+1. Compute the Monday–Sunday week today's date falls in (see the `currentDate` context).
+2. If the *topmost* `.timeline-week` in `.timeline` already covers that week, merge into it: fold the new work into its existing bullets by theme (don't just append a raw commit-message list), rewriting bullets as needed so the week reads as one cohesive summary rather than a per-commit log.
+3. If it covers an earlier week, insert a new `.timeline-week` block at the *top* of `.timeline` (most recent week first) for the current week, with merged/themed bullets under `.timeline-items`.
+
+Skip noise: "Bump version to X.Y.Z" commits and `Merge branch ...` commits are deliberately excluded — don't add them. Keep each week to a handful of merged bullets (roughly 4-8), grouped by theme (e.g. "Android release: ...", "Fixed X, Y, and Z") rather than one bullet per commit — the existing weeks in the file are the pattern to match.
+
 ## Stack
 
 - **Shell**: Tauri 2.0 (Rust backend, `src-tauri/`)

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Reflectodoro</title>
-  <meta name="description" content="A Pomodoro app that forces a short reflection at the end of every break, enforced by a hard-to-dismiss overlay." />
+  <meta name="description" content="A Pomodoro app that forces a short reflection at the end of every break, enforced by a hard-to-dismiss break screen." />
   <style>
     :root {
       --bg: #0f1115;
@@ -280,6 +280,68 @@
       color: var(--text-dim);
       margin-top: 2px;
     }
+    .roadmap {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 56px;
+    }
+    .roadmap .card {
+      border-style: dashed;
+    }
+    .roadmap-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: var(--accent-soft);
+      padding: 2px 8px;
+      border-radius: 999px;
+      margin-bottom: 8px;
+    }
+    .timeline {
+      position: relative;
+      margin: 0 0 56px;
+      padding-left: 28px;
+      border-left: 2px solid var(--border);
+    }
+    .timeline-week {
+      position: relative;
+      padding-bottom: 28px;
+    }
+    .timeline-week:last-child {
+      padding-bottom: 0;
+    }
+    .timeline-week::before {
+      content: "";
+      position: absolute;
+      left: -34px;
+      top: 4px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: 2px solid var(--bg);
+      box-shadow: 0 0 0 2px var(--border);
+    }
+    .timeline-date {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: var(--accent);
+      margin: 0 0 8px;
+    }
+    .timeline-items {
+      margin: 0;
+      padding-left: 18px;
+      font-size: 14px;
+      color: var(--text-dim);
+    }
+    .timeline-items li {
+      margin-bottom: 4px;
+    }
     footer {
       border-top: 1px solid var(--border);
       padding-top: 24px;
@@ -298,8 +360,8 @@
     <span class="eyebrow">Windows, macOS, Linux &amp; Android</span>
     <h1>Reflectodoro</h1>
     <p class="tagline">
-      A Pomodoro app to force a short break and self-reflection at the end of
-      every session.
+      A <b>Pomodoro</b> app to <b>force a short break</b> and <b>self-reflection</b> at the end of
+      every session - with <b>hard to dismiss break screen.</b>
     </p>
 
     <div class="cta-row">
@@ -349,7 +411,7 @@
       </div>
       <div class="card">
         <h3>No free pass &#128274;</h3>
-        <p>The break overlay can't be dismissed directly &mdash; you have to write what you did and wait for break time to be over.</p>
+        <p>The break screen can't be dismissed directly &mdash; you have to write what you did and wait for break time to be over.</p>
       </div>
       <div class="card">
         <h3>Emergency exit &#9889;</h3>
@@ -358,6 +420,10 @@
       <div class="card">
         <h3>Wellness check &#127793;</h3>
         <p>Wellness check at the end of break to track break items i.e. did short exercise, relaxed eyes, drank water.</p>
+      </div>
+      <div class="card">
+        <h3>Most Important tasks List &#128221;</h3>
+        <p>Capture Most-important and Not to-do task list for day</p>
       </div>
       <div class="card">
         <h3>Fully local and private &#128187;</h3>
@@ -369,8 +435,13 @@
       </div>
       <div class="card">
         <h3>Cross-platform support &#128241;</h3>
-        <p>Windows, macOS, Linux, Android</p>
-        <p>Coming soon: iOS</p>
+        <p>Windows, Linux, Android</p>
+        <p>Under-testing: macOS</p>
+        <p>Planned: iOS</p>
+      </div>
+      <div class="card">
+        <h3>Open Source &#128275;</h3>
+        <p>Code is fully open-sourced and built/released directly via GitHub Actions.</p>
       </div>
     </div>
 
@@ -379,7 +450,7 @@
       <button class="carousel-btn carousel-prev" type="button" aria-label="Previous screenshot">&#8592;</button>
       <div class="carousel-track" id="carouselTrack" tabindex="0" aria-label="Screenshots carousel">
         <div class="carousel-slide"><img class="shot" src="screenshots/SS3.png" alt="Main timer window with wall-clock countdown and Most Important Tasks panel" loading="lazy" /></div>
-        <div class="carousel-slide"><img class="shot" src="screenshots/SS1.png" alt="Break overlay requiring a written reflection, with the emergency-exit code challenge" loading="lazy" /></div>
+        <div class="carousel-slide"><img class="shot" src="screenshots/SS1.png" alt="Break break screen requiring a written reflection, with the emergency-exit code challenge" loading="lazy" /></div>
         <div class="carousel-slide"><img class="shot" src="screenshots/SS2.png" alt="Wellness check-in prompt for relaxed eyes, exercise, water, and washroom breaks" loading="lazy" /></div>
         <div class="carousel-slide"><img class="shot" src="screenshots/SS4.png" alt="Entries view showing daily wellness stats and reflection history on a calendar" loading="lazy" /></div>
       </div>
@@ -451,6 +522,60 @@
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <h2 class="section-title">Upcoming Features</h2>
+    <div class="roadmap">
+      <div class="card">
+        <span class="roadmap-badge">Planned</span>
+        <h3>Cross-device sync &#128260;</h3>
+        <p>Sync reflections and task lists across your devices.</p>
+      </div>
+      <div class="card">
+        <span class="roadmap-badge">Planned</span>
+        <h3>AI Assistant &#129302;</h3>
+        <p>Help documenting tasks, tracking progress, and summarizing reflections.</p>
+      </div>
+      <div class="card">
+        <span class="roadmap-badge">Planned</span>
+        <h3>iOS build &#127843;</h3>
+        <p>Equivalent app for iOS.</p>
+      </div>
+    </div>
+
+    <h2 class="section-title">Development journey</h2>
+    <div class="timeline">
+      <div class="timeline-week">
+        <p class="timeline-date">Week of Aug 31 &ndash; Sep 2, 2026</p>
+        <ul class="timeline-items">
+          <li>Made Most Important Tasks and reflection entries editable, and added a "Not to do" list</li>
+          <li>Pre-filled the overlay reflection field with the last saved entry, and excluded visually ambiguous characters from breakit challenges</li>
+          <li>Moved the media pause-on-break toggle to the main window and hid the force-close shortcut section on Android</li>
+          <li>Fixed a white-screen overlay after monitor power-off/on on Windows, an Android early-break issue, and Linux AppImage repackaging re-bundling stripped Wayland libs</li>
+          <li>Signed Android release builds, switched CI off debug APKs, fixed the Android CI build, and shrank the release APK size</li>
+          <li>Updated the Android download link and docs site</li>
+        </ul>
+      </div>
+      <div class="timeline-week">
+        <p class="timeline-date">Week of Aug 24 &ndash; 30, 2026</p>
+        <ul class="timeline-items">
+          <li>Shipped the wellness check-in overlay after breaks</li>
+          <li>Added an About page, check-for-update button, structured logging, and tightened UI/landing page copy</li>
+          <li>Made settings optional in data export/import and added a setting to pause media on break</li>
+          <li>Added macOS support (basic support, media toggle, early-release notice) and Linux support (including ARM)</li>
+          <li>Restricted the Windows bundle to the NSIS installer, added a Contributor License Agreement, and added a clock to the overlay</li>
+          <li>Shipped the full Android release: native draw-over-other-apps break screen with process-death recovery, foreground service, permissions onboarding, media pause, responsive UI, and a downloadable APK</li>
+          <li>Polished Android further: collapsible install instructions, foreground-on-overlay-close, hibernation handling, and a keyboard-covering-tasklist fix</li>
+        </ul>
+      </div>
+      <div class="timeline-week">
+        <p class="timeline-date">Week of Aug 17 &ndash; 23, 2026</p>
+        <ul class="timeline-items">
+          <li>Initial commit: Reflectodoro Windows MVP</li>
+          <li>Added the auto-updater, GitHub Actions release workflow, and landing page</li>
+          <li>Set the license to Noncommercial and merged db migrations into one</li>
+        </ul>
+      </div>
     </div>
 
     <footer>
