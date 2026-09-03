@@ -73,7 +73,7 @@ npm run tauri android build -- --apk --split-per-abi --target aarch64 armv7
 
 Produces APKs under `src-tauri/gen/android/app/build/outputs/apk/`. On first install, the
 app needs the "Display over other apps" permission granted manually in Android system
-settings for the break overlay to draw over other apps (it falls back to a notification
+settings for the break screen to draw over other apps (it falls back to a notification
 otherwise) — see [CLAUDE.md](./CLAUDE.md)'s "Android" section.
 
 ## Recommended IDE Setup

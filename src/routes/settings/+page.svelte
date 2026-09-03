@@ -322,18 +322,18 @@
 
 <div class="page">
   <section class="card">
-    <h2>Break overlay</h2>
+    <h2>Break screen</h2>
     <p class="hint">
-      Typing a random code exactly is the early-exit alternative &mdash;
+      Typing a captcha is the way of early-exit in case of emergency &mdash;
       it still requires the reflection ("what did I do?") too.
       If neither happens,
-      the overlay auto-closes on its own after the timeout below.
+      the screen auto-closes on its own after the timeout below.
     </p>
 
     {#if loaded}
       <form onsubmit={save}>
         <label>
-          Code length
+          Captcha length
           <input type="number" min="4" max="64" bind:value={length} />
         </label>
         <label class="checkbox">
@@ -438,9 +438,9 @@
 
   {#if !isAndroid}
   <section class="card">
-    <h2>If the overlay ever gets stuck</h2>
+    <h2>If the break screen ever gets stuck</h2>
     <ul class="hint">
-      <li>Press {forceCloseShortcutLabel} to force-close the overlay.</li>
+      <li>Press {forceCloseShortcutLabel} to force-close the break screen.</li>
     </ul>
 
     {#if forceCloseShortcutLoaded}
@@ -473,7 +473,7 @@
 
       {#if forceCloseShortcutEnabled}
         <p class="hint warning">
-          Only turn this off once overlay behavior has been confirmed good across log off/log on,
+          Only turn this off once break screen behavior has been confirmed good across log off/log on,
           system start, and restart &mdash; it's recommended to keep it enabled for at least a week
           first. It's a safety net, not something you'll trigger day to day.
         </p>
@@ -499,7 +499,7 @@
           Start automatically on login
         </label>
       </div>
-      <p class="hint warning">Recommended to keep it off atleast for a week, It can help recover from bugs/screen overlay getting stuck.</p>
+      <p class="hint warning">Recommended to keep it off atleast for a week, It can help recover from bugs/break screen getting stuck.</p>
       {#if autostartError}
         <p class="hint error">{autostartError}</p>
       {/if}
