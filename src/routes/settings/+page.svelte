@@ -63,6 +63,10 @@
   let overlayGranted = $state(false);
   let overlayChecked = $state(false);
 
+  let isMacos = $state(false);
+  let accessibilityGranted = $state(false);
+  let accessibilityChecked = $state(false);
+
   let includeSettingsInTransfer = $state(true);
 
   let exportStatus = $state<"idle" | "success" | "error">("idle");
@@ -101,6 +105,7 @@
     const os = await invoke<string>("current_os");
     if (os === "macos") forceCloseShortcutLabel = "Cmd+Option+Shift+F12";
     isAndroid = os === "android";
+    isMacos = os === "macos";
   });
 
   onMount(async () => {
@@ -131,6 +136,30 @@
 
   onDestroy(() => {
     document.removeEventListener("visibilitychange", onOverlayVisibilityChange);
+  });
+
+  async function refreshAccessibilityPermission() {
+    accessibilityGranted = await invoke<boolean>("macos_accessibility_trusted");
+    accessibilityChecked = true;
+  }
+
+  async function openAccessibilitySettings() {
+    await invoke("macos_request_accessibility_permission");
+  }
+
+  // Re-checks when the user comes back from System Settings -- same reasoning
+  // as onOverlayVisibilityChange above.
+  function onAccessibilityVisibilityChange() {
+    if (document.visibilityState === "visible") void refreshAccessibilityPermission();
+  }
+
+  onMount(() => {
+    void refreshAccessibilityPermission();
+    document.addEventListener("visibilitychange", onAccessibilityVisibilityChange);
+  });
+
+  onDestroy(() => {
+    document.removeEventListener("visibilitychange", onAccessibilityVisibilityChange);
   });
 
   onMount(async () => {
@@ -370,6 +399,19 @@
       <p class="hint">
         Recommended. Without it, a break can only reach you via a notification instead of
         appearing directly over whatever else you're doing.
+      </p>
+    {/if}
+
+    {#if isMacos && accessibilityChecked}
+      <div class="data-row">
+        <span>Accessibility (block Cmd+Tab during breaks): {accessibilityGranted ? "Granted" : "Not granted"}</span>
+        {#if !accessibilityGranted}
+          <button type="button" onclick={openAccessibilitySettings}>Grant permission&hellip;</button>
+        {/if}
+      </div>
+      <p class="hint">
+        Optional. A strong deterrent, not an absolute lock -- without it, the break screen still
+        enforces its unlock rule, it just can't stop you from switching away with Cmd+Tab.
       </p>
     {/if}
 

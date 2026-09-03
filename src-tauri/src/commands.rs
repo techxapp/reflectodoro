@@ -267,6 +267,60 @@ pub fn set_break_notification_persistent_enabled(enabled: bool) {
     BREAK_NOTIFICATION_PERSISTENT_ENABLED.store(enabled, Ordering::SeqCst);
 }
 
+/// Whether the user has granted Accessibility permission -- required for
+/// `hook.rs`'s macOS `CGEventTap` to suppress Cmd+Tab during a break. Surfaced
+/// to Settings so it can show grant status without a platform check on the
+/// invoke call itself, same shape as `can_draw_overlays`.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn macos_accessibility_trusted() -> bool {
+    crate::hook::is_trusted()
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn macos_accessibility_trusted() -> bool {
+    true
+}
+
+/// Opens the Accessibility pane of System Settings -- there is no in-app
+/// runtime-dialog form of this grant. No-op on non-macOS.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn macos_request_accessibility_permission() {
+    if let Err(e) = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        .spawn()
+    {
+        log::error!("macos_request_accessibility_permission: failed to open System Settings: {e:?}");
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn macos_request_accessibility_permission() {}
+
+/// TEMPORARY manual test trigger for the macOS Cmd+Tab suppression work --
+/// opens the break overlay immediately regardless of the wall-clock grid, so
+/// testing doesn't require waiting for a real :25/:55 boundary. Remove once
+/// that feature is verified working end to end. Debug builds only.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub async fn debug_trigger_break_now(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let (len, include_special) = {
+        let cfg = state.breakit_config.lock().unwrap();
+        (cfg.length, cfg.include_special)
+    };
+    let challenge = crate::breakit::generate_challenge(len, include_special);
+    let slot_start = chrono::Local::now().to_rfc3339();
+    {
+        let mut ov = state.overlay.lock().unwrap();
+        *ov = OverlayState::opened_for(slot_start, challenge);
+    }
+    overlay::spawn_or_update_overlay(&app).await;
+    Ok(())
+}
+
 /// Only available when dev_mode is on -- bypasses the unlock formula entirely.
 /// A permanent, non-dev-gated safety net also exists via the global shortcut
 /// (see lib.rs) and the tray Quit item.

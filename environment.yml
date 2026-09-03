@@ -1,0 +1,8 @@
+name: reflectodoro
+channels:
+  - conda-forge
+dependencies:
+  - nodejs=20
+  - rust=1.93
+  - pkg-config
+  - openssl

@@ -98,6 +98,10 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
             None => build_overlay_window(app, false),
         };
 
+        log::info!(
+            "spawn_or_update_overlay: is_visible={:?}",
+            win.is_visible()
+        );
         if !win.is_visible().unwrap_or(false) {
             let dev_mode = app.state::<AppState>().dev_mode;
             let _ = win.show();
@@ -105,6 +109,7 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
             if crate::MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst) {
                 crate::media::pause_playing_sessions(app);
             }
+            log::info!("spawn_or_update_overlay: dev_mode={dev_mode}, calling hook::install()={}", !dev_mode);
             if !dev_mode {
                 crate::hook::install();
             }

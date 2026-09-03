@@ -263,7 +263,161 @@ mod linux_impl {
     }
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+mod macos_impl {
+    //! `CGEventTap`-based suppression of Cmd+Tab, gated on the user having
+    //! granted Accessibility permission (`AXIsProcessTrusted`) -- macOS gives
+    //! no unprivileged app a way to swallow a system-level key combo without
+    //! it. Structurally this mirrors `windows_impl`: the tap is created once
+    //! for the process lifetime and left permanently enabled; `install`/
+    //! `uninstall` just flip the `ACTIVE` flag the callback checks, rather
+    //! than tearing the tap down and rebuilding it every break.
+    //!
+    //! Crate-API note: the exact `objc2-core-graphics`/`objc2-core-foundation`
+    //! surface used below (free-function names, `CFRetained` plumbing) was
+    //! confirmed against the pinned 0.3.2 docs but not yet compiled on this
+    //! toolchain the first time this landed -- re-verify with `cargo check`
+    //! if it doesn't build cleanly, same caveat already given to `linux_impl`
+    //! for `x11rb`.
+
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::OnceLock;
+
+    use objc2_application_services::AXIsProcessTrusted;
+    use objc2_core_foundation::{kCFRunLoopCommonModes, CFMachPort, CFRunLoop};
+    use objc2_core_graphics::{
+        CGEvent, CGEventField, CGEventFlags, CGEventMask, CGEventTapLocation, CGEventTapOptions,
+        CGEventTapPlacement, CGEventTapProxy, CGEventType,
+    };
+
+    // From Carbon's <HIToolbox/Events.h>, not exposed as a Rust constant by
+    // any crate here (same situation as NX_KEYTYPE_PLAY in media.rs).
+    const KVK_TAB: i64 = 0x30;
+
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    // Guards against spawning more than one tap thread at once, *without*
+    // permanently latching on a failed attempt (a plain `Once` would): right
+    // after the user grants Accessibility permission, `AXIsProcessTrusted`
+    // can flip true slightly before `CGEventTapCreate` actually starts
+    // succeeding (a known macOS TCC-propagation race, more likely on an
+    // ad-hoc-signed dev build). `run` resets this to false on every failure
+    // path so the next break's `install()` call retries instead of the
+    // feature silently staying off until the app is restarted.
+    static TAP_THREAD_ACTIVE: AtomicBool = AtomicBool::new(false);
+    // Raw pointer to the CFMachPort backing the tap, set once the tap thread
+    // creates it, so the callback can re-enable a tap the OS disabled for
+    // being slow (see the TapDisabledBy* arms below). Never null once the
+    // tap thread reaches CFRunLoopRun; read-only from the callback's POV.
+    static TAP_PORT: OnceLock<usize> = OnceLock::new();
+
+    /// Whether the user has granted this app Accessibility permission. No
+    /// prompt -- just a status check, safe to call as often as needed.
+    pub fn is_trusted() -> bool {
+        unsafe { AXIsProcessTrusted() }
+    }
+
+    unsafe extern "C-unwind" fn tap_callback(
+        _proxy: CGEventTapProxy,
+        event_type: CGEventType,
+        event: std::ptr::NonNull<CGEvent>,
+        _user_info: *mut c_void,
+    ) -> *mut CGEvent {
+        if event_type == CGEventType::TapDisabledByTimeout
+            || event_type == CGEventType::TapDisabledByUserInput
+        {
+            if let Some(&port_addr) = TAP_PORT.get() {
+                let port = &*(port_addr as *const CFMachPort);
+                CGEvent::tap_enable(port, true);
+            }
+            return event.as_ptr();
+        }
+
+        if ACTIVE.load(Ordering::SeqCst) && event_type == CGEventType::KeyDown {
+            let event_ref = event.as_ref();
+            let flags = CGEvent::flags(Some(event_ref));
+            let keycode = CGEvent::integer_value_field(Some(event_ref), CGEventField::KeyboardEventKeycode);
+            if flags.contains(CGEventFlags::MaskCommand) && keycode == KVK_TAB {
+                return std::ptr::null_mut();
+            }
+        }
+
+        event.as_ptr()
+    }
+
+    /// Runs on a dedicated thread for the process lifetime once it succeeds,
+    /// same shape as `linux_impl::run` owning the X11 connection thread.
+    /// Spawned whenever Accessibility permission looks granted; every early
+    /// return resets `TAP_THREAD_ACTIVE` so a failed attempt can be retried
+    /// by a later `install()` call instead of giving up for the process's
+    /// life -- see `TAP_THREAD_ACTIVE`'s doc comment for why that matters.
+    fn run() {
+        let mask: CGEventMask = 1u64 << (CGEventType::KeyDown.0 as u64);
+        let Some(tap) = (unsafe {
+            CGEvent::tap_create(
+                CGEventTapLocation::SessionEventTap,
+                CGEventTapPlacement::HeadInsertEventTap,
+                CGEventTapOptions::Default,
+                mask,
+                Some(tap_callback),
+                std::ptr::null_mut(),
+            )
+        }) else {
+            log::warn!("hook: CGEventTapCreate failed (Accessibility permission not actually granted yet?); will retry next break");
+            TAP_THREAD_ACTIVE.store(false, Ordering::SeqCst);
+            return;
+        };
+
+        let _ = TAP_PORT.set(&*tap as *const CFMachPort as usize);
+
+        let Some(source) = CFMachPort::new_run_loop_source(None, Some(&tap), 0) else {
+            log::warn!("hook: failed to create run loop source for the CGEventTap; will retry next break");
+            TAP_THREAD_ACTIVE.store(false, Ordering::SeqCst);
+            return;
+        };
+        let Some(run_loop) = CFRunLoop::current() else {
+            log::warn!("hook: failed to get current CFRunLoop; will retry next break");
+            TAP_THREAD_ACTIVE.store(false, Ordering::SeqCst);
+            return;
+        };
+        run_loop.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
+        CGEvent::tap_enable(&tap, true);
+        log::info!("hook: CGEventTap created and enabled, Cmd+Tab suppression armed");
+        CFRunLoop::run();
+        // CFRunLoopRun() only returns if something calls CFRunLoopStop on
+        // this run loop, which nothing here does -- reachable in principle
+        // (e.g. an unexpected external stop), so reset the guard rather than
+        // leave a dead tap latched as "active" forever.
+        TAP_THREAD_ACTIVE.store(false, Ordering::SeqCst);
+    }
+
+    pub fn install() {
+        if ACTIVE.swap(true, Ordering::SeqCst) {
+            return; // already active, nothing to do
+        }
+        if !is_trusted() {
+            ACTIVE.store(false, Ordering::SeqCst);
+            log::info!("hook: Accessibility permission not granted, Cmd+Tab suppression unavailable this break");
+            return;
+        }
+        if TAP_THREAD_ACTIVE
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            std::thread::spawn(run);
+        }
+    }
+
+    /// Mirrors `windows_impl::uninstall`/`linux_impl::uninstall`: leaves the
+    /// tap installed and enabled, just gates suppression back off via
+    /// `ACTIVE` -- cheap and safe from any thread, and avoids re-creating the
+    /// tap (and re-prompting the OS) on every single break.
+    pub fn uninstall() {
+        ACTIVE.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod noop_impl {
     pub fn install() {}
     pub fn uninstall() {}
@@ -273,5 +427,7 @@ mod noop_impl {
 pub use windows_impl::{install, uninstall};
 #[cfg(target_os = "linux")]
 pub use linux_impl::{install, uninstall};
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+pub use macos_impl::{install, is_trusted, uninstall};
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub use noop_impl::{install, uninstall};
