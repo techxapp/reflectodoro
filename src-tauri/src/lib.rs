@@ -21,6 +21,8 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 #[cfg(desktop)]
 use tauri::Emitter;
+#[cfg(desktop)]
+use tauri::WindowEvent;
 use tauri::{AppHandle, Manager};
 #[cfg(desktop)]
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
@@ -424,6 +426,24 @@ pub fn run() {
             {
                 setup_tray(&handle)?;
                 setup_dev_kill_switch(&handle)?;
+
+                // Closing the main window (X button / Alt+F4) must hide it,
+                // not destroy it -- the default Tauri behavior. Without this,
+                // the window is gone for good after the first close, and the
+                // tray's "Open Reflectodoro" / single-instance re-launch
+                // handlers (both just get_webview_window("main").show()) find
+                // nothing to show and silently no-op. The scheduler and tray
+                // keep running headless in the background either way, which
+                // is the whole point of having a tray icon.
+                if let Some(win) = handle.get_webview_window("main") {
+                    let win_to_hide = win.clone();
+                    win.on_window_event(move |event| {
+                        if let WindowEvent::CloseRequested { api, .. } = event {
+                            api.prevent_close();
+                            let _ = win_to_hide.hide();
+                        }
+                    });
+                }
             }
 
             // POMODORO_ENABLED defaults to true and isn't persisted on any
