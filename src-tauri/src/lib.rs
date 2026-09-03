@@ -404,6 +404,10 @@ pub fn run() {
             commands::set_break_notification_persistent_enabled,
             commands::can_draw_overlays,
             commands::request_draw_overlays_permission,
+            commands::macos_accessibility_trusted,
+            commands::macos_request_accessibility_permission,
+            #[cfg(debug_assertions)]
+            commands::debug_trigger_break_now,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
