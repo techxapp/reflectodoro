@@ -158,6 +158,18 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+    /* Explicit rather than left to inherit through from body's -- on at
+       least one real device (Honor/MediaTek) the whole shell (nav and the
+       backdrop behind main's content cards, both otherwise transparent) was
+       left showing a stale black frame after the Android native break
+       overlay (a separate fullscreen WindowManager surface, see
+       NativeOverlayManager.kt) closed, even though content that already had
+       its own explicit background (the cards, the active/hover tab pills)
+       repainted correctly. Painting the shell's own box explicitly removes
+       its reliance on this WebView correctly compositing a transparent
+       layer through to whatever was behind it after another window stopped
+       covering the screen. */
+    background: var(--bg);
   }
 
   nav {

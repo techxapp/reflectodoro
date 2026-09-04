@@ -2,8 +2,11 @@ package com.reflectodoro.app
 
 import android.graphics.Rect
 import android.os.Bundle
+import android.view.View
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 
 class MainActivity : TauriActivity() {
   companion object {
@@ -38,6 +41,30 @@ class MainActivity : TauriActivity() {
      * reads and clears this to bypass isResumed for exactly that one call,
      * then goes back to trusting isResumed normally for every later break. */
     var recoveryLaunchPending = false
+
+    /** Set once in onWebViewCreate below and read by
+     * NativeOverlayManager.hide() to force a redraw of the main window's
+     * WebView right as the native break overlay (a separate
+     * TYPE_APPLICATION_OVERLAY WebView covering the whole screen) is torn
+     * down. On this device family (Honor/MediaTek), the region the overlay
+     * covered can be left showing a stale composited frame -- still black --
+     * after wm.removeView() until something forces SurfaceFlinger to
+     * recomposite it. The nav tabs are the clearest symptom: their DOM never
+     * changes across a route change (they live in +layout.svelte, outside
+     * the routed content), so they're the part of the page least likely to
+     * get an incidental repaint on their own -- the active tab does change
+     * (its class differs per route) and repaints fine, which is why only it
+     * stays visible. */
+    private var mainWebView: WebView? = null
+
+    fun forceRedrawMainWindow() {
+      val wv = mainWebView ?: return
+      wv.post {
+        wv.invalidate()
+        (wv.parent as? View)?.invalidate()
+        wv.requestLayout()
+      }
+    }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -67,6 +94,19 @@ class MainActivity : TauriActivity() {
    * and push it to the page directly. */
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
+    mainWebView = webView
+
+    // Belt-and-suspenders: keeps app.css's own prefers-color-scheme dark
+    // theme as the only source of truth instead of layering the system
+    // WebView's automatic darkening on top of it. Confirmed NOT the cause of
+    // the black-nav-tabs bug on the Honor test device (its own
+    // HwForceDarkManager already reports force-dark disabled for this app),
+    // but harmless to keep off regardless -- see forceRedrawMainWindow above
+    // for the actual fix.
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+      WebSettingsCompat.setAlgorithmicDarkeningAllowed(webView.settings, false)
+    }
+
     webView.viewTreeObserver.addOnGlobalLayoutListener {
       val visibleFrame = Rect()
       webView.getWindowVisibleDisplayFrame(visibleFrame)

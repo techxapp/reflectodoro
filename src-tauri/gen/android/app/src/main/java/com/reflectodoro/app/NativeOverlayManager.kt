@@ -12,6 +12,8 @@ import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import app.tauri.plugin.Channel
 
 /** Owns the "draw over other apps" break overlay -- a plain WebView added
@@ -52,6 +54,12 @@ object NativeOverlayManager {
       val wv = WebView(appContext)
       wv.settings.javaScriptEnabled = true
       wv.settings.domStorageEnabled = false
+      // See MainActivity.onWebViewCreate for why: keeps this WebView's own
+      // dark styling (native_overlay.html) as the only source of truth
+      // instead of layering the system's automatic darkening on top of it.
+      if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+        WebSettingsCompat.setAlgorithmicDarkeningAllowed(wv.settings, false)
+      }
       wv.addJavascriptInterface(OverlayJsBridge(channel), "AndroidBridge")
       wv.webViewClient = object : WebViewClient() {
         override fun onPageFinished(view: WebView?, url: String?) {
@@ -131,6 +139,12 @@ object NativeOverlayManager {
       wv.destroy()
       webView = null
       windowManager = null
+      // The main Activity's WebView was fully covered by this overlay for
+      // the whole break -- on some devices (Honor/MediaTek confirmed) the
+      // region it covered can be left showing a stale composited frame
+      // (still black) until forced to redraw. See
+      // MainActivity.forceRedrawMainWindow for detail.
+      MainActivity.forceRedrawMainWindow()
     }
   }
 }

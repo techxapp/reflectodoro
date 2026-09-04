@@ -1,4 +1,10 @@
 :root {
+  /* Tells Chromium (including Android's system WebView) this page has its
+     own light/dark styling via the media query below, so it doesn't also
+     apply its automatic "force dark" algorithmic darkening on top -- that
+     double-processing was rendering the nav tabs (and other already-dark
+     elements) as black text on a black background. */
+  color-scheme: light dark;
   --bg: #f6f6f8;
   --surface: #ffffff;
   --surface-2: #eef0f4;
