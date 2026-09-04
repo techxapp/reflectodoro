@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { check } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
 
   let version = $state("");
+  let isAndroid = $state(false);
 
   type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "error";
   let updateStatus = $state<UpdateStatus>("idle");
@@ -14,6 +16,8 @@
 
   onMount(async () => {
     version = await getVersion();
+    const os = await invoke<string>("current_os");
+    isAndroid = os === "android";
   });
 
   async function checkForUpdates() {
@@ -63,6 +67,12 @@
     <p class="hint">Licensed under PolyForm Noncommercial 1.0.0.</p>
   </section>
 
+  {#if isAndroid}
+  <section class="card">
+    <h2>Updates</h2>
+    <p class="hint">Install updates from the same source you got this APK from (e.g. the GitHub Release : https://github.com/techxapp/reflectodoro/releases )</p>
+  </section>
+  {:else}
   <section class="card">
     <h2>Updates</h2>
     <div class="data-row">
@@ -85,6 +95,7 @@
       </div>
     {/if}
   </section>
+  {/if}
 </div>
 
 <style>
