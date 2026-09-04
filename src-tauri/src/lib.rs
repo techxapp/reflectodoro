@@ -106,6 +106,26 @@ pub(crate) static OVERLAY_AUTO_CLOSE_MINUTES: AtomicU32 = AtomicU32::new(5);
 /// computed *before* sleeping is what actually detects the gap.
 const SUSPEND_GAP_THRESHOLD: StdDuration = StdDuration::from_secs(120);
 
+/// Android only: caps how long a single scheduler sleep waits before
+/// re-checking wall-clock time against the grid. `tokio::time::sleep`
+/// schedules against `Instant`/`CLOCK_MONOTONIC`, which does not advance
+/// while the CPU is actually suspended (unlike `CLOCK_BOOTTIME`) -- so a
+/// single multi-minute sleep spanning a real Doze/deep-suspend period keeps
+/// waiting for its full *remaining monotonic* duration even once the device
+/// wakes, rather than firing as soon as wall-clock time has passed the
+/// boundary. `BreakAlarmReceiver`'s `AlarmManager.setAlarmClock` chain only
+/// guarantees a brief wake window, not a long enough one for a large
+/// monotonic deficit to fully elapse -- so a break-end transition could be
+/// delayed indefinitely while the phone sits idle. Polling short-circuits
+/// that: each iteration recomputes `slot_for(Local::now())` from the wall
+/// clock, so even a briefly-awake CPU is enough to notice the boundary was
+/// already crossed, regardless of how much monotonic time that particular
+/// sleep call thinks has passed. Desktop doesn't need this -- an actual
+/// laptop suspend is caught by `SUSPEND_GAP_THRESHOLD` below once the single
+/// long sleep does eventually return.
+#[cfg(target_os = "android")]
+pub(crate) const ANDROID_POLL_INTERVAL: StdDuration = StdDuration::from_secs(20);
+
 async fn run_scheduler(app: AppHandle) {
     let mut last_phase: Option<Phase> = None;
     let mut expected_wake: Option<DateTime<Local>> = None;
@@ -197,6 +217,8 @@ async fn run_scheduler(app: AppHandle) {
             .to_std()
             .unwrap_or(StdDuration::from_secs(1));
         expected_wake = Some(slot.end);
+        #[cfg(target_os = "android")]
+        let sleep_dur = sleep_dur.min(ANDROID_POLL_INTERVAL);
         tokio::time::sleep(sleep_dur).await;
     }
 }
@@ -406,6 +428,8 @@ pub fn run() {
             commands::set_break_notification_persistent_enabled,
             commands::can_draw_overlays,
             commands::request_draw_overlays_permission,
+            commands::can_schedule_exact_alarms,
+            commands::request_schedule_exact_alarm_permission,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

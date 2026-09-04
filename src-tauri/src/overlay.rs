@@ -119,10 +119,17 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
         crate::media::pause_playing_sessions(app);
     }
 
-    // Posts a break notification if the app isn't already visible -- a
-    // no-op (decided Kotlin-side) if it is, since the frontend's own
-    // overlay://state listener (about to fire below) already handles
-    // showing /overlay for an app the user is already looking at. Not a
+    // Posts a break notification and (if granted) the native overlay
+    // unconditionally -- NOT skipped for an app that's already visible. An
+    // earlier version made this a no-op in that case, on the theory that the
+    // frontend's own overlay://state listener (about to fire below) already
+    // handles showing /overlay for an app the user is already looking at.
+    // That's true for the instant this fires, but a resumed Activity has no
+    // OS-level protection against the user then backgrounding it (Home,
+    // Recents, switching apps) -- confirmed on a real device that a break
+    // started while the app was open was trivially escapable that way, since
+    // nothing else ever got shown to catch it. See triggerBreakScreen's doc
+    // comment (NativeBridgePlugin.kt) for the full history. Not a
     // full-screen-intent/auto-launch: Android only honors that over a
     // *locked* screen, and the point here is specifically to interrupt
     // active phone use, not to wake an idle/locked one -- see
@@ -137,6 +144,7 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
         // safe for every push after this one.
         crate::native_overlay::refresh_task_list_cache(app).await;
         crate::native_overlay::refresh_not_to_do_list_cache(app).await;
+        crate::native_overlay::refresh_missed_slot_count(app).await;
         let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
         let persistent = crate::BREAK_NOTIFICATION_PERSISTENT_ENABLED.load(Ordering::SeqCst);
         let state_json = overlay_state_json_for_android(app);
@@ -167,6 +175,10 @@ fn overlay_state_json_for_android(app: &AppHandle) -> serde_json::Value {
         map.insert(
             "not_to_do_content".into(),
             serde_json::json!(state.not_to_do_list.lock().unwrap().clone()),
+        );
+        map.insert(
+            "missed_slot_count".into(),
+            serde_json::json!(*state.missed_slot_count.lock().unwrap()),
         );
     }
     json
@@ -214,11 +226,31 @@ pub fn try_close_if_unlocked(app: &AppHandle) {
 /// unconditionally: if the user already resolved it (reflection/breakit) or
 /// it rolled into a newer slot via the merge path before the timer elapsed,
 /// this is a no-op rather than closing the wrong occurrence.
+///
+/// On Android this polls in `ANDROID_POLL_INTERVAL` chunks against a
+/// wall-clock deadline instead of a single `tokio::time::sleep` for the full
+/// grace period -- the same `CLOCK_MONOTONIC`-across-suspend gap documented
+/// on that constant (`lib.rs`) applies here too: a single multi-minute sleep
+/// spanning a real Doze/deep-suspend period wouldn't fire until that much
+/// *monotonic* (CPU-awake) time had actually elapsed, which could leave this
+/// grace-period force-close -- the one thing Settings' "the screen
+/// auto-closes on its own after the timeout below" hint promises -- stalled
+/// indefinitely while the phone sits idle, same as the main scheduler loop
+/// was before that fix.
 pub fn schedule_auto_close(app: &AppHandle, slot_start: String) {
     let minutes = crate::OVERLAY_AUTO_CLOSE_MINUTES.load(std::sync::atomic::Ordering::SeqCst);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        #[cfg(target_os = "android")]
+        {
+            let deadline = chrono::Local::now() + chrono::Duration::minutes(minutes as i64);
+            while chrono::Local::now() < deadline {
+                tokio::time::sleep(crate::ANDROID_POLL_INTERVAL).await;
+            }
+        }
+        #[cfg(not(target_os = "android"))]
         tokio::time::sleep(std::time::Duration::from_secs(minutes as u64 * 60)).await;
+
         let still_pending = {
             let state = app.state::<AppState>();
             let overlay = state.overlay.lock().unwrap();

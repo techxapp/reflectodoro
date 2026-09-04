@@ -17,6 +17,15 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- setAlarmClock (BreakScheduling.kt's scheduleNextAlarm) was assumed
+         exempt from this permission per AOSP docs, but crashed with a
+         SecurityException on a real Android 12 device (HONOR/MagicOS) that
+         enforces it anyway. Declaring it lets canScheduleExactAlarms() and
+         the "Alarms & reminders" grant screen exist for this app at all;
+         scheduleNextAlarm still checks it and falls back to an inexact
+         alarm rather than crashing if it's never granted. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <!-- Backs the native draw-over-other-apps break overlay
          (NativeOverlayManager.kt); a special-access permission granted via
          a one-time Settings toggle, not a runtime dialog. Falls back to a

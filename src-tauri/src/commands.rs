@@ -251,6 +251,45 @@ pub fn request_draw_overlays_permission(app: AppHandle) {
 #[tauri::command]
 pub fn request_draw_overlays_permission() {}
 
+/// Whether the AlarmManager backup (BreakScheduling.kt's scheduleNextAlarm)
+/// can use setAlarmClock's real-exact/foreground-launch-exempt path rather
+/// than its degraded inexact fallback -- surfaced to onboarding/Settings so
+/// it only prompts for a grant that's actually missing.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn can_schedule_exact_alarms(app: AppHandle) -> bool {
+    let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+    match bridge.can_schedule_exact_alarms() {
+        Ok(v) => v.get("value").and_then(|x| x.as_bool()).unwrap_or(false),
+        Err(e) => {
+            log::error!("can_schedule_exact_alarms failed: {e:?}");
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub fn can_schedule_exact_alarms() -> bool {
+    true
+}
+
+/// Opens the system settings screen for the "Alarms & reminders" grant --
+/// there is no in-app runtime-dialog form of this permission. No-op on
+/// desktop.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn request_schedule_exact_alarm_permission(app: AppHandle) {
+    let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+    if let Err(e) = bridge.request_schedule_exact_alarm_permission() {
+        log::error!("request_schedule_exact_alarm_permission failed: {e:?}");
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub fn request_schedule_exact_alarm_permission() {}
+
 /// Mirrors app_setting.break_notification_persistent_enabled -- loaded and
 /// pushed here by the frontend on boot and on every Settings save (see
 /// loadAndSyncBreakNotificationPersistentSetting in db.ts). Android only in

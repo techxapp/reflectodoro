@@ -8,6 +8,7 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
@@ -85,23 +86,26 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
      * doesn't render for any reason (a permission edge case, an OEM
      * quirk blocking WindowManager.addView outright, etc.) -- the user
      * confirmed they want both rather than relying on the overlay alone.
-     * A no-op if the app is already resumed, matching the existing
-     * behavior: the frontend's own overlay://state listener already handles
-     * that case -- except immediately after BreakAlarmReceiver's recovery
-     * auto-launch, where isResumed is already true by the time this runs
-     * even though the user never chose to look at this app (confirmed via
-     * logcat on a real device). MainActivity.recoveryLaunchPending, read and
-     * cleared here, bypasses isResumed for exactly that one call. */
+     *
+     * Unconditional now -- an earlier version skipped both whenever
+     * MainActivity.isResumed was true, on the theory that the frontend's own
+     * overlay://state listener already shows /overlay for an app the user is
+     * already looking at, so nothing else was needed. That's true for the
+     * instant the break starts, but not after: unlike the desktop overlay
+     * window, a resumed Activity has no OS-level protection against Home /
+     * Recents / switching apps at all, so a break that started while the app
+     * happened to be open was trivially escapable the moment the user
+     * background it -- confirmed on a real device (the native overlay never
+     * showed even though "Display over other apps" was granted). The isResumed
+     * check and its one-off MainActivity.recoveryLaunchPending bypass (for the
+     * dead-process recovery relaunch, which hit the identical bug in a
+     * narrower case) are gone along with it -- nothing left to bypass. */
     @Command
     fun triggerBreakScreen(invoke: Invoke) {
-        val bypassResumedGuard = MainActivity.recoveryLaunchPending
-        if (bypassResumedGuard) MainActivity.recoveryLaunchPending = false
-        if (!MainActivity.isResumed || bypassResumedGuard) {
-            val args = invoke.parseArgs(TriggerBreakScreenArgs::class.java)
-            postBreakNotification(activity, args.persistent)
-            if (canDrawOverlaysGranted()) {
-                NativeOverlayManager.show(activity, args.state, overlayChannel)
-            }
+        val args = invoke.parseArgs(TriggerBreakScreenArgs::class.java)
+        postBreakNotification(activity, args.persistent)
+        if (canDrawOverlaysGranted()) {
+            NativeOverlayManager.show(activity, args.state, overlayChannel)
         }
         invoke.resolve(JSObject())
     }
@@ -170,6 +174,32 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
         intent.data = Uri.parse("package:" + activity.packageName)
         activity.startActivity(intent)
+        invoke.resolve(JSObject())
+    }
+
+    /** Whether scheduleNextAlarm (BreakScheduling.kt) can use setAlarmClock's
+     * real-exact/foreground-launch-exempt path rather than its degraded
+     * inexact fallback -- surfaced to onboarding/Settings so it only prompts
+     * for a grant that's actually missing. Always true on API < 31. */
+    @Command
+    fun canScheduleExactAlarms(invoke: Invoke) {
+        val ret = JSObject()
+        ret.put("value", canScheduleExactAlarm(activity))
+        invoke.resolve(ret)
+    }
+
+    /** Deep-links to the system settings screen for the "Alarms & reminders"
+     * grant -- same no-in-app-dialog situation as requestDrawOverlaysPermission.
+     * Requires SCHEDULE_EXACT_ALARM to be declared in the manifest (it is) --
+     * without that declaration this action/screen doesn't exist for the app
+     * at all. */
+    @Command
+    fun requestScheduleExactAlarmPermission(invoke: Invoke) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+            intent.data = Uri.parse("package:" + activity.packageName)
+            activity.startActivity(intent)
+        }
         invoke.resolve(JSObject())
     }
 

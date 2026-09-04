@@ -39,9 +39,12 @@ impl<R: Runtime> AndroidBridge<R> {
         self.0.run_mobile_plugin("stopForegroundService", ())
     }
 
-    /// Brings the break to the user's attention if the app isn't already
-    /// visible (a no-op otherwise, decided on the Kotlin side via
-    /// MainActivity.isResumed) -- called from the Android arm of
+    /// Brings the break to the user's attention -- always, even if the app
+    /// is currently visible: a resumed Activity has no OS-level protection
+    /// against the user backgrounding it a moment later, so this can't be
+    /// skipped just because it happens to be foregrounded right now (see
+    /// NativeBridgePlugin.kt's triggerBreakScreen doc comment for the
+    /// real-device bug that skipping caused). Called from the Android arm of
     /// overlay::spawn_or_update_overlay. Kotlin itself picks the surface:
     /// the native WindowManager overlay (native_overlay.rs/
     /// NativeOverlayManager.kt) when the "display over other apps" permission
@@ -101,6 +104,20 @@ impl<R: Runtime> AndroidBridge<R> {
     /// in-app runtime-dialog form of this permission.
     pub fn request_draw_overlays_permission(&self) -> Result<Value, PluginInvokeError> {
         self.0.run_mobile_plugin("requestDrawOverlaysPermission", ())
+    }
+
+    /// Whether `scheduleNextAlarm` (BreakScheduling.kt) can use
+    /// `setAlarmClock`'s real-exact/foreground-launch-exempt path rather
+    /// than its degraded inexact fallback -- surfaced to onboarding/Settings
+    /// so it only prompts for a grant that's actually missing.
+    pub fn can_schedule_exact_alarms(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("canScheduleExactAlarms", ())
+    }
+
+    /// Deep-links to the system settings screen for the "Alarms & reminders"
+    /// grant -- there is no in-app runtime-dialog form of this permission.
+    pub fn request_schedule_exact_alarm_permission(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("requestScheduleExactAlarmPermission", ())
     }
 
     /// Requests transient audio focus (`AUDIOFOCUS_GAIN_TRANSIENT`) so any

@@ -42,12 +42,6 @@ class BreakAlarmReceiver : BroadcastReceiver() {
       // Confirmed empirically on a real device that a plain exact alarm is
       // NOT exempt: this startActivity() only worked from an idle/Home-
       // screen state before that switch, not over a foreground app.
-      // Set right before the launch, not after: triggerBreakScreen
-      // (NativeBridgePlugin.kt) needs this true by the time Rust's
-      // freshly-booted run_scheduler calls it, which happens moments after
-      // this Activity resumes -- see MainActivity.recoveryLaunchPending's
-      // doc comment for why isResumed alone isn't enough here.
-      MainActivity.recoveryLaunchPending = true
       val launchIntent = Intent(context, MainActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK
       }

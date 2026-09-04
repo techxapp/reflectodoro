@@ -63,6 +63,9 @@
   let overlayGranted = $state(false);
   let overlayChecked = $state(false);
 
+  let exactAlarmGranted = $state(false);
+  let exactAlarmChecked = $state(false);
+
   let includeSettingsInTransfer = $state(true);
 
   let exportStatus = $state<"idle" | "success" | "error">("idle");
@@ -117,15 +120,28 @@
     await invoke("request_draw_overlays_permission");
   }
 
+  async function refreshExactAlarmPermission() {
+    exactAlarmGranted = await invoke<boolean>("can_schedule_exact_alarms");
+    exactAlarmChecked = true;
+  }
+
+  async function openExactAlarmSettings() {
+    await invoke("request_schedule_exact_alarm_permission");
+  }
+
   // Re-checks when the user comes back from the system settings screen --
   // same pattern as onboarding's exact-alarm re-check, needed since that
   // screen's return doesn't reliably resolve any promise here.
   function onOverlayVisibilityChange() {
-    if (document.visibilityState === "visible") void refreshOverlayPermission();
+    if (document.visibilityState === "visible") {
+      void refreshOverlayPermission();
+      void refreshExactAlarmPermission();
+    }
   }
 
   onMount(() => {
     void refreshOverlayPermission();
+    void refreshExactAlarmPermission();
     document.addEventListener("visibilitychange", onOverlayVisibilityChange);
   });
 
@@ -370,6 +386,19 @@
       <p class="hint">
         Recommended. Without it, a break can only reach you via a notification instead of
         appearing directly over whatever else you're doing.
+      </p>
+    {/if}
+
+    {#if isAndroid && exactAlarmChecked}
+      <div class="data-row">
+        <span>Alarms &amp; reminders: {exactAlarmGranted ? "Granted" : "Not granted"}</span>
+        {#if !exactAlarmGranted}
+          <button type="button" onclick={openExactAlarmSettings}>Open settings&hellip;</button>
+        {/if}
+      </div>
+      <p class="hint">
+        Recommended. Without it, the background timer's wake alarm is inexact and can't reliably
+        bring the break screen forward over another app you're actively using.
       </p>
     {/if}
 

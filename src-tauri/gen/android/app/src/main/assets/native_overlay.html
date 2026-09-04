@@ -191,7 +191,7 @@
   <div class="stack">
     <section class="panel">
       <p class="timer" id="timer">--:--</p>
-      <h1>What did I do since your last break?</h1>
+      <h1 id="prompt-heading">What did I do in the last 1 pomodoro?</h1>
 
       <textarea id="reflection" rows="5" placeholder="Write a couple of bullet points or type 'Skip' to skip it."></textarea>
       <div id="reflection-actions">
@@ -237,6 +237,7 @@
       dev_mode: false,
       task_list_content: "",
       not_to_do_content: "",
+      missed_slot_count: 1,
     };
     var pendingBreakitCheck = false;
     var taskSaveTimer = null;
@@ -249,6 +250,7 @@
     var breakitPendingEl = document.getElementById("breakit-pending");
     var breakitMatchedEl = document.getElementById("breakit-matched");
     var challengeEl = document.getElementById("challenge");
+    var promptHeadingEl = document.getElementById("prompt-heading");
     var clockEl = document.getElementById("clock");
     var timerEl = document.getElementById("timer");
     var devCloseEl = document.getElementById("dev-close");
@@ -278,6 +280,10 @@
     function render() {
       devCloseEl.style.display = state.dev_mode ? "" : "none";
       challengeEl.textContent = state.breakit_challenge;
+
+      var missedCount = state.missed_slot_count || 1;
+      var promptLabel = missedCount > 1 ? "last " + missedCount + " pomodoros" : "last 1 pomodoro";
+      promptHeadingEl.textContent = "What did I do in the " + promptLabel + "?";
 
       reflectionEl.disabled = state.reflection_entered;
       submitBtn.style.display = state.reflection_entered ? "none" : "";

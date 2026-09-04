@@ -129,6 +129,25 @@ async fn find_missed_slots(pool: &SqlitePool, current_slot_iso: &str) -> Vec<Str
     slots
 }
 
+/// Refreshes `AppState.missed_slot_count` from the same `find_missed_slots`
+/// walk `handle_submit_reflection` will run at actual submit time -- called
+/// right before the overlay is triggered (`overlay::spawn_or_update_overlay`'s
+/// Android arm), mirroring `refresh_task_list_cache` above. Computing it here
+/// rather than at submit time is what lets the heading show "last N
+/// pomodoros" before the user has typed anything.
+pub async fn refresh_missed_slot_count(app: &AppHandle) {
+    let current_slot_start = {
+        let state = app.state::<AppState>();
+        let overlay = state.overlay.lock().unwrap();
+        overlay.current_slot_start.clone()
+    };
+    if current_slot_start.is_empty() {
+        return;
+    }
+    let count = find_missed_slots(pool(app).await, &current_slot_start).await.len();
+    *app.state::<AppState>().missed_slot_count.lock().unwrap() = count;
+}
+
 async fn save_reflection(pool: &SqlitePool, covered_slots: &[String], text: &str) {
     let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     for slot in covered_slots {

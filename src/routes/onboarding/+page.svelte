@@ -7,6 +7,8 @@
 
   let overlayGranted = $state(false);
   let overlayChecked = $state(false);
+  let exactAlarmGranted = $state(false);
+  let exactAlarmChecked = $state(false);
   let notificationGranted = $state(false);
   let notificationChecked = $state(false);
   let finishing = $state(false);
@@ -14,6 +16,8 @@
   async function refreshStatus() {
     overlayGranted = await invoke<boolean>("can_draw_overlays");
     overlayChecked = true;
+    exactAlarmGranted = await invoke<boolean>("can_schedule_exact_alarms");
+    exactAlarmChecked = true;
     notificationGranted = await isPermissionGranted();
     notificationChecked = true;
   }
@@ -23,6 +27,11 @@
     // screen instead. Re-checked via the visibilitychange listener below
     // once the user comes back.
     await invoke("request_draw_overlays_permission");
+  }
+
+  async function grantExactAlarm() {
+    // Same no-in-app-dialog situation as grantOverlay above.
+    await invoke("request_schedule_exact_alarm_permission");
   }
 
   async function grantNotifications() {
@@ -78,6 +87,25 @@
       </p>
       {#if !overlayGranted}
         <button type="button" onclick={grantOverlay}>Open settings&hellip;</button>
+      {/if}
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Alarms &amp; reminders</h2>
+        {#if exactAlarmChecked}
+          <span class="status" class:ok={exactAlarmGranted}>
+            {exactAlarmGranted ? "Granted" : "Not granted"}
+          </span>
+        {/if}
+      </div>
+      <p class="hint">
+        Recommended. Lets the background timer reliably wake and bring the break screen forward
+        at the right minute, even over another app you're actively using. Without it, the timer
+        still runs, just less precisely in the background.
+      </p>
+      {#if !exactAlarmGranted}
+        <button type="button" onclick={grantExactAlarm}>Open settings&hellip;</button>
       {/if}
     </section>
 

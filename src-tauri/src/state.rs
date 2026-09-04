@@ -89,6 +89,17 @@ pub struct AppState {
     /// Cache of today's `not_to_do_list.content`, Android only -- mirrors
     /// `task_list` above for the same reason (see its doc comment).
     pub not_to_do_list: Mutex<String>,
+    /// Count of break slots the *next* submitted reflection will cover
+    /// (`native_overlay::find_missed_slots(...).len()`), Android only --
+    /// mirrors `task_list` above: the native WindowManager overlay has no DB
+    /// access of its own, so this is computed once in Rust right before the
+    /// overlay is shown (`native_overlay::refresh_missed_slot_count`) and read
+    /// synchronously from `overlay_state_json_for_android` so the heading can
+    /// say "last N pomodoros" the same way the regular /overlay page's
+    /// `findMissedSlots`-derived `promptLabel` does. Safe to compute once per
+    /// slot: nothing else writes to `reflection` while this overlay -- which
+    /// captures all touch input -- is the only thing on screen.
+    pub missed_slot_count: Mutex<usize>,
 }
 
 impl AppState {
@@ -101,6 +112,7 @@ impl AppState {
             dev_mode,
             task_list: Mutex::new(String::new()),
             not_to_do_list: Mutex::new(String::new()),
+            missed_slot_count: Mutex::new(1),
         }
     }
 }

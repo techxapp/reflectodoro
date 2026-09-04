@@ -21,27 +21,6 @@ class MainActivity : TauriActivity() {
      * BreakScheduling.kt's postWakeNotification. */
     var schedulerStarted = false
 
-    /** True while this Activity is actually visible/resumed. Read by
-     * NativeBridgePlugin.triggerBreakScreen to decide whether a break
-     * notification is needed at all -- if the app is already in front of
-     * the user, the frontend's own overlay://state listener already
-     * handles showing /overlay, and a full-screen-intent notification on
-     * top of an already-visible app would just be redundant/jarring. */
-    var isResumed = false
-
-    /** Set by BreakAlarmReceiver immediately before it force-launches
-     * MainActivity to recover from a dead process (see its onReceive doc
-     * comment). By the time Rust's freshly-booted run_scheduler gets around
-     * to calling triggerBreakScreen, that forced launch has almost always
-     * already flipped isResumed true -- confirmed via logcat on a real
-     * device: triggerBreakScreen ran, but isResumed being true made it skip
-     * both the notification and the native overlay, even though the user
-     * was never actually looking at this app (they were still in whatever
-     * they'd backgrounded us for). NativeBridgePlugin.triggerBreakScreen
-     * reads and clears this to bypass isResumed for exactly that one call,
-     * then goes back to trusting isResumed normally for every later break. */
-    var recoveryLaunchPending = false
-
     /** Set once in onWebViewCreate below and read by
      * NativeOverlayManager.hide() to force a redraw of the main window's
      * WebView right as the native break overlay (a separate
@@ -71,16 +50,6 @@ class MainActivity : TauriActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     schedulerStarted = true
-  }
-
-  override fun onResume() {
-    super.onResume()
-    isResumed = true
-  }
-
-  override fun onPause() {
-    super.onPause()
-    isResumed = false
   }
 
   /** enableEdgeToEdge() above (WindowCompat.setDecorFitsSystemWindows(false))

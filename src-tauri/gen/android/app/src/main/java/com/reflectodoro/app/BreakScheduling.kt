@@ -62,22 +62,50 @@ fun scheduleNextAlarm(context: Context) {
   // launch restrictions (10+) don't exempt broadcasts from a regular exact
   // alarm. setAlarmClock is the one AlarmManager entry point the OS does
   // exempt, because it's the same primitive real alarm-clock apps use to
-  // interrupt whatever's currently on screen. It's also exempt from the API
-  // 31+ SCHEDULE_EXACT_ALARM grant entirely (that requirement was never
-  // extended to alarm-clock-style scheduling), which is why
-  // canScheduleExactAlarms/requestExactAlarmPermission no longer exist
-  // anywhere in this app. Side effect, not a bug: Android shows a small
-  // persistent alarm-clock icon in the status bar (tapping it opens
-  // MainActivity via showIntent below) for as long as Pomodoro mode is on --
-  // the same thing any real alarm-clock app shows, and a deliberate,
-  // confirmed tradeoff for the reliability gain.
+  // interrupt whatever's currently on screen. Side effect, not a bug:
+  // Android shows a small persistent alarm-clock icon in the status bar
+  // (tapping it opens MainActivity via showIntent below) for as long as
+  // Pomodoro mode is on -- the same thing any real alarm-clock app shows,
+  // and a deliberate, confirmed tradeoff for the reliability gain.
+  //
+  // AOSP docs claim setAlarmClock is exempt from the API 31+
+  // SCHEDULE_EXACT_ALARM permission entirely -- disproven on a real Android
+  // 12 device (HONOR/MagicOS), which threw a SecurityException here despite
+  // that documented exemption (see AndroidManifest.xml's comment on this
+  // permission). So this is now actually gated on canScheduleExactAlarms(),
+  // with a plain inexact alarm as the fallback when it's not granted --
+  // degraded (loses the over-another-app foreground exemption above, and
+  // the self-heal only fires on whatever schedule the OS batches inexact
+  // alarms to), but this is only ever a backup to run_scheduler's
+  // in-process scheduling anyway (see this file's header comment), so
+  // degrading beats crashing the whole process.
   val showIntent = PendingIntent.getActivity(
     context,
     3,
     Intent(context, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK },
     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
   )
-  alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(next.timeInMillis, showIntent), pendingIntent)
+  if (canScheduleExactAlarm(context)) {
+    try {
+      alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(next.timeInMillis, showIntent), pendingIntent)
+      return
+    } catch (e: SecurityException) {
+      // Belt-and-suspenders: canScheduleExactAlarms() said yes but the OEM
+      // enforced it anyway. Fall through to the inexact path below rather
+      // than crash.
+    }
+  }
+  alarmManager.set(AlarmManager.RTC_WAKEUP, next.timeInMillis, pendingIntent)
+}
+
+/** True on API < 31, where this permission doesn't exist at all. On API 31+,
+ * reflects whether the user has granted "Alarms & reminders" for this app --
+ * see requestScheduleExactAlarmPermission (NativeBridgePlugin.kt) for the
+ * only way to prompt for it (no in-app runtime-dialog form exists). */
+fun canScheduleExactAlarm(context: Context): Boolean {
+  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+  val alarmManager = context.getSystemService(AlarmManager::class.java)
+  return alarmManager.canScheduleExactAlarms()
 }
 
 /** Only shown when BreakAlarmReceiver fires in a process where no Activity
@@ -163,9 +191,11 @@ private fun ensureWakeChannel(context: Context) {
  * service).
  *
  * Deliberately generic content (not the breakit challenge text): by the
- * time the user actually sees this, /overlay has already rendered the real
- * thing underneath. Skipped entirely if the Activity is already resumed --
- * see MainActivity.isResumed -- since there's nothing to bring forward. */
+ * time the user actually sees this, /overlay or the native overlay has
+ * already rendered the real thing underneath. Called unconditionally by
+ * triggerBreakScreen (NativeBridgePlugin.kt), even for an app that's already
+ * in the foreground -- see that command's doc comment for why a resumed-only
+ * skip is wrong here. */
 fun postBreakNotification(context: Context, persistent: Boolean) {
   if (persistent && BreakSchedulerService.isRunning()) {
     BreakSchedulerService.enterBreakMode()
