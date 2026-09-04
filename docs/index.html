@@ -574,7 +574,7 @@
     <h2 class="section-title">Development journey</h2>
     <div class="timeline">
       <div class="timeline-week">
-        <p class="timeline-date">Week of Aug 31 &ndash; Sep 2, 2026</p>
+        <p class="timeline-date">Week of Aug 31 &ndash; Sep 6, 2026</p>
         <ul class="timeline-items">
           <li>Made Most Important Tasks and reflection entries editable, and added a "Not to do" list</li>
           <li>Pre-filled the overlay reflection field with the last saved entry, and excluded visually ambiguous characters from breakit challenges</li>
@@ -582,6 +582,9 @@
           <li>Fixed a white-screen overlay after monitor power-off/on on Windows, an Android early-break issue, and Linux AppImage repackaging re-bundling stripped Wayland libs</li>
           <li>Signed Android release builds, switched CI off debug APKs, fixed the Android CI build, and shrank the release APK size</li>
           <li>Updated the Android download link and docs site</li>
+          <li>Fixed the break overlay not auto-closing on Android once time was up, by having the scheduler poll wall-clock time instead of relying on a suspend-unaware monotonic timer</li>
+          <li>Fixed the main window not reopening from the tray after being closed on Windows</li>
+          <li>Added a Discord community link and a "How does it help you" benefits section to the landing page</li>
         </ul>
       </div>
       <div class="timeline-week">
