@@ -15,6 +15,19 @@ pub struct OverlayState {
     /// should also cover the previous (unresolved) slot is decided entirely by
     /// the frontend against the DB when it mounts/updates — see overlay page.
     pub current_slot_start: String,
+    /// How many times `report_reflection_save_failure` (commands.rs) has been
+    /// called for *this* overlay occurrence -- i.e. how many times the
+    /// frontend's own `saveReflection`/`mark_reflection_entered` call has
+    /// failed in a row while trying to submit. Tracked here (server-side,
+    /// reset whenever the overlay opens/closes) rather than as pure frontend
+    /// component state so the desktop escape hatch it gates
+    /// (`close_after_save_failure`) can't be reached by a single direct
+    /// `invoke` call -- it requires having actually reported failures first.
+    /// Not a real security boundary against a devtools-capable user (nothing
+    /// here is), just a deliberately higher bar than "one line of JS" for
+    /// what's meant to be a last-resort escape from a DB that won't accept
+    /// writes, not a casual way to skip reflecting -- see overlay page.
+    pub save_failure_count: u32,
 }
 
 impl OverlayState {
@@ -26,6 +39,7 @@ impl OverlayState {
             breakit_matched: false,
             time_expired: false,
             current_slot_start: String::new(),
+            save_failure_count: 0,
         }
     }
 
@@ -37,6 +51,7 @@ impl OverlayState {
             breakit_matched: false,
             time_expired: false,
             current_slot_start: slot_start_iso,
+            save_failure_count: 0,
         }
     }
 

@@ -104,6 +104,18 @@ pub(crate) static OVERLAY_AUTO_CLOSE_MINUTES: AtomicU32 = AtomicU32::new(5);
 /// is driven by a monotonic clock that itself stops ticking across a real
 /// suspend, so comparing wall-clock `Local::now()` against the wake instant
 /// computed *before* sleeping is what actually detects the gap.
+///
+/// This threshold only gates *re-evaluating* the current phase (resetting
+/// `last_phase` so a resume landing back inside the same nominal phase still
+/// gets checked) -- it does NOT by itself decide whether to force-close an
+/// unresolved overlay. That's `OVERLAY_AUTO_CLOSE_MINUTES` (the user's own
+/// configured grace period), same bar `schedule_auto_close` applies to an
+/// ordinary (non-suspend) unresolved break. An earlier version force-closed
+/// on any gap over this flat 120s, on every platform, regardless of the
+/// user's configured grace period -- so closing a laptop lid for 3 minutes
+/// during a break force-closed the overlay immediately, while just sitting
+/// at the desk not responding bought the user the full grace period (5 min
+/// default) before the same thing happened. See `run_scheduler`.
 const SUSPEND_GAP_THRESHOLD: StdDuration = StdDuration::from_secs(120);
 
 /// Android only: caps how long a single scheduler sleep waits before
@@ -149,13 +161,26 @@ async fn run_scheduler(app: AppHandle) {
                     "scheduler: woke {}s later than expected -- treating as a suspend/hibernate gap",
                     overslept.as_secs()
                 );
-                overlay::force_close_stale_overlay(&app);
+                // Only force-close an overlay the user never got a chance to
+                // respond to once the suspend itself ran longer than their
+                // own configured grace period -- the same bar
+                // `schedule_auto_close` applies to an ordinary (non-suspend)
+                // unresolved break. See `SUSPEND_GAP_THRESHOLD`'s doc comment
+                // for why a flat 120s bar here was unfair relative to that.
+                let grace = StdDuration::from_secs(
+                    OVERLAY_AUTO_CLOSE_MINUTES.load(Ordering::SeqCst) as u64 * 60,
+                );
+                if overslept > grace {
+                    overlay::force_close_stale_overlay(&app);
+                }
                 // Forces the transition check below to run regardless of
                 // whether `now`'s phase nominally matches what it was before
                 // the gap -- otherwise a resume that happens to land back
                 // inside a Break window would see last_phase == Break, skip
-                // the transition entirely, and leave the (now-closed)
-                // overlay unreplaced for the rest of that live break.
+                // the transition entirely, and leave a stale overlay (if it
+                // wasn't force-closed above) unreplaced for the rest of that
+                // live break. Reset unconditionally on any suspend-sized gap,
+                // independent of the grace-period check above.
                 last_phase = None;
             }
         }
@@ -178,16 +203,49 @@ async fn run_scheduler(app: AppHandle) {
                             (cfg.length, cfg.include_special)
                         };
                         let challenge = breakit::generate_challenge(len, include_special);
+                        let this_slot_start = slot.start_iso();
                         {
                             let state = app.state::<AppState>();
                             let mut ov = state.overlay.lock().unwrap();
-                            *ov = OverlayState::opened_for(slot.start_iso(), challenge);
+                            *ov = OverlayState::opened_for(this_slot_start.clone(), challenge);
                         }
                         // Guards against the startup webview blank-page race
                         // when the app boots straight into a live break --
                         // a no-op once the app's been running a while.
                         overlay::wait_for_webview_warmup(&app).await;
-                        overlay::spawn_or_update_overlay(&app).await;
+
+                        // State was committed as `open` *before* the await
+                        // above, and `spawn_or_update_overlay` doesn't re-read
+                        // it -- it only checks whether the window happens to
+                        // be visible. If something closed the overlay during
+                        // the (up to ~6s) warmup wait -- the F12 kill switch,
+                        // dev force-close, or a suspend-gap force-close, all
+                        // of which reset state to `OverlayState::closed()` --
+                        // showing the window here anyway would present a
+                        // fullscreen, close-blocked, Win-key-suppressing
+                        // window while `OverlayState.open == false`: the
+                        // breakit challenge is `""` so that exit is gone, the
+                        // Work-transition's `if ov.open` check does nothing so
+                        // `time_expired` never gets set, and `slot_start`
+                        // being empty means no auto-close ever gets armed --
+                        // stuck until the next real phase transition, ~25
+                        // minutes later. Re-checking here and skipping the
+                        // show if something else already won that race lets
+                        // that close stick, matching how every other
+                        // force-close in this app already behaves (see
+                        // schedule_auto_close's own slot-equality guard).
+                        let still_current = {
+                            let state = app.state::<AppState>();
+                            let ov = state.overlay.lock().unwrap();
+                            ov.open && ov.current_slot_start == this_slot_start
+                        };
+                        if still_current {
+                            overlay::spawn_or_update_overlay(&app).await;
+                        } else {
+                            log::info!(
+                                "scheduler: overlay for slot {this_slot_start} was closed during webview warmup -- skipping stale show"
+                            );
+                        }
                     }
                     Phase::Work => {
                         let slot_start = {
@@ -213,12 +271,26 @@ async fn run_scheduler(app: AppHandle) {
             last_phase = Some(slot.phase);
         }
 
-        let sleep_dur = (slot.end - Local::now())
+        let now_before_sleep = Local::now();
+        let sleep_dur = (slot.end - now_before_sleep)
             .to_std()
             .unwrap_or(StdDuration::from_secs(1));
-        expected_wake = Some(slot.end);
         #[cfg(target_os = "android")]
         let sleep_dur = sleep_dur.min(ANDROID_POLL_INTERVAL);
+        // `expected_wake` has to reflect *this specific sleep's* actual
+        // duration, not the raw slot boundary (`slot.end`) -- on Android,
+        // where `sleep_dur` gets capped to `ANDROID_POLL_INTERVAL` (20s)
+        // above, setting it to the uncapped `slot.end` (up to ~25 minutes
+        // away) meant `now - expected_wake` at the top of the next iteration
+        // was always deeply negative (the next iteration wakes ~20s later,
+        // nowhere near that distant boundary), so `.to_std()` always failed,
+        // `unwrap_or(ZERO)` always won, and the suspend-gap branch above
+        // could never fire on Android at all -- it was checking against a
+        // wake time this loop was never actually trying to hit.
+        expected_wake = Some(
+            now_before_sleep
+                + chrono::Duration::from_std(sleep_dur).unwrap_or(chrono::Duration::seconds(1)),
+        );
         tokio::time::sleep(sleep_dur).await;
     }
 }
@@ -407,6 +479,8 @@ pub fn run() {
             commands::current_os,
             commands::sync_breakit_config,
             commands::mark_reflection_entered,
+            commands::report_reflection_save_failure,
+            commands::close_after_save_failure,
             commands::breakit_attempt,
             commands::dev_force_close,
             commands::get_enabled,

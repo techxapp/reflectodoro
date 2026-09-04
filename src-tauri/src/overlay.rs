@@ -288,18 +288,44 @@ pub fn force_close_stale_overlay(app: &AppHandle) {
 /// instead (desktop doesn't need this: hiding the overlay window already
 /// reveals "main" underneath without any frontend action).
 pub fn close_overlay(app: &AppHandle) {
-    let (slot_start, had_reflection) = {
+    let (was_open, slot_start, had_reflection) = {
         let state = app.state::<AppState>();
         let mut overlay = state.overlay.lock().unwrap();
+        let was_open = overlay.open;
         let slot_start = overlay.current_slot_start.clone();
         let had_reflection = overlay.reflection_entered;
         *overlay = OverlayState::closed();
-        (slot_start, had_reflection)
+        (was_open, slot_start, had_reflection)
     };
 
-    if crate::MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst) {
-        crate::media::resume_playing_sessions(app);
+    // Nothing was actually showing -- e.g. the F12 kill switch pressed
+    // outside a break, or a second close racing an already-closed overlay
+    // (safe either way: `had_reflection` already reads false on that second
+    // call, since the first call's `OverlayState::closed()` above already
+    // reset it, so this was never going to double-open a check-in). The
+    // reassignment to `OverlayState::closed()` above is a harmless no-op in
+    // that case, but there's no reason to also run the teardown below --
+    // resuming media that was never paused for this call, uninstalling a
+    // hook that was never installed, cancelling a notification that was
+    // never posted -- so skip it.
+    if !was_open {
+        return;
     }
+
+    // Unconditional -- NOT gated on MEDIA_PAUSE_ON_BREAK_ENABLED's *current*
+    // value, unlike the pause call at open time. The setting could have been
+    // toggled off between open and close (reachable on Android via the
+    // notification-fallback path, which leaves the app usable during a
+    // break); gating the release on the flag's value *now* rather than
+    // whether a pause was actually attempted *then* left Android's
+    // AUDIOFOCUS_GAIN_TRANSIENT request outstanding in that case -- every
+    // other app on the device stays ducked indefinitely, since nothing else
+    // ever abandons that request. Safe to call unconditionally on every
+    // platform: Windows/macOS/Linux's `resume_playing_sessions` is already a
+    // no-op regardless of this flag (see media.rs), and Android's own doc
+    // comment already describes this as a harmless no-op when nothing was
+    // ever granted.
+    crate::media::resume_playing_sessions(app);
 
     #[cfg(desktop)]
     {

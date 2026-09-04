@@ -31,3 +31,6 @@ vite.config.ts.timestamp-*
 # .github/workflows/release.yml's android job).
 *.keystore
 *.jks
+
+# Local-only audit/planning notes -- not meant for the repo history.
+/.claude/plans/audit-findings.md

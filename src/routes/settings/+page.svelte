@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
   import {
     getBreakitSettings,
     saveBreakitSettings,
@@ -66,6 +67,9 @@
   let exactAlarmGranted = $state(false);
   let exactAlarmChecked = $state(false);
 
+  let notificationGranted = $state(false);
+  let notificationChecked = $state(false);
+
   let includeSettingsInTransfer = $state(true);
 
   let exportStatus = $state<"idle" | "success" | "error">("idle");
@@ -129,6 +133,24 @@
     await invoke("request_schedule_exact_alarm_permission");
   }
 
+  /** POST_NOTIFICATIONS -- unlike the overlay/exact-alarm grants above, this
+   * one has a real in-app runtime dialog (no Settings deep link needed), via
+   * tauri-plugin-notification's own JS API. Without it (denied by default on
+   * API 33+, and nothing else in the app ever requests it), the break
+   * notification and the process-recovery wake notification both silently
+   * do nothing. Onboarding already offers this grant on first run; this is
+   * the same check/request pair so a user who skipped it there, or revoked
+   * it later, has a way back in without reinstalling. */
+  async function refreshNotificationPermission() {
+    notificationGranted = await isPermissionGranted();
+    notificationChecked = true;
+  }
+
+  async function grantNotifications() {
+    await requestPermission();
+    await refreshNotificationPermission();
+  }
+
   // Re-checks when the user comes back from the system settings screen --
   // same pattern as onboarding's exact-alarm re-check, needed since that
   // screen's return doesn't reliably resolve any promise here.
@@ -136,12 +158,14 @@
     if (document.visibilityState === "visible") {
       void refreshOverlayPermission();
       void refreshExactAlarmPermission();
+      void refreshNotificationPermission();
     }
   }
 
   onMount(() => {
     void refreshOverlayPermission();
     void refreshExactAlarmPermission();
+    void refreshNotificationPermission();
     document.addEventListener("visibilitychange", onOverlayVisibilityChange);
   });
 
@@ -399,6 +423,20 @@
       <p class="hint">
         Recommended. Without it, the background timer's wake alarm is inexact and can't reliably
         bring the break screen forward over another app you're actively using.
+      </p>
+    {/if}
+
+    {#if isAndroid && notificationChecked}
+      <div class="data-row">
+        <span>Notifications: {notificationGranted ? "Granted" : "Not granted"}</span>
+        {#if !notificationGranted}
+          <button type="button" onclick={grantNotifications}>Enable notifications</button>
+        {/if}
+      </div>
+      <p class="hint">
+        Without it, the background timer's running indicator and the break reminder notification
+        both silently don't show. Onboarding offers this grant on first run; this is here for
+        anyone who skipped it or revoked it since.
       </p>
     {/if}
 

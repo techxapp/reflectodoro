@@ -7,7 +7,26 @@ let dbPromise: ReturnType<typeof Database.load> | null = null;
 
 function getDb() {
   if (!dbPromise) {
-    dbPromise = Database.load("sqlite:pomodoro.db");
+    const attempt = Database.load("sqlite:pomodoro.db");
+    dbPromise = attempt;
+    // If this load rejects (most commonly: a pending migration can't apply,
+    // e.g. an app_setting row from a cross-version import colliding with a
+    // migration seeding the same key -- see db.rs's migration comments),
+    // clear the cache instead of leaving a rejected promise memoized here
+    // forever. Without this, EVERY function in this module throws for the
+    // rest of the process's life after the first failure, with the app
+    // never even retrying -- turning one transient or fixable failure into
+    // a permanent, silent brick. Clearing it means the next call at least
+    // gets a fresh attempt (and a fresh, catchable rejection) instead of the
+    // same cached one forever.
+    //
+    // Only clear the cache if `attempt` is still the current `dbPromise` --
+    // a later call to `getDb()` could already have replaced it with a fresh
+    // attempt of its own by the time this rejection handler runs, and this
+    // must not clobber that newer attempt out from under it.
+    attempt.catch(() => {
+      if (dbPromise === attempt) dbPromise = null;
+    });
   }
   return dbPromise;
 }
@@ -232,7 +251,7 @@ export async function getWellnessSummaryForDate(dateStamp: string): Promise<Well
             SUM(drank_water) as drank_water,
             SUM(washroom) as washroom
      FROM wellness_check
-     WHERE date(created_at) = $1`,
+     WHERE date(created_at, 'localtime') = $1`,
     [dateStamp],
   );
   const row = rows[0];
@@ -245,11 +264,25 @@ export async function getWellnessSummaryForDate(dateStamp: string): Promise<Well
   };
 }
 
+/**
+ * `date(created_at, 'localtime')`, not bare `date(created_at)`: `created_at`
+ * is stored as a UTC ISO string (`new Date().toISOString()`, see
+ * saveReflection), so a bare `date()` returns its *UTC* calendar date --
+ * while `dateStamp` here always comes from `localDateStamp()`, the *local*
+ * calendar date. In UTC+5:30, every reflection written before 05:30 local
+ * was filed under the previous day; in UTC-5, every evening reflection
+ * jumped to tomorrow. `getWellnessSummaryForDate` above had the identical
+ * bug -- its wellness tiles were computed over a different row set than the
+ * reflections shown beside them on the same Entries page. SQLite's
+ * `'localtime'` modifier delegates to the platform's own DST-aware
+ * timezone conversion (`localtime_r`/equivalent), so this stays correct
+ * across DST transitions too, not just a fixed current-offset shift.
+ */
 export async function getReflectionsForDate(dateStamp: string): Promise<ReflectionRow[]> {
   const db = await getDb();
   return db.select<ReflectionRow[]>(
     `SELECT id, created_at, slot_start_at, text FROM reflection
-     WHERE date(created_at) = $1
+     WHERE date(created_at, 'localtime') = $1
      ORDER BY slot_start_at ASC`,
     [dateStamp],
   );
@@ -381,6 +414,25 @@ export async function listenForNotToDoListUpdates(
   });
 }
 
+/**
+ * `Number(value)` with a fallback for anything that doesn't parse to a
+ * finite number -- guards every numeric app_setting read below against a
+ * corrupt stored value (a hand-edited DB, a future bug, or an imported
+ * export whose app_setting.value didn't survive round-tripping as a clean
+ * number). Without this, a single bad row turns into `NaN` flowing into a
+ * `u32`-typed Tauri command (sync_breakit_config, set_overlay_auto_close_minutes),
+ * which serde rejects -- and since none of the onMount chains that call
+ * these are wrapped in try/catch, that rejection silently aborts the rest
+ * of that chain (dead listeners, a frozen clock on the Timer page). Falling
+ * back to a sane default here is what keeps a bad value from ever reaching
+ * that invoke call in the first place.
+ */
+function numberOr(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export interface BreakitSettings {
   length: number;
   includeSpecial: boolean;
@@ -395,7 +447,7 @@ export async function getBreakitSettings(): Promise<BreakitSettings> {
   );
   const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
   return {
-    length: Number(map.breakit_length ?? DEFAULT_BREAKIT.length),
+    length: numberOr(map.breakit_length, DEFAULT_BREAKIT.length),
     includeSpecial: (map.breakit_include_special ?? "false") === "true",
   };
 }
@@ -621,7 +673,7 @@ export async function getOverlayAutoCloseMinutes(): Promise<number> {
     `SELECT value FROM app_setting WHERE key = $1`,
     [OVERLAY_AUTO_CLOSE_KEY],
   );
-  return Number(rows[0]?.value ?? DEFAULT_OVERLAY_AUTO_CLOSE_MINUTES);
+  return numberOr(rows[0]?.value, DEFAULT_OVERLAY_AUTO_CLOSE_MINUTES);
 }
 
 export async function saveOverlayAutoCloseMinutes(minutes: number): Promise<void> {
@@ -661,7 +713,7 @@ export async function getCheckinAutoCloseMinutes(): Promise<number> {
     `SELECT value FROM app_setting WHERE key = $1`,
     [CHECKIN_AUTO_CLOSE_KEY],
   );
-  return Number(rows[0]?.value ?? DEFAULT_CHECKIN_AUTO_CLOSE_MINUTES);
+  return numberOr(rows[0]?.value, DEFAULT_CHECKIN_AUTO_CLOSE_MINUTES);
 }
 
 export async function saveCheckinAutoCloseMinutes(minutes: number): Promise<void> {
@@ -795,6 +847,26 @@ function assertNumber(value: unknown, label: string): number {
 }
 
 /**
+ * Throws if `values` (a table's worth of one PRIMARY KEY column) contains a
+ * duplicate. Import applies rows one `INSERT` at a time -- see importData's
+ * doc comment for why this plugin can't make that loop a single atomic
+ * transaction -- so a duplicate key reaching that loop hits SQLite's
+ * PRIMARY KEY constraint only after any preceding `DELETE`s (replace mode)
+ * have already committed. Rejecting the whole file up front, before
+ * importData touches the database at all, is what actually prevents that
+ * data loss.
+ */
+function assertNoDuplicates(values: (string | number)[], table: string, column: string): void {
+  const seen = new Set<string | number>();
+  for (const value of values) {
+    if (seen.has(value)) {
+      throw new Error(`data.${table} has more than one row with ${column} = ${JSON.stringify(value)}`);
+    }
+    seen.add(value);
+  }
+}
+
+/**
  * JSON.parse plus a full shape/version check, throwing a specific Error on
  * the first problem found. Deliberately never returns a partially-valid
  * object -- importData() is only ever called with output from here, so the
@@ -840,6 +912,13 @@ export function parseAndValidateExport(raw: string): ExportPayload {
       text: assertString(r.text, `reflection[${i}].text`),
     };
   });
+  // A duplicate `id` here would silently overwrite an earlier row's entry
+  // in importData's idMap (file id -> newly-inserted id), misrouting
+  // whichever reflection lost the collision's wellness_check rows onto a
+  // different reflection entirely. exportAllData can never produce this
+  // (SQLite's own AUTOINCREMENT PK is unique by construction) -- this only
+  // guards a hand-edited or corrupted file.
+  assertNoDuplicates(reflection.map((r) => r.id), "reflection", "id");
 
   const taskListRaw = data.daily_task_list;
   if (!Array.isArray(taskListRaw)) throw new Error("data.daily_task_list is missing or not an array");
@@ -852,6 +931,14 @@ export function parseAndValidateExport(raw: string): ExportPayload {
       updated_at: assertString(r.updated_at, `daily_task_list[${i}].updated_at`),
     };
   });
+  // Duplicate `date` rows would hit daily_task_list's PRIMARY KEY partway
+  // through importData's replace-mode insert loop -- by then the DELETEs
+  // have already committed (see importData's own comment on why this
+  // plugin can't wrap the whole operation in one real transaction), so a
+  // late constraint violation here means the user's existing task lists are
+  // already gone. Catching it before any DELETE runs at all is the only
+  // way this validator can actually prevent that loss.
+  assertNoDuplicates(daily_task_list.map((r) => r.date), "daily_task_list", "date");
 
   const notToDoListRaw = data.not_to_do_list;
   if (!Array.isArray(notToDoListRaw)) throw new Error("data.not_to_do_list is missing or not an array");
@@ -864,6 +951,7 @@ export function parseAndValidateExport(raw: string): ExportPayload {
       updated_at: assertString(r.updated_at, `not_to_do_list[${i}].updated_at`),
     };
   });
+  assertNoDuplicates(not_to_do_list.map((r) => r.date), "not_to_do_list", "date");
 
   const settingRaw = data.app_setting;
   if (!Array.isArray(settingRaw)) throw new Error("data.app_setting is missing or not an array");
@@ -875,6 +963,22 @@ export function parseAndValidateExport(raw: string): ExportPayload {
       value: assertString(r.value, `app_setting[${i}].value`),
     };
   });
+  assertNoDuplicates(app_setting.map((r) => r.key), "app_setting", "key");
+  // Defense-in-depth alongside numberOr's read-side fallback (db.ts's numeric
+  // getters): reject a non-numeric value for a key this app treats as
+  // numeric right here, rather than letting it into the DB where it would
+  // only surface later as a silently-defaulted read or (before numberOr) a
+  // NaN reaching a u32-typed Tauri command.
+  const NUMERIC_SETTING_KEYS = new Set([
+    "breakit_length",
+    "overlay_auto_close_minutes",
+    "checkin_auto_close_minutes",
+  ]);
+  for (const row of app_setting) {
+    if (NUMERIC_SETTING_KEYS.has(row.key) && !Number.isFinite(Number(row.value))) {
+      throw new Error(`data.app_setting has a non-numeric value for "${row.key}": ${JSON.stringify(row.value)}`);
+    }
+  }
 
   const reflectionIds = new Set(reflection.map((r) => r.id));
   const wellnessRaw = data.wellness_check;
@@ -928,12 +1032,32 @@ export interface ImportResult {
  * copied verbatim -- otherwise it would silently point at the wrong
  * reflection or a row that no longer exists.
  *
- * Not wrapped in a SQL transaction: tauri-plugin-sql's `execute()` pulls an
- * arbitrary connection from its pool per call, so a BEGIN/COMMIT spanning
- * multiple execute() calls wouldn't provide real atomicity here. Safety
- * instead comes from parseAndValidateExport() fully validating the payload
- * (including that every wellness_check.reflection_id resolves within the
- * same file) before this function is ever called.
+ * Not wrapped in a SQL transaction: confirmed against tauri-plugin-sql
+ * 2.4.0's source (its `execute` Tauri command calls `pool.execute(query)`
+ * directly, once per invocation, with no session/connection pinned across
+ * calls) that a `BEGIN`/`COMMIT` sent as separate `db.execute()` calls
+ * is not guaranteed to land on the same underlying SQLite connection --
+ * the pool defaults to up to 10 connections, so it can't be relied on to
+ * serialize onto one. A transaction wrapper here would be a false promise
+ * of atomicity, not a real one.
+ *
+ * Safety instead comes from parseAndValidateExport() fully validating the
+ * payload before this function is ever called -- including that every
+ * wellness_check.reflection_id resolves within the same file, and that
+ * daily_task_list/not_to_do_list/app_setting each have no duplicate
+ * PRIMARY KEY. That duplicate-key check specifically is what stands between
+ * "replace" mode and its worst failure mode: without it, a malformed file
+ * could pass validation, let the DELETEs below commit, and only then hit a
+ * PRIMARY KEY collision partway through the INSERT loop -- by which point
+ * the user's previous data is already gone and the thrown error (caught and
+ * shown by Settings' runImport) can't bring it back. Validating hard enough
+ * that a well-formed file can never reach that constraint violation is the
+ * only atomicity substitute this plugin's API leaves available from here.
+ * A different class of failure -- a genuine I/O error, or the DB locked by
+ * a concurrent write from another window -- can still interrupt this loop
+ * mid-way and isn't something front-end validation can rule out; that
+ * residual risk is real and unresolved, not something this function papers
+ * over.
  */
 export async function importData(
   payload: ExportPayload,

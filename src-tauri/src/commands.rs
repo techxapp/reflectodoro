@@ -53,6 +53,50 @@ pub fn mark_reflection_entered(app: AppHandle, state: State<AppState>) -> Overla
     state.overlay.lock().unwrap().clone()
 }
 
+/// How many consecutive `report_reflection_save_failure` calls (for this one
+/// overlay occurrence) it takes before `close_after_save_failure` actually
+/// closes the overlay.
+const SAVE_FAILURE_ESCAPE_THRESHOLD: u32 = 2;
+
+/// Called by the overlay page each time its own reflection-save attempt
+/// (saveReflection, or the follow-up mark_reflection_entered invoke) rejects
+/// -- i.e. the DB genuinely won't accept the write. Returns the new count so
+/// the frontend knows when to reveal `close_after_save_failure`'s escape
+/// hatch, without the frontend itself being the one deciding when that
+/// threshold is met -- see `OverlayState::save_failure_count`'s doc comment
+/// for why that server-side counter matters. A no-op (returns 0) if the
+/// overlay isn't even open -- nothing to report a failure against.
+#[tauri::command]
+pub fn report_reflection_save_failure(state: State<AppState>) -> u32 {
+    let mut overlay = state.overlay.lock().unwrap();
+    if !overlay.open {
+        return 0;
+    }
+    overlay.save_failure_count += 1;
+    overlay.save_failure_count
+}
+
+/// Last-resort escape from the break overlay when the reflection genuinely
+/// can't be saved (a locked or full DB, most concretely) -- gated on at
+/// least `SAVE_FAILURE_ESCAPE_THRESHOLD` reported failures for *this*
+/// occurrence (see `report_reflection_save_failure`), not callable outright:
+/// a break the user simply doesn't want to do can't be talked out of by
+/// invoking this once, only by first hitting real, repeated save failures.
+/// Bypasses the unlock formula the same way the F12 kill switch and dev
+/// force-close already do -- no reflection is recorded for this slot, so no
+/// wellness check-in opens either (see `close_overlay`).
+#[tauri::command]
+pub fn close_after_save_failure(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    let count = state.overlay.lock().unwrap().save_failure_count;
+    if count < SAVE_FAILURE_ESCAPE_THRESHOLD {
+        return Err(format!(
+            "not enough reported save failures yet ({count}/{SAVE_FAILURE_ESCAPE_THRESHOLD})"
+        ));
+    }
+    overlay::close_overlay(&app);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn breakit_attempt(app: AppHandle, state: State<AppState>, input: String) -> OverlayState {
     {

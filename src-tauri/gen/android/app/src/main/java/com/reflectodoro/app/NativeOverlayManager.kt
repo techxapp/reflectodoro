@@ -38,6 +38,25 @@ object NativeOverlayManager {
   private var windowManager: WindowManager? = null
   private var keyboardLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
 
+  // Last-resort self-removal if this overlay is still showing this long
+  // after it was created -- comfortably longer than the 5-minute nominal
+  // break plus any reasonable OVERLAY_AUTO_CLOSE_MINUTES grace period, so it
+  // should never fire under normal operation. It exists specifically for
+  // the case initNativeOverlayChannel (native_overlay.rs::install_channel)
+  // never actually completed -- overlayChannel stays null in
+  // NativeBridgePlugin, every OverlayJsBridge method becomes a silent no-op
+  // (channel?.sendObject just does nothing), and this WindowManager overlay
+  // -- by design the one surface in this app with no user-facing dismiss
+  // affordance at all -- would otherwise sit there forever with no way out
+  // short of Force Stop. Deliberately does NOT go through the Rust channel
+  // to trigger this: that channel being broken is exactly the failure mode
+  // being guarded against, so routing the watchdog through it too would be
+  // undermined by the same root cause. Rust's own OverlayState never learns
+  // this happened (no reflection was submitted, so no check-in opens
+  // either) -- same downstream behavior as every other force-close in this
+  // app when nothing was actually submitted.
+  private const val WATCHDOG_TIMEOUT_MS = 20 * 60 * 1000L
+
   fun isShowing(): Boolean = webView != null
 
   @SuppressLint("SetJavaScriptEnabled")
@@ -85,9 +104,38 @@ object NativeOverlayManager {
       params.gravity = Gravity.TOP or Gravity.START
       params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
 
-      wm.addView(wv, params)
+      // Wrapped in try/catch: addView can throw (most concretely
+      // WindowManager.BadTokenException, but also possible OEM-specific
+      // rejections of a TYPE_APPLICATION_OVERLAY add even with the
+      // permission granted) if the "display over other apps" permission is
+      // revoked in the moment between triggerBreakScreen's own check and
+      // this posted runnable actually running, or if the OEM blocks overlay
+      // creation outright. Uncaught, that throw happens on the main thread
+      // (this whole block runs inside mainHandler.post) and crashes the
+      // entire app -- which would also take down the break notification
+      // triggerBreakScreen already posted alongside this, since a dead
+      // process can't do anything with a still-visible notification. Simply
+      // not crashing is what actually lets that notification serve as the
+      // real fallback it's meant to be.
+      try {
+        wm.addView(wv, params)
+      } catch (e: Exception) {
+        wv.destroy()
+        return@post
+      }
       webView = wv
       windowManager = wm
+
+      // See WATCHDOG_TIMEOUT_MS's doc comment. Identity-checked against `wv`
+      // when it fires so a callback scheduled for an overlay that already
+      // closed normally -- and whose slot may since have been replaced by a
+      // later break's own overlay -- can't tear down that unrelated
+      // instance.
+      mainHandler.postDelayed({
+        if (webView === wv) {
+          hide()
+        }
+      }, WATCHDOG_TIMEOUT_MS)
 
       // softInputMode's ADJUST_RESIZE/ADJUST_PAN only auto-applies to
       // "application" window types -- TYPE_APPLICATION_OVERLAY is a system
@@ -135,10 +183,30 @@ object NativeOverlayManager {
         if (wv.viewTreeObserver.isAlive) wv.viewTreeObserver.removeOnGlobalLayoutListener(it)
       }
       keyboardLayoutListener = null
-      wm.removeView(wv)
-      wv.destroy()
-      webView = null
-      windowManager = null
+      // removeView can throw IllegalArgumentException if the view was
+      // already detached some other way (e.g. the window was torn down
+      // out-of-band by the OS). Clearing `webView`/`windowManager` in a
+      // `finally` -- not just after a successful removeView -- is what
+      // matters here: an uncaught throw used to abort this function before
+      // that reset ran, leaving `webView` non-null forever. isShowing()
+      // would then permanently report true, every future hide() call would
+      // keep hitting the same throwing removeView, every future
+      // update()/pushState() would keep pushing state into a WebView no
+      // longer attached to anything, and cancelBreakNotification would keep
+      // re-launching MainActivity on every subsequent break -- effectively
+      // bricking the native overlay for the rest of the process's life over
+      // a single stale-view removal.
+      try {
+        wm.removeView(wv)
+      } catch (e: Exception) {
+        // Nothing else to do -- the view is presumably already gone from
+        // the window manager's perspective, which is the state we want
+        // `webView`/`windowManager` to reflect below regardless.
+      } finally {
+        wv.destroy()
+        webView = null
+        windowManager = null
+      }
       // The main Activity's WebView was fully covered by this overlay for
       // the whole break -- on some devices (Honor/MediaTek confirmed) the
       // region it covered can be left showing a stale composited frame

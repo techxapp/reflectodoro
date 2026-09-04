@@ -34,6 +34,16 @@
   let notToDoContent = $state("");
   let missedSlots = $state<string[]>([]);
   let nowTick = $state(Date.now());
+  // Submit-path state: guards against a double-submit racing two INSERTs for
+  // the same slot, surfaces a save failure instead of leaving the user
+  // staring at a button that silently did nothing, and -- once the DB has
+  // genuinely failed to accept the write more than once in a row -- offers a
+  // way out of what would otherwise be a fullscreen, close-blocked,
+  // Win-key-suppressing window with no working exit. See submitReflection.
+  let isSubmitting = $state(false);
+  let saveError = $state<string | null>(null);
+  let showEscapeHatch = $state(false);
+  let closingAfterFailure = $state(false);
   // How much of the viewport the on-screen keyboard is currently covering.
   // Android's WebView doesn't reliably auto-scroll a focused input above the
   // keyboard the way native views do, so this pads the scroll area instead
@@ -85,9 +95,58 @@
 
   async function submitReflection(e: Event) {
     e.preventDefault();
-    if (!reflectionText.trim() || !overlayState) return;
-    await saveReflection(missedSlots, reflectionText.trim());
-    overlayState = await invoke<OverlayState>("mark_reflection_entered");
+    if (!reflectionText.trim() || !overlayState || isSubmitting) return;
+    // `missedSlots` starts empty and is only populated once refreshCoverage()
+    // resolves (it always ends up containing at least the current slot) --
+    // submitting before that finishes, or while a dropped overlay://state
+    // event has left `current_slot_start` unset, would call saveReflection
+    // with an empty array: zero rows written, yet the caller below still
+    // flips reflection_entered as if it had succeeded.
+    if (missedSlots.length === 0) return;
+
+    isSubmitting = true;
+    try {
+      await saveReflection(missedSlots, reflectionText.trim());
+      overlayState = await invoke<OverlayState>("mark_reflection_entered");
+      saveError = null;
+      showEscapeHatch = false;
+    } catch (err) {
+      // Surfaced instead of left as an unhandled rejection: without this,
+      // clicking Submit on a save failure did nothing visible at all, and
+      // the only ways out of the (fullscreen, close-blocked, Win-key-
+      // suppressing) overlay were the F12 kill switch -- which Settings
+      // lets users disable -- or Task Manager. reflection_entered is never
+      // set here, so the overlay correctly stays locked; the button stays
+      // enabled so the user can just retry once whatever's wrong (a locked
+      // DB, usually) clears up.
+      saveError = err instanceof Error ? err.message : String(err);
+      try {
+        const failureCount = await invoke<number>("report_reflection_save_failure");
+        showEscapeHatch = failureCount >= 2;
+      } catch {
+        // If even reporting the failure fails (Rust command invocation
+        // itself is down, not just the DB write), fall back to offering the
+        // escape hatch straight away rather than leaving no way out at all.
+        showEscapeHatch = true;
+      }
+    } finally {
+      isSubmitting = false;
+    }
+  }
+
+  /** Last resort once retrying has genuinely not worked (server-gated -- see
+   * commands.rs's close_after_save_failure, which refuses this until at
+   * least two reported failures). Closes the break screen without a saved
+   * reflection, same as the F12 kill switch or dev force-close. */
+  async function closeAfterSaveFailure() {
+    closingAfterFailure = true;
+    try {
+      await invoke("close_after_save_failure");
+    } catch (err) {
+      saveError = err instanceof Error ? err.message : String(err);
+    } finally {
+      closingAfterFailure = false;
+    }
   }
 
   function updateKeyboardInset() {
@@ -156,21 +215,38 @@
 
   onMount(async () => {
     devMode = await invoke<boolean>("is_dev_mode");
+
+    // Listener attached BEFORE the fallback invoke below -- mirrors
+    // checkin/+page.svelte's fix for the identical race (see its own
+    // comment, citing best_practices.md race #2): Rust commits overlay
+    // state before spawn_or_update_overlay ever emits "overlay://state" (see
+    // overlay.rs), so once this listener is live, an emit that already fired
+    // is still covered by the fallback invoke's read of that same, by-then
+    // current state just below. The overlay used to attach this listener
+    // *after* the fallback invoke, which left a gap an emit could land in
+    // and be silently dropped -- concretely reachable during the ~6s webview
+    // warmup a break entered while the app was booting waits through (see
+    // wait_for_webview_warmup, lib.rs), leaving overlayState stuck at
+    // OverlayState::closed()'s defaults (breakit_challenge: "", open:
+    // false) with no breakit exit available for the rest of that break.
+    unlisten = await listen<OverlayState>("overlay://state", async (event) => {
+      const prevSlot = overlayState?.current_slot_start;
+      overlayState = event.payload;
+      if (overlayState.current_slot_start !== prevSlot) {
+        breakitInput = "";
+        saveError = null;
+        showEscapeHatch = false;
+        await refreshCoverage();
+        await prefillReflection();
+      }
+    });
+
     overlayState = await invoke<OverlayState>("get_overlay_state");
     await refreshCoverage();
     await prefillReflection();
     taskListContent = await getTaskList(localDateStamp());
     notToDoContent = await getNotToDoList(localDateStamp());
 
-    unlisten = await listen<OverlayState>("overlay://state", async (event) => {
-      const prevSlot = overlayState?.current_slot_start;
-      overlayState = event.payload;
-      if (overlayState.current_slot_start !== prevSlot) {
-        breakitInput = "";
-        await refreshCoverage();
-        await prefillReflection();
-      }
-    });
     unlistenTasks = await listenForTaskListUpdates((content) => {
       taskListContent = content;
     });
@@ -221,7 +297,18 @@
           {#if hasPrefill}
             <p class="hint">Pre-filled with your last entry -- edit it or write a new one.</p>
           {/if}
-          <button type="submit" disabled={!reflectionText.trim()}>Submit reflection</button>
+          <button type="submit" disabled={!reflectionText.trim() || isSubmitting}>
+            {isSubmitting ? "Saving..." : "Submit reflection"}
+          </button>
+          {#if saveError}
+            <p class="hint error">Couldn't save: {saveError}. You can try again.</p>
+            {#if showEscapeHatch}
+              <button type="button" class="escape-hatch" disabled={closingAfterFailure} onclick={closeAfterSaveFailure}>
+                {closingAfterFailure ? "Closing..." : "Close break screen anyway"}
+              </button>
+              <p class="hint">Saving keeps failing, so this closes the break screen without recording a reflection.</p>
+            {/if}
+          {/if}
         {/if}
       </form>
 
@@ -439,6 +526,21 @@
 
   .hint.ok {
     color: #8fd19e;
+  }
+
+  .hint.error {
+    color: #f2a3a3;
+    opacity: 1;
+  }
+
+  .escape-hatch {
+    margin-top: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .escape-hatch:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.16);
   }
 
   .challenge {

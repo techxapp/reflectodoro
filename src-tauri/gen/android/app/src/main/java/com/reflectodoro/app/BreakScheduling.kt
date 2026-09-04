@@ -36,16 +36,38 @@ private fun nextBoundaryMinute(minute: Int): Int = when {
  * chain going. */
 fun scheduleNextAlarm(context: Context) {
   val now = Calendar.getInstance()
-  val boundary = nextBoundaryMinute(now.get(Calendar.MINUTE))
+  val currentMinute = now.get(Calendar.MINUTE)
+  val boundary = nextBoundaryMinute(currentMinute)
   val next = now.clone() as Calendar
   next.set(Calendar.SECOND, 0)
   next.set(Calendar.MILLISECOND, 0)
-  if (boundary == 60) {
-    next.set(Calendar.MINUTE, 0)
-    next.add(Calendar.HOUR_OF_DAY, 1)
-  } else {
-    next.set(Calendar.MINUTE, boundary)
-  }
+  // `.add(MINUTE, delta)`, not `.set(MINUTE, boundary)`: `add` walks forward
+  // by a real elapsed duration from `next`'s already-unambiguous instant
+  // (cloned from `now`, which is grounded in System.currentTimeMillis() and
+  // so can't itself be ambiguous), correctly accounting for any DST
+  // transition crossed along the way -- the same reason the boundary-60
+  // case used `.add(HOUR_OF_DAY, 1)` instead of `.set(MINUTE,
+  // 0)`+`.add(HOUR_OF_DAY, 1)`'s old two-step form; `add` rolls over into
+  // the next hour on its own, so one line now covers both cases.
+  //
+  // `.set(MINUTE, boundary)` was the DST hazard it replaces: on a fall-back
+  // day, the local wall-clock hour containing `boundary` occurs twice (e.g.
+  // America/New_York's 01:00-01:59 on 2026-11-01), and `.set()` has no way
+  // to say which occurrence is meant -- the resolution for that case is
+  // unspecified by the Calendar contract and left to the implementation.
+  // (Empirically, on a standard JVM Calendar, ambiguous local times resolve
+  // to the *standard*-time occurrence, which for this codebase's own
+  // boundary selection -- always >= the current minute -- never actually
+  // produced a past timestamp in testing; Android's own Calendar
+  // implementation isn't guaranteed to match that behavior, and nothing
+  // about it is documented, so it wasn't a safe thing to depend on either
+  // way.) `.add()` sidesteps the question entirely by never asking "what
+  // instant does this ambiguous wall-clock reading correspond to" in the
+  // first place -- it just walks forward a known-real duration from an
+  // already-unambiguous instant, so there's no resolution left to depend on.
+  // Mirrors the same class of bug fixed in
+  // grid::slot_for (src-tauri/src/grid.rs) on the Rust side.
+  next.add(Calendar.MINUTE, boundary - currentMinute)
 
   val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
   val pendingIntent = PendingIntent.getBroadcast(

@@ -40,7 +40,16 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.reflectodoro"
-        android:usesCleartextTraffic="${usesCleartextTraffic}">
+        android:usesCleartextTraffic="${usesCleartextTraffic}"
+        android:allowBackup="false">
+        <!-- allowBackup=false: without it, the platform default is true, and
+             pomodoro.db (every reflection ever written, plus wellness_check
+             rows and the not to do list) would be swept into Android Auto
+             Backup, uploaded to the user's Google Drive, and silently
+             restored onto any device signed into that account or included in
+             a device to device transfer. Nothing else this app does sends
+             user data anywhere; this app's data should stay exactly that
+             local. -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"

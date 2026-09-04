@@ -92,7 +92,22 @@ class BreakSchedulerService : Service() {
    * can still prevent it regardless of what the app does here. */
   override fun onTaskRemoved(rootIntent: Intent?) {
     super.onTaskRemoved(rootIntent)
-    startForegroundService(Intent(applicationContext, BreakSchedulerService::class.java))
+    // Try/catch: onTaskRemoved fires with the app already in a background
+    // state, and API 31+'s background-foreground-service-start restrictions
+    // can reject this restart attempt the same way they can reject
+    // BreakAlarmReceiver's (see that file's own doc comment for the exact
+    // exemption story) -- a Recents-swipe is a routine, frequent user action,
+    // so letting that throw uncaught here would crash the app on nearly
+    // every swipe-away on an affected device. Nothing else to fall back to
+    // here (unlike BreakAlarmReceiver, this isn't the Doze-survival backup
+    // path, just the immediate self-revival attempt) -- worst case, the
+    // process stays dead until the next AlarmManager-triggered ping, same as
+    // if this whole restart attempt had simply been skipped.
+    try {
+      startForegroundService(Intent(applicationContext, BreakSchedulerService::class.java))
+    } catch (e: Exception) {
+      // Nothing else this call site can do -- see comment above.
+    }
   }
 
   private fun setBreakMode(breakMode: Boolean) {

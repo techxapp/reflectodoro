@@ -17,15 +17,14 @@ mod windows_impl {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Once;
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
-    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LWIN, VK_MENU, VK_RWIN, VK_TAB};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LWIN, VK_RWIN, VK_TAB};
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
-        MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN, LLKHF_ALTDOWN,
         KBDLLHOOKSTRUCT,
     };
 
     static ACTIVE: AtomicBool = AtomicBool::new(false);
-    static ALT_DOWN: AtomicBool = AtomicBool::new(false);
     static THREAD_STARTED: Once = Once::new();
 
     unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -34,18 +33,23 @@ mod windows_impl {
             let vk = kb.vkCode;
             let msg = wparam.0 as u32;
             let is_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
-            let is_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
-
-            if vk == VK_MENU.0 as u32 {
-                if is_down {
-                    ALT_DOWN.store(true, Ordering::SeqCst);
-                } else if is_up {
-                    ALT_DOWN.store(false, Ordering::SeqCst);
-                }
-            }
 
             if is_down {
-                let alt_tab = vk == VK_TAB.0 as u32 && ALT_DOWN.load(Ordering::SeqCst);
+                // Alt+Tab arrives as a WM_SYSKEYDOWN for VK_TAB with the
+                // LLKHF_ALTDOWN bit set in `flags` -- not as a separate
+                // VK_MENU keydown to track state for. `WH_KEYBOARD_LL` only
+                // ever reports the side-specific `VK_LMENU`/`VK_RMENU` for a
+                // physical Alt press, never the generic `VK_MENU` (0x12) a
+                // previous version of this hook checked for -- so that
+                // branch never matched and Alt+Tab suppression was silently
+                // dead code. Reading the flag directly instead of tracking
+                // per-key up/down state also sidesteps a second, latent bug
+                // that state-tracking approach had: a missed key-up (e.g.
+                // Alt released while focus was elsewhere, or while
+                // suppression was briefly toggled off) would have left Alt
+                // considered "held" into the next break, silently swallowing
+                // a bare Tab and breaking in-overlay field navigation.
+                let alt_tab = vk == VK_TAB.0 as u32 && kb.flags.contains(LLKHF_ALTDOWN);
                 let win_key = vk == VK_LWIN.0 as u32 || vk == VK_RWIN.0 as u32;
                 if alt_tab || win_key {
                     return LRESULT(1);
