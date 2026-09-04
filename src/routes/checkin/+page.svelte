@@ -41,8 +41,14 @@
   let saving = $state(false);
   let error = $state("");
   let excludedLabels = $state<string[]>([]);
+  // Raw (pre-canonicalization) slot string last loaded, so a focus resync
+  // (see onFocusChanged below) can tell "still the same occurrence" from
+  // "backend has moved on to a slot we never actually loaded" without
+  // re-running loadForSlot (and wiping in-progress toggles) on every focus.
+  let lastRawSlot: string | null = null;
 
   let unlistenSlot: UnlistenFn | null = null;
+  let unlistenFocus: UnlistenFn | null = null;
   let autoCloseTimer: ReturnType<typeof setTimeout> | null = null;
 
   function clearAutoCloseTimer() {
@@ -122,6 +128,7 @@
   }
 
   async function loadForSlot(newSlot: string) {
+    lastRawSlot = newSlot;
     // Rust hands us current_slot_start as a local-offset RFC3339 string, but
     // reflection.slot_start_at is always stored canonicalized to UTC (see
     // findMissedSlots in $lib/db) -- without this, the lookup in submit()
@@ -160,10 +167,30 @@
     const initialSlot = await invoke<string | null>("get_checkin_slot");
     void info(`checkin: fallback get_checkin_slot -> ${initialSlot}`);
     if (initialSlot) void loadForSlot(initialSlot);
+
+    // Safety net for a missed `checkin://slot` emit (observed in the wild:
+    // the window was shown/focused by Rust but the frontend never logged
+    // receiving the event, leaving it permanently blank since loadForSlot
+    // never ran). set_focus() is called every time spawn_checkin_window
+    // shows this reused window, so re-checking the backend's slot on every
+    // focus catches that case without depending on the event arriving.
+    // Guarded to no-op when we're already showing that same slot, so it
+    // doesn't reset in-progress toggles on an ordinary refocus.
+    unlistenFocus = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (!focused) return;
+      void (async () => {
+        const backendSlot = await invoke<string | null>("get_checkin_slot");
+        if (backendSlot && (!ready || backendSlot !== lastRawSlot)) {
+          void info(`checkin: focus resync found unloaded slot=${backendSlot}`);
+          await loadForSlot(backendSlot);
+        }
+      })();
+    });
   });
 
   onDestroy(() => {
     unlistenSlot?.();
+    unlistenFocus?.();
     clearAutoCloseTimer();
   });
 

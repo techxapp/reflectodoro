@@ -407,6 +407,14 @@ pub fn open_checkin_for_slot(app: &AppHandle, slot_start_iso: String) {
         let mut slot = state.checkin_slot.lock().unwrap();
         *slot = Some(slot_start_iso.clone());
     }
-    spawn_checkin_window(app);
-    let _ = app.emit("checkin://slot", slot_start_iso);
+    // Same startup blank-page race documented on WEBVIEW_WARMUP -- the break
+    // overlay already guards its first show with this, but a break ending
+    // (and so a check-in opening) within the warmup window of app start is
+    // just as possible for this window and it had no guard at all.
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        wait_for_webview_warmup(&app).await;
+        spawn_checkin_window(&app);
+        let _ = app.emit("checkin://slot", slot_start_iso);
+    });
 }
