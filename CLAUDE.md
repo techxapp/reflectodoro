@@ -19,6 +19,8 @@ This file drifts from the code easily — several sections have gone stale befor
 
 Skip noise: "Bump version to X.Y.Z" commits and `Merge branch ...` commits are deliberately excluded — don't add them. Keep each week to a handful of merged bullets (roughly 4-8), grouped by theme (e.g. "Android release: ...", "Fixed X, Y, and Z") rather than one bullet per commit — the existing weeks in the file are the pattern to match.
 
+Curate for a public/marketing audience, not a commit log: prioritize what a prospective user would notice (new features, user-facing fixes, platform/support changes). Condense purely internal work (CI/security hardening, code audits, refactors with no user-visible effect) into at most one summarizing bullet per week rather than enumerating each fix. If covering everything that landed in a week would need more than ~8 bullets, that's a signal to cut to the highlights, not to expand past the cap.
+
 ## Stack
 
 - **Shell**: Tauri 2.0 (Rust backend, `src-tauri/`)

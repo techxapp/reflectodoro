@@ -5,6 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Reflectodoro</title>
   <meta name="description" content="A Pomodoro app that forces a short reflection at the end of every break, enforced by a hard-to-dismiss break screen." />
+  <link rel="icon" href="favicon.ico" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Reflectodoro" />
+  <meta property="og:description" content="A Pomodoro app that forces a short reflection at the end of every break, enforced by a hard-to-dismiss break screen." />
+  <meta property="og:image" content="https://reflectodoro.droplee.com/screenshots/SS3.png" />
+  <meta property="og:url" content="https://reflectodoro.droplee.com/" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Reflectodoro" />
+  <meta name="twitter:description" content="A Pomodoro app that forces a short reflection at the end of every break, enforced by a hard-to-dismiss break screen." />
+  <meta name="twitter:image" content="https://reflectodoro.droplee.com/screenshots/SS3.png" />
   <style>
     :root {
       --bg: #0f1115;
@@ -37,9 +47,9 @@
       line-height: 1.5;
     }
     .wrap {
-      max-width: 760px;
+      max-width: 1000px;
       margin: 0 auto;
-      padding: 96px 24px 64px;
+      padding: 96px 32px 64px;
     }
     .eyebrow {
       display: inline-block;
@@ -134,8 +144,8 @@
     }
     .features {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
       margin-bottom: 56px;
     }
     .card {
@@ -158,9 +168,85 @@
       margin: 0 0 20px;
       letter-spacing: -0.01em;
     }
+    .benefit-toggle {
+      margin-top: 10px;
+      text-align: center;
+      font-size: 20px;
+      color: var(--accent);
+      opacity: 1;
+      transition: transform 0.2s ease;
+    }
+    .card:hover .benefit-toggle,
+    .card:focus-within .benefit-toggle,
+    .card.expanded .benefit-toggle {
+      transform: translateY(2px) rotate(180deg);
+    }
+    .benefit-extra {
+      margin-top: 0;
+      padding-top: 0;
+      border-top: 0 solid var(--border);
+      max-height: 0;
+      overflow: hidden;
+      opacity: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: max-height 0.3s ease, opacity 0.22s ease, margin-top 0.3s ease, padding-top 0.3s ease, border-top-width 0.3s ease;
+    }
+    .card:hover .benefit-extra,
+    .card:focus-within .benefit-extra,
+    .card.expanded .benefit-extra {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top-width: 1px;
+      max-height: 400px;
+      opacity: 1;
+    }
+    .benefit-card { cursor: pointer; }
+    .benefit-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 9px 11px;
+      transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+    }
+    .benefit-item:hover {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      transform: translateX(2px);
+    }
+    .benefit-icon {
+      flex-shrink: 0;
+      font-size: 14px;
+      line-height: 1.3;
+    }
+    .benefit-item p {
+      margin: 0;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: var(--text-dim);
+    }
+    .benefit-item .tag {
+      display: block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 3px;
+    }
+    .benefit-extra cite {
+      font-style: normal;
+      font-weight: 600;
+      color: var(--text);
+    }
     .carousel {
       position: relative;
-      margin-bottom: 16px;
+      max-width: 700px;
+      margin: 0 auto 16px;
     }
     .carousel-track {
       display: flex;
@@ -282,8 +368,8 @@
     }
     .roadmap {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
       margin-bottom: 56px;
     }
     .roadmap .card {
@@ -365,16 +451,16 @@
     </p>
 
     <div class="cta-row">
-      <a class="btn btn-primary" href="https://github.com/techxapp/reflectodoro/releases/latest">
+      <a class="btn btn-primary" data-platform="windows" href="https://github.com/techxapp/reflectodoro/releases/latest">
         Download for Windows (.exe)
       </a>
-      <a class="btn btn-primary" href="https://github.com/techxapp/reflectodoro/releases/latest">
+      <a class="btn btn-primary" data-platform="macos" href="https://github.com/techxapp/reflectodoro/releases/latest">
         Download for macOS (.dmg)
       </a>
-      <a class="btn btn-primary" href="https://github.com/techxapp/reflectodoro/releases/latest">
+      <a class="btn btn-primary" data-platform="linux" href="https://github.com/techxapp/reflectodoro/releases/latest">
         Download for Linux (.AppImage)
       </a>
-      <a class="btn btn-primary" href="https://github.com/techxapp/reflectodoro/releases/latest">
+      <a class="btn btn-primary" data-platform="android" href="https://github.com/techxapp/reflectodoro/releases/latest">
         Download for Android (.apk)
       </a>
       <a class="btn btn-secondary" href="https://github.com/techxapp/reflectodoro">
@@ -447,29 +533,83 @@
 
     <h2 class="section-title">How does it help you ?</h2>
     <div class="features">
-      <div class="card">
+      <div class="card benefit-card" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-1">
         <h3>Health benefit &#129505;</h3>
         <p>Regular, enforced breaks cut down on eye strain, stiffness, and the posture damage of sitting through hours of uninterrupted screen time.</p>
+        <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
+        <div class="benefit-extra" id="benefit-extra-1">
+          <div class="benefit-item">
+            <span class="benefit-icon" aria-hidden="true">&#128214;</span>
+            <p><span class="tag">Book</span>Long, uninterrupted sitting harms the body no matter how much you exercise elsewhere &mdash; what matters is breaking it up regularly (James Levine, <cite>Get Up!</cite>).</p>
+          </div>
+          <div class="benefit-item">
+            <span class="benefit-icon" aria-hidden="true">&#128300;</span>
+            <p><span class="tag">Research</span>Every 20 minutes, look at something 20 feet away for 20 seconds to reduce digital eye strain (American Optometric Association's "20-20-20" rule).</p>
+          </div>
+        </div>
       </div>
-      <div class="card">
+      <div class="card benefit-card" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-2">
         <h3>Mental refresh &#127807;</h3>
         <p>Stepping away on a fixed clock &mdash; not "just one more thing" &mdash; keeps focus fatigue from building up across the day.</p>
+        <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
+        <div class="benefit-extra" id="benefit-extra-2">
+          <div class="benefit-item">
+            <span class="benefit-icon" aria-hidden="true">&#128214;</span>
+            <p><span class="tag">Book</span>Deliberate, scheduled rest is what makes deep, sustained focus possible &mdash; not productivity's enemy, but its precondition (Alex Soojung-Kim Pang, <cite>Rest</cite>).</p>
+          </div>
+          <div class="benefit-item">
+            <span class="benefit-icon" aria-hidden="true">&#128300;</span>
+            <p><span class="tag">Research</span>The most productive users work in focused ~52-minute bursts, then break for ~17 minutes (2014 DeskTime work-tracking analysis).</p>
+          </div>
+        </div>
       </div>
-      <div class="card">
+      <div class="card benefit-card" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-3">
         <h3>Rethink &amp; reset &#128161;</h3>
         <p>Writing what you just did forces a quick gut-check on whether it's still the right next step, instead of coasting on autopilot.</p>
+        <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
+        <div class="benefit-extra" id="benefit-extra-3">
+          <div class="benefit-item">
+            <span class="benefit-icon" aria-hidden="true">&#128214;</span>
+            <p><span class="tag">Book</span>"Reflection-in-action" &mdash; pausing mid-task to think and adjust course &mdash; is what separates deliberate work from autopilot (Donald Sch&ouml;n, <cite>The Reflective Practitioner</cite>).</p>
+          </div>
+        </div>
       </div>
-      <div class="card">
+      <div class="card benefit-card" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-4">
         <h3>Builds a real record &#128220;</h3>
         <p>Every reflection is saved, so you end the day with an honest, timestamped log of what you actually worked on &mdash; not a guess.</p>
+        <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
+        <div class="benefit-extra" id="benefit-extra-4">
+          <div class="benefit-item">
+            <span class="benefit-icon" aria-hidden="true">&#128214;</span>
+            <p><span class="tag">Book</span>A brief, honest daily log beats relying on memory to know where your time actually went (Ryder Carroll, <cite>The Bullet Journal Method</cite>).</p>
+          </div>
+          <div class="benefit-item">
+            <span class="benefit-icon" aria-hidden="true">&#128300;</span>
+            <p><span class="tag">Research</span>Memory of how you spent your day is unreliable unless reconstructed close in time to the events &mdash; a log kept in the moment beats one recalled later (Kahneman, Krueger, Schkade, Schwarz &amp; Stone, <cite>Science</cite>, 2004).</p>
+          </div>
+        </div>
       </div>
-      <div class="card">
+      <div class="card benefit-card" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-5">
         <h3>Fights burnout &#128165;</h3>
-        <p>The wellness check nudges habits (water, eyes, movement) that are easy to skip when you're heads-down, before they add up.</p>
+        <p>The wellness check nudges habits (water, exercise, movement) that are easy to skip when you're heads-down, before they add up.</p>
+        <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
+        <div class="benefit-extra" id="benefit-extra-5">
+          <div class="benefit-item">
+            <span class="benefit-icon" aria-hidden="true">&#128214;</span>
+            <p><span class="tag">Book</span>Stress needs to be actively "completed" through small physical actions, not just removing the stressor, or it accumulates (Emily &amp; Amelia Nagoski, <cite>Burnout</cite>).</p>
+          </div>
+        </div>
       </div>
-      <div class="card">
+      <div class="card benefit-card" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-6">
         <h3>Sharper prioritization &#127919;</h3>
-        <p>The Most Important Tasks list keeps today's real priorities in view, so breaks don't derail you &mdash; they refocus you.</p>
+        <p>The Most Important Tasks list keeps today's real priorities in view, so breaks don't derail you &mdash; they refocus you without mental stress.</p>
+        <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
+        <div class="benefit-extra" id="benefit-extra-6">
+          <div class="benefit-item">
+            <span class="benefit-icon" aria-hidden="true">&#128214;</span>
+            <p><span class="tag">Book</span>Naming your single most important task keeps ordinary busyness from crowding out what actually matters (Gary Keller, <cite>The One Thing</cite>).</p>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -576,18 +716,14 @@
       <div class="timeline-week">
         <p class="timeline-date">Week of Aug 31 &ndash; Sep 6, 2026</p>
         <ul class="timeline-items">
-          <li>Made Most Important Tasks and reflection entries editable, and added a "Not to do" list</li>
-          <li>Pre-filled the overlay reflection field with the last saved entry, and excluded visually ambiguous characters from breakit challenges</li>
-          <li>Moved the media pause-on-break toggle to the main window and hid the force-close shortcut section on Android</li>
-          <li>Fixed a white-screen overlay after monitor power-off/on on Windows, an Android early-break issue, and Linux AppImage repackaging re-bundling stripped Wayland libs</li>
-          <li>Signed Android release builds, switched CI off debug APKs, fixed the Android CI build, and shrank the release APK size</li>
-          <li>Updated the Android download link and docs site</li>
-          <li>Fixed the break overlay not auto-closing on Android once time was up, by having the scheduler poll wall-clock time instead of relying on a suspend-unaware monotonic timer</li>
-          <li>Fixed the main window not reopening from the tray after being closed on Windows</li>
-          <li>Added a Discord community link and a "How does it help you" benefits section to the landing page</li>
-          <li>Full-codebase audit and fix pass: a DST-transition crash in the scheduler (Rust and Android alike), Windows Alt+Tab suppression being dead code, several ways the break overlay could strand itself or leave the user with no way out, reflections/wellness getting misdated across the UTC/local day boundary, and a data-import bug that could wipe history on a bad file</li>
-          <li>Android reliability follow-ups: guarded WindowManager/foreground-service calls that could crash the app, disabled Auto Backup for the reflection database, added a native-overlay watchdog independent of its own Rust channel, fixed the midnight-straddling break slot silently corrupting the next day's task list, and made "Pomodoro mode off" and scheduler liveness survive a reboot correctly</li>
-          <li>Hardened the release CI pipeline (tag-name shell/script injection, unpinned signing-key actions, unscoped write permissions, a silently-unsigned-APK path, and a release window where Linux auto-update was guaranteed to fail) and tightened several settings bounds and UI race conditions (unbounded auto-close timers, a double-submit race on Android, a stale-response race on the Entries page)</li>
+          <li>Shipped signed Android release builds with a real release keystore (no more debug APKs) and shrank the release APK size</li>
+          <li>Made Most Important Tasks and past reflections editable, added a "Not to do" list, and pre-filled the break overlay with your last reflection entry</li>
+          <li>Excluded visually ambiguous characters from the emergency-exit challenge and moved the media pause-on-break toggle to the main window</li>
+          <li>Fixed several reliability bugs: a white-screen overlay after Windows monitor sleep, an Android overlay that didn't auto-close once break time was up, the main window not reopening from the tray, and Linux AppImage packaging dropping Wayland libraries</li>
+          <li>Completed a full-codebase audit, fixing a DST-transition crash, reflections/wellness data misdated across the UTC/local day boundary, a data-import bug that could wipe history, and ways the break overlay could strand users with no way out</li>
+          <li>Hardened Android further: crash-guarded overlay/foreground-service calls, disabled cloud auto-backup of the local database, added an independent overlay watchdog, and fixed task-list/scheduler bugs across midnight and reboot</li>
+          <li>Hardened the release CI pipeline against security issues and fixed several settings/UI race conditions</li>
+          <li>Added a Discord community link and a "How does it help you" section to the landing page</li>
         </ul>
       </div>
       <div class="timeline-week">
@@ -672,6 +808,42 @@
       nextBtn.addEventListener('click', function () {
         var idx = Math.min(slides.length - 1, currentIndex() + 1);
         slides[idx].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+      });
+    })();
+
+    (function () {
+      function toggle(card) {
+        var expanded = card.classList.toggle('expanded');
+        card.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      }
+      Array.prototype.slice.call(document.querySelectorAll('.benefit-card')).forEach(function (card) {
+        card.addEventListener('click', function () { toggle(card); });
+        card.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+            e.preventDefault();
+            toggle(card);
+          }
+        });
+      });
+    })();
+
+    (function () {
+      var ua = navigator.userAgent.toLowerCase();
+      var detected = null;
+      if (/android/.test(ua)) detected = 'android';
+      else if (/mac/.test(ua)) detected = 'macos';
+      else if (/win/.test(ua)) detected = 'windows';
+      else if (/linux/.test(ua)) detected = 'linux';
+
+      if (!detected) return;
+      var buttons = Array.prototype.slice.call(document.querySelectorAll('.btn[data-platform]'));
+      var hasMatch = buttons.some(function (btn) { return btn.getAttribute('data-platform') === detected; });
+      if (!hasMatch) return;
+
+      buttons.forEach(function (btn) {
+        var isMatch = btn.getAttribute('data-platform') === detected;
+        btn.classList.toggle('btn-primary', isMatch);
+        btn.classList.toggle('btn-secondary', !isMatch);
       });
     })();
   </script>
