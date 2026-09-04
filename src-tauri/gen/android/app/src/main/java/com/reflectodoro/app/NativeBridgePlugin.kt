@@ -37,6 +37,11 @@ class InitNativeOverlayChannelArgs {
     lateinit var channel: Channel
 }
 
+@InvokeArg
+class PersistPomodoroEnabledArgs {
+    var enabled: Boolean = true
+}
+
 @TauriPlugin
 class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
     // Held only between pauseAudioFocus and the matching resumeAudioFocus
@@ -56,6 +61,35 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         val ret = JSObject()
         ret.put("pong", true)
         invoke.resolve(ret)
+    }
+
+    /** Called from every iteration of Rust's run_scheduler loop (which is
+     * capped to run at least every ANDROID_POLL_INTERVAL, 20s, regardless of
+     * phase -- see lib.rs). Lets MainActivity.isSchedulerAlive() tell "the
+     * scheduler is actually alive right now" apart from "an Activity merely
+     * existed at some point in this process incarnation". */
+    @Command
+    fun reportSchedulerHeartbeat(invoke: Invoke) {
+        MainActivity.lastSchedulerHeartbeatAt = System.currentTimeMillis()
+        invoke.resolve(JSObject())
+    }
+
+    /** Persists the Pomodoro-mode on/off toggle to SharedPreferences (not
+     * Rust's own app_setting table -- this needs to be readable by
+     * BootCompletedReceiver, which runs before any Tauri/Rust runtime exists
+     * in a freshly booted process) so a reboot can respect a user's
+     * deliberate choice to turn it off, instead of BootCompletedReceiver
+     * always re-arming the scheduler/notifications/alarms on the assumption
+     * that "off" was never persisted anywhere. See
+     * PomodoroEnabledPref.isEnabled (BootCompletedReceiver.kt). */
+    @Command
+    fun persistPomodoroEnabled(invoke: Invoke) {
+        val args = invoke.parseArgs(PersistPomodoroEnabledArgs::class.java)
+        activity.getSharedPreferences(PomodoroEnabledPref.PREFS_NAME, Activity.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PomodoroEnabledPref.PREF_POMODORO_ENABLED, args.enabled)
+            .apply()
+        invoke.resolve(JSObject())
     }
 
     @Command

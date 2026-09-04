@@ -73,6 +73,15 @@ object NativeOverlayManager {
       val wv = WebView(appContext)
       wv.settings.javaScriptEnabled = true
       wv.settings.domStorageEnabled = false
+      // Explicit rather than relying on the platform default: file access
+      // defaults to true through minSdk 29 (it only flipped to false at API
+      // 30) and universal-access-from-file-URLs defaults false everywhere in
+      // range -- this WebView only ever loads one bundled asset and has no
+      // legitimate reason to read arbitrary files or grant file-origin pages
+      // broadened access, so both are pinned rather than left to whichever
+      // default happens to apply on a given device.
+      wv.settings.allowFileAccess = false
+      wv.settings.allowUniversalAccessFromFileURLs = false
       // See MainActivity.onWebViewCreate for why: keeps this WebView's own
       // dark styling (native_overlay.html) as the only source of truth
       // instead of layering the system's automatic darkening on top of it.
@@ -84,6 +93,14 @@ object NativeOverlayManager {
         override fun onPageFinished(view: WebView?, url: String?) {
           pushState(stateJson)
         }
+
+        // Deny-all navigation: this overlay only ever loads the one bundled
+        // asset URL below and never needs to follow a link or redirect
+        // anywhere else. Without this, the JS bridge's own bug or a WebView
+        // rendering quirk on an untrusted page could navigate this
+        // TYPE_APPLICATION_OVERLAY window to arbitrary content instead of
+        // just failing inertly.
+        override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = true
       }
       wv.loadUrl("file:///android_asset/native_overlay.html")
 

@@ -87,13 +87,18 @@ async fn ensure_first_run_marker(pool: &SqlitePool) -> String {
     now
 }
 
-async fn is_slot_covered(pool: &SqlitePool, slot_start_iso: &str) -> bool {
-    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reflection WHERE slot_start_at = ?")
+/// `Err` means the query itself failed (lock contention, most concretely) --
+/// deliberately *not* folded into `Ok(false)` the way this used to via
+/// `unwrap_or(0)`. Conflating "couldn't tell" with "definitely not covered"
+/// is what let a transient DB error make `find_missed_slots` walk the full
+/// 96-slot cap and write 96 duplicate rows (48 hours of fabricated history)
+/// under nothing worse than lock contention.
+async fn is_slot_covered(pool: &SqlitePool, slot_start_iso: &str) -> Result<bool, sqlx::Error> {
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reflection WHERE slot_start_at = ?")
         .bind(slot_start_iso)
         .fetch_one(pool)
-        .await
-        .unwrap_or(0)
-        > 0
+        .await?;
+    Ok(count > 0)
 }
 
 /// Mirrors db.ts's `findMissedSlots` exactly (including its defensive lookback cap).
@@ -104,9 +109,18 @@ async fn find_missed_slots(pool: &SqlitePool, current_slot_iso: &str) -> Vec<Str
         return vec![current_slot_iso.to_string()];
     };
     let first_run_at = ensure_first_run_marker(pool).await;
-    let first_run_ms = DateTime::parse_from_rfc3339(&first_run_at)
-        .map(|d| d.timestamp_millis())
-        .unwrap_or(i64::MIN);
+    // A malformed `first_run_at` and a malformed `prev` used to default in
+    // opposite directions (i64::MIN -- effectively no lower bound at all --
+    // vs. 0, i.e. treat it as before the epoch and stop immediately). Both
+    // now fail the same conservative way: stop extending the cascade rather
+    // than guess a bound in either direction, since guessing wrong here means
+    // either fabricating history (unbounded) or silently dropping a slot that
+    // should have been covered (stopping too early).
+    let Ok(first_run_ms) = DateTime::parse_from_rfc3339(&first_run_at).map(|d| d.timestamp_millis())
+    else {
+        log::error!("find_missed_slots: unparseable first_run_at {first_run_at:?}, stopping cascade at current slot only");
+        return vec![current];
+    };
 
     let mut slots = vec![current.clone()];
     let mut cursor = current;
@@ -114,14 +128,20 @@ async fn find_missed_slots(pool: &SqlitePool, current_slot_iso: &str) -> Vec<Str
         let Some(prev) = previous_slot_iso(&cursor) else {
             break;
         };
-        let prev_ms = DateTime::parse_from_rfc3339(&prev)
-            .map(|d| d.timestamp_millis())
-            .unwrap_or(0);
+        let Ok(prev_ms) = DateTime::parse_from_rfc3339(&prev).map(|d| d.timestamp_millis()) else {
+            log::error!("find_missed_slots: unparseable slot {prev:?}, stopping cascade");
+            break;
+        };
         if prev_ms < first_run_ms {
             break;
         }
-        if is_slot_covered(pool, &prev).await {
-            break;
+        match is_slot_covered(pool, &prev).await {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(e) => {
+                log::error!("find_missed_slots: coverage check for {prev:?} failed: {e:?}, stopping cascade");
+                break;
+            }
         }
         slots.insert(0, prev.clone());
         cursor = prev;
@@ -166,6 +186,16 @@ async fn save_reflection(pool: &SqlitePool, covered_slots: &[String], text: &str
 /// padded) -- `daily_task_list.date` is keyed on this string, so this module
 /// has to match it byte-for-byte or it'll read/write a different row than
 /// the frontend's own `getTaskList`/`saveTaskList` calls do for "today".
+///
+/// Callers that read/write the task list or not-to-do list for the
+/// *currently open overlay* should use `AppState.task_list_date` (see its
+/// doc comment) instead of calling this directly -- this raw "right now"
+/// stamp is only safe to call at the one moment the overlay's date gets
+/// captured (`refresh_task_list_cache`, right before the overlay opens). The
+/// `:55`-`:00` break slot always straddles midnight, so a save that
+/// recomputed this fresh instead of reusing the captured date could silently
+/// upsert into tomorrow's row for a slot that opened, and was shown to the
+/// user as, today's.
 fn local_date_stamp() -> String {
     Local::now().format("%Y-%m-%d").to_string()
 }
@@ -201,10 +231,33 @@ async fn persist_task_list(pool: &SqlitePool, date: &str, content: &str) {
 /// from process start. See the field's doc comment in state.rs for why a
 /// one-shot refresh here is enough (nothing else can write to today's row
 /// while the overlay is up).
+///
+/// Also captures `AppState.task_list_date` -- the one and only place this
+/// process computes "today" for the overlay's task list / not-to-do list,
+/// reused by `refresh_not_to_do_list_cache` and both save handlers below so
+/// a slot that straddles midnight can't have its open and its save disagree
+/// about which day's row they mean. Called first in
+/// `spawn_or_update_overlay`'s Android arm, before
+/// `refresh_not_to_do_list_cache`.
 pub async fn refresh_task_list_cache(app: &AppHandle) {
     let date = local_date_stamp();
     let content = load_task_list(pool(app).await, &date).await;
     *app.state::<AppState>().task_list.lock().unwrap() = content;
+    *app.state::<AppState>().task_list_date.lock().unwrap() = date;
+}
+
+/// The date captured by `refresh_task_list_cache` for the currently open
+/// overlay -- falls back to a fresh `local_date_stamp()` only if nothing has
+/// captured one yet (defensive; not expected in practice since
+/// `refresh_task_list_cache` always runs before the overlay that could
+/// trigger a save even exists).
+fn active_task_list_date(app: &AppHandle) -> String {
+    let captured = app.state::<AppState>().task_list_date.lock().unwrap().clone();
+    if captured.is_empty() {
+        local_date_stamp()
+    } else {
+        captured
+    }
 }
 
 async fn load_not_to_do_list(pool: &SqlitePool, date: &str) -> String {
@@ -231,15 +284,20 @@ async fn persist_not_to_do_list(pool: &SqlitePool, date: &str, content: &str) {
     .await;
 }
 
-/// Mirrors `refresh_task_list_cache` above for `AppState.not_to_do_list`.
+/// Mirrors `refresh_task_list_cache` above for `AppState.not_to_do_list` --
+/// reuses the same captured date rather than calling `local_date_stamp()`
+/// independently, so the two lists can't disagree about which day they're
+/// for. Must run after `refresh_task_list_cache` in the same overlay-open
+/// sequence (see that function's doc comment); `spawn_or_update_overlay`'s
+/// Android arm already calls them in that order.
 pub async fn refresh_not_to_do_list_cache(app: &AppHandle) {
-    let date = local_date_stamp();
+    let date = active_task_list_date(app);
     let content = load_not_to_do_list(pool(app).await, &date).await;
     *app.state::<AppState>().not_to_do_list.lock().unwrap() = content;
 }
 
 async fn handle_save_task_list(app: AppHandle, content: String) {
-    let date = local_date_stamp();
+    let date = active_task_list_date(&app);
     persist_task_list(pool(&app).await, &date, &content).await;
     *app.state::<AppState>().task_list.lock().unwrap() = content.clone();
     // Keeps the main Activity's own webview in sync in the (rare but
@@ -258,7 +316,7 @@ async fn handle_save_task_list(app: AppHandle, content: String) {
 }
 
 async fn handle_save_not_to_do_list(app: AppHandle, content: String) {
-    let date = local_date_stamp();
+    let date = active_task_list_date(&app);
     persist_not_to_do_list(pool(&app).await, &date, &content).await;
     *app.state::<AppState>().not_to_do_list.lock().unwrap() = content.clone();
     let _ = app.emit(
@@ -281,13 +339,30 @@ enum NativeOverlayEvent {
     DevForceClose,
 }
 
+/// Guards `SubmitReflection` against two channel events being handled
+/// concurrently -- unlike the regular `/overlay` page's `isSubmitting` Svelte
+/// state, this handler is dispatched via `tauri::async_runtime::spawn` (see
+/// `handle_channel_event` below), so two submits arriving close together
+/// (a double-tap racing the WebView's own submit-disables-itself-on-click
+/// behavior) would otherwise both run `find_missed_slots` and insert before
+/// either had flipped `reflection_entered` -- there's no `UNIQUE` constraint
+/// on `reflection.slot_start_at` to catch that at the DB level, so it just
+/// writes the current slot's row twice.
+static SUBMIT_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 async fn handle_submit_reflection(app: AppHandle, text: String) {
-    let current_slot_start = {
+    let (current_slot_start, already_entered) = {
         let state = app.state::<AppState>();
         let overlay = state.overlay.lock().unwrap();
-        overlay.current_slot_start.clone()
+        (overlay.current_slot_start.clone(), overlay.reflection_entered)
     };
-    if current_slot_start.is_empty() {
+    // Empty slot: no overlay is actually open for this to mean anything (a
+    // stale/duplicate channel event). Already entered: a second submit for a
+    // slot this process already recorded -- most likely a delayed duplicate
+    // that arrived after the first one succeeded but before the WebView
+    // learned to disable itself. Either way, writing again would just
+    // duplicate the row.
+    if current_slot_start.is_empty() || already_entered {
         return;
     }
     let db = pool(&app).await;
@@ -308,9 +383,14 @@ fn handle_channel_event(app: &AppHandle, value: Value) {
     };
     match event {
         NativeOverlayEvent::SubmitReflection { text } => {
+            if SUBMIT_IN_FLIGHT.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                log::info!("native_overlay: dropping submit_reflection, one is already in flight");
+                return;
+            }
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 handle_submit_reflection(app, text).await;
+                SUBMIT_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
             });
         }
         NativeOverlayEvent::SaveTaskList { content } => {

@@ -104,6 +104,16 @@ pub struct AppState {
     /// Cache of today's `not_to_do_list.content`, Android only -- mirrors
     /// `task_list` above for the same reason (see its doc comment).
     pub not_to_do_list: Mutex<String>,
+    /// The local `YYYY-MM-DD` date stamp `task_list`/`not_to_do_list` above
+    /// were captured under, Android only -- set once when the overlay opens
+    /// (`native_overlay::refresh_task_list_cache`) and reused by
+    /// `handle_save_task_list`/`handle_save_not_to_do_list` instead of each
+    /// recomputing "today" fresh from `Local::now()` at save time. Without
+    /// this, the `:55`-`:00` break slot -- which always straddles midnight --
+    /// could load day N's content when the overlay opens at 23:55 but upsert
+    /// a submission at 00:01 into day N+1's row instead, silently splitting
+    /// one day's task list across two rows.
+    pub task_list_date: Mutex<String>,
     /// Count of break slots the *next* submitted reflection will cover
     /// (`native_overlay::find_missed_slots(...).len()`), Android only --
     /// mirrors `task_list` above: the native WindowManager overlay has no DB
@@ -127,6 +137,7 @@ impl AppState {
             dev_mode,
             task_list: Mutex::new(String::new()),
             not_to_do_list: Mutex::new(String::new()),
+            task_list_date: Mutex::new(String::new()),
             missed_slot_count: Mutex::new(1),
         }
     }

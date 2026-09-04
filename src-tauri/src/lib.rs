@@ -277,6 +277,18 @@ async fn run_scheduler(app: AppHandle) {
             .unwrap_or(StdDuration::from_secs(1));
         #[cfg(target_os = "android")]
         let sleep_dur = sleep_dur.min(ANDROID_POLL_INTERVAL);
+        // Refreshes MainActivity.lastSchedulerHeartbeatAt every iteration
+        // (at least every ANDROID_POLL_INTERVAL, thanks to the cap above) so
+        // BreakAlarmReceiver can tell a genuinely live scheduler apart from
+        // one whose task died without taking the whole process down with it
+        // -- see MainActivity.isSchedulerAlive's doc comment.
+        #[cfg(target_os = "android")]
+        {
+            let bridge = app.state::<android_bridge::AndroidBridge<tauri::Wry>>();
+            if let Err(e) = bridge.report_scheduler_heartbeat() {
+                log::warn!("report_scheduler_heartbeat failed: {e:?}");
+            }
+        }
         // `expected_wake` has to reflect *this specific sleep's* actual
         // duration, not the raw slot boundary (`slot.end`) -- on Android,
         // where `sleep_dur` gets capped to `ANDROID_POLL_INTERVAL` (20s)

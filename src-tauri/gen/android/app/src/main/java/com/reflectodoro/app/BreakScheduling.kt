@@ -130,10 +130,10 @@ fun canScheduleExactAlarm(context: Context): Boolean {
   return alarmManager.canScheduleExactAlarms()
 }
 
-/** Only shown when BreakAlarmReceiver fires in a process where no Activity
- * has been created yet this incarnation (MainActivity.schedulerStarted is
- * still false) -- i.e. the process was fully dead and Rust's run_scheduler
- * was never running to notice the boundary on its own. Deliberately generic
+/** Only shown when BreakAlarmReceiver fires and MainActivity.isSchedulerAlive()
+ * reads false -- i.e. either the process was fully dead, or the scheduler
+ * task itself died without run_scheduler being there to notice the boundary
+ * on its own. Deliberately generic
  * (not "time for your break", no breakit challenge text): a receiver has no
  * way to know the actual phase or challenge without Rust running, and
  * guessing would risk showing stale or wrong content. Tapping it just opens

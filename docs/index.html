@@ -585,6 +585,9 @@
           <li>Fixed the break overlay not auto-closing on Android once time was up, by having the scheduler poll wall-clock time instead of relying on a suspend-unaware monotonic timer</li>
           <li>Fixed the main window not reopening from the tray after being closed on Windows</li>
           <li>Added a Discord community link and a "How does it help you" benefits section to the landing page</li>
+          <li>Full-codebase audit and fix pass: a DST-transition crash in the scheduler (Rust and Android alike), Windows Alt+Tab suppression being dead code, several ways the break overlay could strand itself or leave the user with no way out, reflections/wellness getting misdated across the UTC/local day boundary, and a data-import bug that could wipe history on a bad file</li>
+          <li>Android reliability follow-ups: guarded WindowManager/foreground-service calls that could crash the app, disabled Auto Backup for the reflection database, added a native-overlay watchdog independent of its own Rust channel, fixed the midnight-straddling break slot silently corrupting the next day's task list, and made "Pomodoro mode off" and scheduler liveness survive a reboot correctly</li>
+          <li>Hardened the release CI pipeline (tag-name shell/script injection, unpinned signing-key actions, unscoped write permissions, a silently-unsigned-APK path, and a release window where Linux auto-update was guaranteed to fail) and tightened several settings bounds and UI race conditions (unbounded auto-close timers, a double-submit race on Android, a stale-response race on the Entries page)</li>
         </ul>
       </div>
       <div class="timeline-week">

@@ -10,16 +10,35 @@ import androidx.webkit.WebViewFeature
 
 class MainActivity : TauriActivity() {
   companion object {
-    /** Flips true once Rust's run()/run_scheduler has actually started in
-     * this process incarnation -- super.onCreate() below chains into
-     * WryActivity.onCreate() -> Rust.onActivityCreate(), the JNI entry
-     * point tauri::mobile_entry_point wires up. BreakAlarmReceiver reads
-     * this to tell "the scheduler is already running somewhere in this
-     * process, no need to interrupt the user" apart from "this process was
-     * fully dead until this alarm fired, and only a tap-to-open
-     * notification can bring the scheduler back" -- see
-     * BreakScheduling.kt's postWakeNotification. */
-    var schedulerStarted = false
+    /** Timestamp (epoch ms) of the most recent `reportSchedulerHeartbeat`
+     * call from Rust's `run_scheduler` loop -- that loop is capped to iterate
+     * at least every `ANDROID_POLL_INTERVAL` (20s, see lib.rs) regardless of
+     * phase, and reports in on every iteration, so this staying fresh is
+     * "the scheduler is actually alive right now", not just "an Activity was
+     * created at some point in this process incarnation". BreakAlarmReceiver
+     * reads this (via isSchedulerAlive) to tell that apart from "this process
+     * is fully dead / the scheduler task died without taking the process down
+     * with it, and only a tap-to-open notification can bring it back" -- see
+     * BreakScheduling.kt's postWakeNotification.
+     *
+     * Deliberately a liveness signal, not a one-time "did onCreate ever run"
+     * flag (which is what this used to be, as `schedulerStarted`): a flag set
+     * once and never cleared stays true forever once an Activity has existed
+     * in this process, even if the scheduler task itself later dies without
+     * aborting the whole process -- which would permanently disable the one
+     * mechanism meant to recover from exactly that. */
+    @Volatile
+    var lastSchedulerHeartbeatAt: Long = 0
+
+    /** Generous relative to the ~20s heartbeat cadence -- tolerates Doze/
+     * scheduling jitter delaying an individual heartbeat without false-
+     * negatively treating a briefly-delayed-but-alive scheduler as dead. */
+    private const val HEARTBEAT_STALE_THRESHOLD_MS = 5 * 60 * 1000L
+
+    fun isSchedulerAlive(): Boolean {
+      return lastSchedulerHeartbeatAt != 0L &&
+        System.currentTimeMillis() - lastSchedulerHeartbeatAt < HEARTBEAT_STALE_THRESHOLD_MS
+    }
 
     /** Set once in onWebViewCreate below and read by
      * NativeOverlayManager.hide() to force a redraw of the main window's
@@ -49,7 +68,6 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
-    schedulerStarted = true
   }
 
   /** enableEdgeToEdge() above (WindowCompat.setDecorFitsSystemWindows(false))

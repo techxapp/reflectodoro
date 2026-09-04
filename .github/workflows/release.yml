@@ -6,11 +6,15 @@ on:
       - "v*.*.*"
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   release:
+    # Scoped per-job (contents: write is repeated on every job below that
+    # actually needs it) rather than once at workflow level -- a
+    # workflow-level grant applies to every job, present and future, even
+    # ones that never touch the release at all, needlessly widening what a
+    # compromised dependency in an unrelated job could do with the token.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +40,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Nothing in this job needs `git push`/credential-helper access --
+          # every write this job makes goes through gh/tauri-action using the
+          # GITHUB_TOKEN env var set explicitly on those steps. Leaving the
+          # default persisted credential in .git/config would otherwise sit
+          # there readable by npm ci/cargo build/gradle -- all arbitrary
+          # third-party code -- for the rest of the job.
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -120,7 +131,17 @@ jobs:
             ${{ steps.pr_notes.outputs.body }}
 
             ${{ steps.commit_notes.outputs.body }}
-          releaseDraft: false
+          # Kept a draft through the rest of this workflow (the Linux
+          # AppImage re-sign below, latest.json's patch in
+          # fix-linux-updater-manifest, and the android job) -- publishing
+          # immediately used to mean every Linux updater check landing in
+          # that window failed minisign verification, since latest.json's
+          # signature described the pre-repackage AppImage bytes while the
+          # asset actually being served was already the repackaged one. Fails
+          # closed, but it was a guaranteed outage on every single release.
+          # The publish-release job at the bottom of this file un-drafts it
+          # once every asset and manifest is in its final, consistent state.
+          releaseDraft: true
           prerelease: false
 
       # linuxdeploy (which tauri-action's `tauri build` just ran) bundles
@@ -178,6 +199,8 @@ jobs:
   fix-linux-updater-manifest:
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Patch latest.json with the re-signed Linux signatures
         env:
@@ -229,8 +252,15 @@ jobs:
     # Gradle) has nothing in common with the desktop matrix's native deps.
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # See the release job's checkout step for why: this job never
+          # pushes anything, it only calls gh/tauri-action with an explicit
+          # GITHUB_TOKEN env var.
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -263,17 +293,24 @@ jobs:
       # Decodes the release upload keystore from a repo secret into a temp
       # file outside the repo tree (never written into the checkout, never
       # committed). build.gradle.kts's release signingConfig only activates
-      # when ANDROID_KEYSTORE_PATH is set, so a fork/PR build without this
-      # secret still falls back to the previous unsigned-debug behavior
-      # instead of failing.
+      # when ANDROID_KEYSTORE_PATH is set -- this job only ever runs for a
+      # tagged push or an explicit workflow_dispatch in this repo (never a
+      # fork/PR build, which is where a missing secret would be expected and
+      # tolerable), so a missing secret here means a misconfigured release,
+      # not a legitimate case to silently degrade for. Failing loudly beats
+      # the previous behavior of quietly falling through to Gradle's
+      # `*-release-unsigned.apk` output and uploading a non-installable APK
+      # with no failure signal anywhere in the run.
       - name: Decode Android signing keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/reflectodoro-release.keystore"
-            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/reflectodoro-release.keystore" >> "$GITHUB_ENV"
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set -- refusing to build an unsigned Android release APK"
+            exit 1
           fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/reflectodoro-release.keystore"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/reflectodoro-release.keystore" >> "$GITHUB_ENV"
 
       # Real release build now that a signing keystore is configured (see
       # the decode step above and build.gradle.kts's signingConfigs block).
@@ -299,6 +336,45 @@ jobs:
           # interpolation.
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          gh release upload "$TAG_NAME" \
-            src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk \
-            --clobber
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk)
+          if [ ${#apks[@]} -eq 0 ]; then
+            echo "::error::no APKs found under build/outputs/apk -- build step must have failed silently"
+            exit 1
+          fi
+          # Belt-and-suspenders on top of the keystore-secret check above:
+          # Gradle names an unsigned build's output *-release-unsigned.apk,
+          # so this glob would otherwise happily upload one right alongside
+          # (or instead of) the real signed artifact with no visible error.
+          for apk in "${apks[@]}"; do
+            case "$apk" in
+              *-unsigned.apk)
+                echo "::error::refusing to upload unsigned APK: $apk"
+                exit 1
+                ;;
+            esac
+          done
+          gh release upload "$TAG_NAME" "${apks[@]}" --clobber
+
+  # Un-drafts the release (see the `release` job's `releaseDraft: true`
+  # comment) only once every asset and manifest across the whole workflow is
+  # in its final state -- both the Linux AppImage re-sign/latest.json patch
+  # and the Android APK are done by the time this runs. Publishing any
+  # earlier reopens exactly the guaranteed-broken-updater window this was
+  # meant to close.
+  publish-release:
+    needs: [fix-linux-updater-manifest, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # See the release job's release-notes steps for why this goes
+          # through env rather than direct "${{ github.ref_name }}"
+          # interpolation.
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release edit "$TAG_NAME" -R "${{ github.repository }}" --draft=false

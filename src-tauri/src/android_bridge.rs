@@ -134,6 +134,25 @@ impl<R: Runtime> AndroidBridge<R> {
     pub fn resume_audio_focus(&self) -> Result<Value, PluginInvokeError> {
         self.0.run_mobile_plugin("resumeAudioFocus", ())
     }
+
+    /// Mirrors the Pomodoro-mode on/off toggle into a plain SharedPreferences
+    /// flag -- called from commands::set_enabled every time it changes. Purely
+    /// so BootCompletedReceiver has something to read before Rust exists in a
+    /// freshly booted process; POMODORO_ENABLED itself isn't persisted
+    /// anywhere Rust-side. See PomodoroEnabledPref's doc comment (Kotlin).
+    pub fn persist_pomodoro_enabled(&self, enabled: bool) -> Result<Value, PluginInvokeError> {
+        self.0
+            .run_mobile_plugin("persistPomodoroEnabled", serde_json::json!({ "enabled": enabled }))
+    }
+
+    /// Refreshes `MainActivity.lastSchedulerHeartbeatAt` -- called from every
+    /// iteration of `run_scheduler` (capped to at least every
+    /// `ANDROID_POLL_INTERVAL`) so `BreakAlarmReceiver` can tell a genuinely
+    /// live scheduler apart from one whose task died without taking the
+    /// whole process down with it. See `MainActivity.isSchedulerAlive`.
+    pub fn report_scheduler_heartbeat(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("reportSchedulerHeartbeat", ())
+    }
 }
 
 pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {

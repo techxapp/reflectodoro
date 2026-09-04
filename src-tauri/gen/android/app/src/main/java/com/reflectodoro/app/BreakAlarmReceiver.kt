@@ -32,11 +32,13 @@ class BreakAlarmReceiver : BroadcastReceiver() {
       serviceStartFailed = true
     }
 
-    // Covers "the whole process was dead" -- a plain service restart alone
-    // can't revive run_scheduler (it only starts via MainActivity's
-    // Activity-creation path, see MainActivity.schedulerStarted), so only
-    // do this when that path hasn't run yet in this process incarnation.
-    if (!MainActivity.schedulerStarted) {
+    // Covers "the whole process was dead" (a plain service restart alone
+    // can't revive run_scheduler, it only starts via MainActivity's
+    // Activity-creation path) as well as "the process is alive but the
+    // scheduler task itself died without taking it down" -- see
+    // MainActivity.isSchedulerAlive's doc comment for why this checks a
+    // recent heartbeat rather than a one-time "did onCreate ever run" flag.
+    if (!MainActivity.isSchedulerAlive()) {
       postWakeNotification(context)
 
       // Deliberately DOES auto-launch to the foreground here, unlike every
@@ -65,9 +67,9 @@ class BreakAlarmReceiver : BroadcastReceiver() {
       }
       context.startActivity(launchIntent)
     } else if (serviceStartFailed) {
-      // schedulerStarted is true, so run_scheduler is presumably still
-      // running in-process and should notice this boundary on its own --
-      // the failed restart above was likely a no-op attempt on a service
+      // The scheduler heartbeat is recent, so run_scheduler is presumably
+      // still running in-process and should notice this boundary on its own
+      // -- the failed restart above was likely a no-op attempt on a service
       // that didn't actually need reviving. Still worth a visible nudge in
       // case that assumption is wrong on this particular device.
       postWakeNotification(context)

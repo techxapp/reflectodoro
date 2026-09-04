@@ -280,9 +280,15 @@
     setTimeout(() => (saved = false), 2000);
   }
 
+  // Upper bound of 60 (1h) on both: the overlay side mirrors Rust's own
+  // clamp in set_overlay_auto_close_minutes (an unbounded value there defeats
+  // the documented last-resort force-close), and the checkin side is a plain
+  // JS setTimeout, which silently fires *immediately* past ~24.8 days
+  // (2^31 ms) -- 60 stays well clear of that cliff on top of being a
+  // reasonable grace period.
   async function saveOverlayAutoClose(e: Event) {
     e.preventDefault();
-    overlayAutoCloseMinutes = Math.max(1, overlayAutoCloseMinutes);
+    overlayAutoCloseMinutes = Math.min(60, Math.max(1, overlayAutoCloseMinutes));
     await saveOverlayAutoCloseMinutes(overlayAutoCloseMinutes);
     overlayAutoCloseSaved = true;
     setTimeout(() => (overlayAutoCloseSaved = false), 2000);
@@ -290,7 +296,7 @@
 
   async function saveCheckinAutoClose(e: Event) {
     e.preventDefault();
-    checkinAutoCloseMinutes = Math.max(1, checkinAutoCloseMinutes);
+    checkinAutoCloseMinutes = Math.min(60, Math.max(1, checkinAutoCloseMinutes));
     await saveCheckinAutoCloseMinutes(checkinAutoCloseMinutes);
     checkinAutoCloseSaved = true;
     setTimeout(() => (checkinAutoCloseSaved = false), 2000);
@@ -391,7 +397,7 @@
       <form onsubmit={saveOverlayAutoClose}>
         <label>
           Auto-close after (minutes past break end)
-          <input type="number" min="1" bind:value={overlayAutoCloseMinutes} />
+          <input type="number" min="1" max="60" bind:value={overlayAutoCloseMinutes} />
         </label>
         <button type="submit">Save</button>
         {#if overlayAutoCloseSaved}
@@ -492,7 +498,7 @@
       <form onsubmit={saveCheckinAutoClose}>
         <label>
           Auto-close after (minutes, if untouched)
-          <input type="number" min="1" bind:value={checkinAutoCloseMinutes} />
+          <input type="number" min="1" max="60" bind:value={checkinAutoCloseMinutes} />
         </label>
         <button type="submit">Save</button>
         {#if checkinAutoCloseSaved}

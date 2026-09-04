@@ -39,15 +39,25 @@
   const isToday = $derived(selectedStamp === localDateStamp(new Date()));
   const clusters = $derived(clusterReflectionRows(reflectionRows));
 
+  // Bumped on every load() call and captured per-call so a load for a day the
+  // user has already navigated away from can't win a race against a load for
+  // the day they're now on -- without this, the last-*resolving* call wins
+  // regardless of which was started last, and since taskList/notToDo are
+  // bind:value, a late-resolving load for day A can clobber text already
+  // typed for day B (which the debounced saver then persists under day B).
+  let loadGeneration = 0;
+
   async function load() {
     loading = true;
     const stamp = selectedStamp;
+    const generation = ++loadGeneration;
     const [r, t, n, w] = await Promise.all([
       getReflectionsForDate(stamp),
       getTaskList(stamp),
       getNotToDoList(stamp),
       getWellnessSummaryForDate(stamp),
     ]);
+    if (generation !== loadGeneration) return;
     reflectionRows = r;
     taskList = t;
     notToDo = n;

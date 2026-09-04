@@ -50,8 +50,19 @@
   let unlistenSlot: UnlistenFn | null = null;
   let unlistenFocus: UnlistenFn | null = null;
   let autoCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  // loadForSlot awaits scheduleAutoClose, and both the "checkin://slot"
+  // listener and the onMount fallback invoke call loadForSlot on the same
+  // mount (see the comment on that race below) -- so two calls can overlap
+  // here. clearAutoCloseTimer() at the top of each is a no-op against a timer
+  // the *other* call hasn't created yet, so without this guard the earlier
+  // call's setTimeout survives un-tracked once the later call's assignment
+  // overwrites `autoCloseTimer`, and it still fires skip() later even after
+  // a real user interaction calls clearAutoCloseTimer() on what it thinks is
+  // the only outstanding timer.
+  let autoCloseGeneration = 0;
 
   function clearAutoCloseTimer() {
+    autoCloseGeneration++;
     if (autoCloseTimer) {
       clearTimeout(autoCloseTimer);
       autoCloseTimer = null;
@@ -60,7 +71,11 @@
 
   async function scheduleAutoClose() {
     clearAutoCloseTimer();
+    const generation = autoCloseGeneration;
     const minutes = await getCheckinAutoCloseMinutes();
+    // Superseded by a newer scheduleAutoClose/clearAutoCloseTimer call while
+    // this await was in flight -- don't resurrect a timer for a stale call.
+    if (generation !== autoCloseGeneration) return;
     autoCloseTimer = setTimeout(() => void skip(), minutes * 60 * 1000);
   }
 

@@ -136,6 +136,13 @@ pub fn set_enabled(app: AppHandle, enabled: bool) {
         if let Err(e) = result {
             log::error!("failed to toggle Android foreground service: {e:?}");
         }
+        // So a reboot (BootCompletedReceiver, which runs before any Rust
+        // runtime exists in that fresh process) can respect a deliberate
+        // "off" choice instead of always re-arming everything -- see
+        // PomodoroEnabledPref's doc comment (Kotlin).
+        if let Err(e) = bridge.persist_pomodoro_enabled(enabled) {
+            log::error!("failed to persist pomodoro-enabled preference: {e:?}");
+        }
     }
 }
 
@@ -147,19 +154,46 @@ pub fn get_checkin_slot(state: State<AppState>) -> Option<String> {
     slot
 }
 
+/// Rejects anything without a `.json` extension. The path is only ever
+/// expected to come from the export/import dialog pickers, which already
+/// filter to JSON -- this is a second, server-side check so these two
+/// commands can't be repurposed into a generic "read/write any file the
+/// process can touch" primitive by whatever calls `invoke` directly (a
+/// future `{@html}`/`innerHTML` mistake, most concretely -- see these
+/// commands' own doc comment for why that combination matters here).
+fn require_json_extension(path: &str) -> Result<(), String> {
+    let has_json_ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"));
+    if has_json_ext {
+        Ok(())
+    } else {
+        Err("only .json files are supported".into())
+    }
+}
+
 /// Backs the Settings "Data" export/import feature. Plain `std::fs` rather
 /// than tauri-plugin-fs: app-defined commands need no capability entry at
 /// all, sidestepping that plugin's path-scope config entirely (the same
 /// class of silent-permission trap already hit twice with sql/window
 /// capabilities -- see CLAUDE.md). The path always comes from the native
-/// dialog picker, not arbitrary user text input.
+/// dialog picker, not arbitrary user text input -- but that's a frontend
+/// convention, not something enforced here structurally, and this
+/// deliberately sidesteps tauri-plugin-fs's own path scoping. Combined with
+/// this app's null CSP and `sql:allow-execute`, an unscoped file read/write
+/// would turn any future script-injection bug into read-any-file-plus-
+/// arbitrary-SQL; the `.json`-extension check above is the cheap mitigation
+/// available without knowing the picker's chosen directory ahead of time.
 #[tauri::command]
 pub fn read_text_file(path: String) -> Result<String, String> {
+    require_json_extension(&path)?;
     std::fs::read_to_string(&path).map_err(|e| format!("failed to read {path}: {e}"))
 }
 
 #[tauri::command]
 pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    require_json_extension(&path)?;
     std::fs::write(&path, contents).map_err(|e| format!("failed to write {path}: {e}"))
 }
 
@@ -221,9 +255,14 @@ pub fn get_overlay_auto_close_minutes() -> u32 {
     OVERLAY_AUTO_CLOSE_MINUTES.load(Ordering::SeqCst)
 }
 
+/// Upper bound mirrors the one already enforced for breakit_length just above
+/// this pattern (sync_breakit_config's `clamp(4, 64)`): without one, `u32::MAX`
+/// minutes (~8,100 years) silently defeats the documented last-resort
+/// force-close, since nothing ever waits that long. 60 (1h) is generous
+/// grace for an overlay whose nominal break is 5 minutes.
 #[tauri::command]
 pub fn set_overlay_auto_close_minutes(minutes: u32) {
-    OVERLAY_AUTO_CLOSE_MINUTES.store(minutes.max(1), Ordering::SeqCst);
+    OVERLAY_AUTO_CLOSE_MINUTES.store(minutes.clamp(1, 60), Ordering::SeqCst);
 }
 
 /// Mirrors app_setting.media_pause_on_break_enabled -- loaded and pushed here
