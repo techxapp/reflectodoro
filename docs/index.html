@@ -3,9 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Reflectodoro</title>
-  <meta name="description" content="A Pomodoro app that forces a short reflection at the end of every break, enforced by a hard-to-dismiss break screen." />
+  <title>Reflectodoro &mdash; the Pomodoro app you can't skip</title>
+  <meta name="description" content="A Pomodoro app that forces a short reflection at the end of every break, enforced by a hard-to-dismiss break screen. Fully local, open source, for Windows, macOS, Linux and Android." />
   <link rel="icon" href="favicon.ico" />
+  <meta name="theme-color" content="#0a0c11" id="metaThemeColor" />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Reflectodoro" />
   <meta property="og:description" content="A Pomodoro app that forces a short reflection at the end of every break, enforced by a hard-to-dismiss break screen." />
@@ -15,753 +16,1372 @@
   <meta name="twitter:title" content="Reflectodoro" />
   <meta name="twitter:description" content="A Pomodoro app that forces a short reflection at the end of every break, enforced by a hard-to-dismiss break screen." />
   <meta name="twitter:image" content="https://reflectodoro.droplee.com/screenshots/SS3.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@500;700&amp;display=swap" />
   <style>
+    /* ============ design tokens ============ */
     :root {
-      --bg: #0f1115;
-      --surface: #161a21;
-      --surface-2: #1e232c;
-      --border: #2a3040;
-      --text: #e8eaed;
-      --text-dim: #9aa3b2;
-      --accent: #ff7a59;
-      --accent-soft: rgba(255, 122, 89, 0.14);
+      /* Dark is the default theme regardless of OS preference — [data-theme="light"] below is the explicit opt-out. */
+      color-scheme: dark;
+      --bg: #0a0c11;
+      --tint-a: rgba(91, 140, 255, 0.18);
+      --tint-b: rgba(45, 212, 191, 0.14);
+      --surface: #12151c;
+      --surface-2: #191d26;
+      --glass: rgba(10, 12, 17, 0.72);
+      --border: rgba(255, 255, 255, 0.09);
+      --border-strong: rgba(255, 255, 255, 0.19);
+      --text: #eef1f6;
+      --text-dim: #98a1b2;
+      --text-faint: #6f7889;
+      --brand: #5b8cff;
+      --brand-2: #22d3ee;
+      --brand-ink: #ffffff;
+      --brand-soft: rgba(91, 140, 255, 0.16);
+      --brand-line: rgba(91, 140, 255, 0.36);
+      --ok: #43c877;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40), 0 6px 16px -10px rgba(0, 0, 0, 0.60);
+      --shadow-md: 0 12px 34px -18px rgba(0, 0, 0, 0.75);
+      --shadow-lg: 0 34px 70px -34px rgba(0, 0, 0, 0.90);
+      --glow: 0 18px 44px -20px rgba(91, 140, 255, 0.45);
+      --r-sm: 10px;
+      --r: 16px;
+      --r-lg: 22px;
+      --maxw: 1140px;
+      --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
     }
-    @media (prefers-color-scheme: light) {
-      :root {
-        --bg: #faf9f7;
-        --surface: #ffffff;
-        --surface-2: #f2f0ec;
-        --border: #e3e0da;
-        --text: #1c1c1c;
-        --text-dim: #6b6b6b;
-        --accent: #e05d3a;
-        --accent-soft: rgba(224, 93, 58, 0.1);
-      }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #fbfaf9;
+      --tint-a: rgba(59, 91, 219, 0.13);
+      --tint-b: rgba(13, 165, 187, 0.12);
+      --surface: #ffffff;
+      --surface-2: #f4f1ee;
+      --glass: rgba(251, 250, 249, 0.72);
+      --border: rgba(22, 20, 18, 0.10);
+      --border-strong: rgba(22, 20, 18, 0.20);
+      --text: #16181d;
+      --text-dim: #5d6472;
+      --text-faint: #8b93a1;
+      --brand: #3a5cdc;
+      --brand-2: #0ea5c4;
+      --brand-ink: #ffffff;
+      --brand-soft: rgba(58, 92, 220, 0.10);
+      --brand-line: rgba(58, 92, 220, 0.30);
+      --ok: #16a34a;
+      --shadow-sm: 0 1px 2px rgba(16, 18, 22, 0.05), 0 6px 16px -10px rgba(16, 18, 22, 0.18);
+      --shadow-md: 0 12px 34px -18px rgba(16, 18, 22, 0.32);
+      --shadow-lg: 0 34px 70px -34px rgba(16, 18, 22, 0.42);
+      --glow: 0 18px 44px -20px rgba(58, 92, 220, 0.55);
     }
-    * { box-sizing: border-box; }
+
+    /* ============ base ============ */
+    *, *::before, *::after { box-sizing: border-box; }
+    html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
     body {
       margin: 0;
       background: var(--bg);
       color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
-      line-height: 1.5;
-    }
-    .wrap {
-      max-width: 1000px;
-      margin: 0 auto;
-      padding: 96px 32px 64px;
-    }
-    .eyebrow {
-      display: inline-block;
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--accent);
-      background: var(--accent-soft);
-      padding: 4px 10px;
-      border-radius: 999px;
-      margin-bottom: 18px;
-    }
-    h1 {
-      font-size: clamp(2.2rem, 5vw, 3.2rem);
-      margin: 0 0 12px;
-      letter-spacing: -0.02em;
-    }
-    .tagline {
-      font-size: 1.15rem;
-      color: var(--text-dim);
-      max-width: 560px;
-      margin: 0 0 32px;
-    }
-    .cta-row {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      margin-bottom: 56px;
-    }
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 12px 22px;
-      border-radius: 10px;
-      font-weight: 600;
-      font-size: 15px;
-      text-decoration: none;
-      border: 1px solid transparent;
-      transition: transform 0.15s ease, opacity 0.15s ease;
-    }
-    .btn:hover { transform: translateY(-1px); }
-    .btn-primary {
-      background: var(--accent);
-      color: #fff;
-    }
-    .btn-secondary {
-      background: transparent;
-      border-color: var(--border);
-      color: var(--text);
-    }
-    .install-details {
-      margin-bottom: 56px;
-    }
-    .install-details summary {
-      cursor: pointer;
-      list-style: none;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-weight: 600;
-      font-size: 14px;
-      color: var(--text);
-      padding: 12px 16px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-    }
-    .install-details summary::-webkit-details-marker { display: none; }
-    .install-details summary::before {
-      content: "\25B8";
-      color: var(--accent);
-      transition: transform 0.15s ease;
-    }
-    .install-details[open] summary::before {
-      transform: rotate(90deg);
-    }
-    .install-details[open] summary {
-      border-radius: 10px 10px 0 0;
-      border-bottom: none;
-    }
-    .note {
-      font-size: 13px;
-      color: var(--text-dim);
-      margin: 0;
-      padding: 16px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-top: none;
-      border-radius: 0 0 10px 10px;
-    }
-    .features {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 20px;
-      margin-bottom: 56px;
-    }
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 20px;
-    }
-    .card h3 {
-      margin: 0 0 6px;
-      font-size: 15px;
-    }
-    .card p {
-      margin: 0;
-      font-size: 14px;
-      color: var(--text-dim);
-    }
-    .section-title {
-      font-size: 1.4rem;
-      margin: 0 0 20px;
-      letter-spacing: -0.01em;
-    }
-    .benefit-toggle {
-      margin-top: 10px;
-      text-align: center;
-      font-size: 20px;
-      color: var(--accent);
-      opacity: 1;
-      transition: transform 0.2s ease;
-    }
-    .card:hover .benefit-toggle,
-    .card:focus-within .benefit-toggle,
-    .card.expanded .benefit-toggle {
-      transform: translateY(2px) rotate(180deg);
-    }
-    .benefit-extra {
-      margin-top: 0;
-      padding-top: 0;
-      border-top: 0 solid var(--border);
-      max-height: 0;
-      overflow: hidden;
-      opacity: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      transition: max-height 0.3s ease, opacity 0.22s ease, margin-top 0.3s ease, padding-top 0.3s ease, border-top-width 0.3s ease;
-    }
-    .card:hover .benefit-extra,
-    .card:focus-within .benefit-extra,
-    .card.expanded .benefit-extra {
-      margin-top: 14px;
-      padding-top: 12px;
-      border-top-width: 1px;
-      max-height: 400px;
-      opacity: 1;
-    }
-    .benefit-card { cursor: pointer; }
-    .benefit-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 9px;
-      background: var(--surface-2);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 9px 11px;
-      transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
-    }
-    .benefit-item:hover {
-      border-color: var(--accent);
-      background: var(--accent-soft);
-      transform: translateX(2px);
-    }
-    .benefit-icon {
-      flex-shrink: 0;
-      font-size: 14px;
-      line-height: 1.3;
-    }
-    .benefit-item p {
-      margin: 0;
-      font-size: 12.5px;
-      line-height: 1.5;
-      color: var(--text-dim);
-    }
-    .benefit-item .tag {
-      display: block;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--accent);
-      margin-bottom: 3px;
-    }
-    .benefit-extra cite {
-      font-style: normal;
-      font-weight: 600;
-      color: var(--text);
-    }
-    .carousel {
-      position: relative;
-      max-width: 700px;
-      margin: 0 auto 16px;
-    }
-    .carousel-track {
-      display: flex;
-      overflow-x: auto;
-      scroll-snap-type: x mandatory;
-      scroll-behavior: smooth;
-      gap: 16px;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-    }
-    .carousel-track::-webkit-scrollbar { display: none; }
-    .carousel-slide {
-      flex: 0 0 100%;
-      scroll-snap-align: center;
-    }
-    .shot {
-      width: 100%;
-      height: auto;
-      display: block;
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-    }
-    .carousel-btn {
-      position: absolute;
-      top: 50%;
-      transform: translateY(-50%);
-      width: 36px;
-      height: 36px;
-      border-radius: 50%;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--text);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       font-size: 16px;
-      line-height: 1;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 2;
-      opacity: 0.9;
-      transition: background 0.15s ease, opacity 0.15s ease;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
     }
-    .carousel-btn:hover { background: var(--accent-soft); opacity: 1; }
-    .carousel-prev { left: 8px; }
-    .carousel-next { right: 8px; }
-    .carousel-dots {
-      display: flex;
-      justify-content: center;
-      gap: 8px;
-      margin-bottom: 56px;
-    }
-    .carousel-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      border: none;
-      background: var(--border);
-      cursor: pointer;
-      padding: 0;
-      transition: background 0.15s ease, transform 0.15s ease;
-    }
-    .carousel-dot.active {
-      background: var(--accent);
-      transform: scale(1.25);
-    }
-    .support-table-wrap {
-      overflow-x: auto;
-      margin-bottom: 56px;
-      border: 1px solid var(--border);
-      border-radius: 14px;
-    }
-    .support-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
-      background: var(--surface);
-    }
-    .support-table th,
-    .support-table td {
-      padding: 12px 16px;
-      text-align: left;
-      border-bottom: 1px solid var(--border);
-    }
-    .support-table th {
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: var(--text-dim);
+    img { max-width: 100%; }
+    a { color: var(--brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .mono, code { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    code {
+      font-size: 0.87em;
       background: var(--surface-2);
-    }
-    .support-table tbody tr:last-child td {
-      border-bottom: none;
-    }
-    .support-table th:not(:first-child),
-    .support-table td:not(:first-child) {
-      text-align: center;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1px 6px;
       white-space: nowrap;
     }
-    .support-table .yes {
-      color: #2fae60;
-      font-weight: 700;
+    :focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; border-radius: 8px; }
+    .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+    section { scroll-margin-top: 84px; }
+    .skip {
+      position: absolute; left: -9999px; top: 0; z-index: 100;
+      background: var(--brand); color: var(--brand-ink);
+      padding: 10px 16px; border-radius: 0 0 10px 0; font-weight: 600;
     }
-    .support-table .no {
-      color: var(--text-dim);
-      font-weight: 700;
+    .skip:focus { left: 0; }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+      }
     }
-    .support-table .partial {
-      color: var(--accent);
-      font-weight: 700;
+
+    /* ============ ambient background ============ */
+    .aurora {
+      position: fixed;
+      left: 0; right: 0; top: -18vh;
+      height: 92vh;
+      pointer-events: none;
+      z-index: 0;
+      filter: blur(90px);
     }
-    .table-note {
-      display: block;
-      font-size: 11px;
-      font-weight: 400;
-      color: var(--text-dim);
-      margin-top: 2px;
+    .aurora span { position: absolute; display: block; border-radius: 50%; }
+    .aurora .a1 {
+      width: 46vw; height: 46vw; min-width: 300px; min-height: 300px;
+      left: 2vw; top: 8vh; background: var(--tint-a);
+      animation: drift1 24s var(--ease) infinite alternate;
     }
-    .roadmap {
+    .aurora .a2 {
+      width: 38vw; height: 38vw; min-width: 240px; min-height: 240px;
+      right: 4vw; top: 0; background: var(--tint-b);
+      animation: drift2 28s var(--ease) infinite alternate;
+    }
+    @keyframes drift1 { to { transform: translate3d(6vw, 6vh, 0) scale(1.14); } }
+    @keyframes drift2 { to { transform: translate3d(-5vw, 9vh, 0) scale(1.10); } }
+    .page { position: relative; z-index: 1; }
+
+    /* ============ nav ============ */
+    .nav {
+      position: sticky; top: 0; z-index: 50;
+      background: var(--glass);
+      -webkit-backdrop-filter: saturate(180%) blur(14px);
+      backdrop-filter: saturate(180%) blur(14px);
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.25s var(--ease), box-shadow 0.25s var(--ease);
+    }
+    .nav.scrolled { border-bottom-color: var(--border); box-shadow: var(--shadow-sm); }
+    .nav-inner { height: 64px; display: flex; align-items: center; gap: 14px; }
+    .brand {
+      display: inline-flex; align-items: center; gap: 10px;
+      font-weight: 800; letter-spacing: -0.02em; font-size: 16px;
+      color: var(--text); text-decoration: none; margin-right: auto;
+    }
+    .brand:hover { text-decoration: none; }
+    .brand-mark {
+      width: 27px; height: 27px; border-radius: 9px; flex: none;
+      background: linear-gradient(140deg, var(--brand), var(--brand-2));
+      display: grid; place-items: center;
+      color: var(--brand-ink); font-size: 13px;
+      box-shadow: var(--glow);
+    }
+    .nav-links { display: flex; align-items: center; gap: 2px; }
+    .nav-links a {
+      color: var(--text-dim); font-size: 14px; font-weight: 500;
+      padding: 7px 11px; border-radius: 9px; text-decoration: none;
+      transition: color 0.15s, background 0.15s;
+    }
+    .nav-links a:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
+    .icon-btn {
+      width: 36px; height: 36px; flex: none;
+      display: grid; place-items: center;
+      border-radius: 10px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text-dim);
+      cursor: pointer; font-size: 15px; line-height: 1; padding: 0;
+      transition: color 0.15s, border-color 0.15s, transform 0.15s;
+    }
+    .icon-btn:hover { color: var(--text); border-color: var(--border-strong); transform: translateY(-1px); }
+    @media (max-width: 900px) { .nav-links { display: none; } }
+
+    /* ============ buttons ============ */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+      padding: 12px 20px; border-radius: 12px;
+      font-weight: 600; font-size: 15px; line-height: 1.2;
+      text-decoration: none; border: 1px solid transparent;
+      cursor: pointer; white-space: nowrap; font-family: inherit;
+      transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease),
+                  background 0.18s, border-color 0.18s, color 0.18s;
+    }
+    .btn:hover { text-decoration: none; transform: translateY(-2px); }
+    .btn:active { transform: translateY(0); }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--brand), var(--brand-2));
+      color: var(--brand-ink);
+      box-shadow: var(--glow);
+    }
+    .btn-secondary {
+      background: var(--surface); border-color: var(--border-strong);
+      color: var(--text); box-shadow: var(--shadow-sm);
+    }
+    .btn-secondary:hover { border-color: var(--brand-line); color: var(--brand); }
+    .btn-sm { padding: 9px 15px; font-size: 14px; border-radius: 10px; }
+
+    /* ============ hero ============ */
+    .hero { padding: 76px 0 20px; }
+    .hero-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 20px;
-      margin-bottom: 56px;
+      grid-template-columns: minmax(0, 1.04fr) minmax(0, 0.96fr);
+      gap: 54px; align-items: center;
     }
-    .roadmap .card {
-      border-style: dashed;
+    .pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 12.5px; font-weight: 600; letter-spacing: 0.01em;
+      color: var(--text-dim); background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 6px 14px; border-radius: 999px;
+      box-shadow: var(--shadow-sm); margin-bottom: 22px;
     }
-    .roadmap-badge {
-      display: inline-block;
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--accent);
-      background: var(--accent-soft);
-      padding: 2px 8px;
-      border-radius: 999px;
-      margin-bottom: 8px;
+    .pill b { color: var(--text); font-weight: 700; }
+    .dot-live {
+      width: 7px; height: 7px; border-radius: 50%; flex: none;
+      background: var(--ok);
+      box-shadow: 0 0 0 3px var(--brand-soft);
     }
-    .timeline {
+    h1 {
+      font-size: clamp(2.4rem, 5.6vw, 4rem);
+      line-height: 1.04; letter-spacing: -0.035em; font-weight: 800;
+      margin: 0 0 20px;
+    }
+    .grad {
+      background: linear-gradient(115deg, var(--brand) 10%, var(--brand-2) 92%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    .lede {
+      font-size: clamp(1.02rem, 1.5vw, 1.15rem);
+      color: var(--text-dim); max-width: 34em; margin: 0 0 30px;
+    }
+    .lede b { color: var(--text); font-weight: 600; }
+    .cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .cta-note {
+      margin: 16px 0 0; font-size: 13px; color: var(--text-faint);
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    }
+    .cta-note a { color: var(--text-dim); text-decoration: underline; text-underline-offset: 3px; }
+    .cta-note a:hover { color: var(--brand); }
+    .trust {
+      display: flex; gap: 30px; flex-wrap: wrap;
+      margin: 34px 0 0; padding-top: 26px; border-top: 1px solid var(--border);
+    }
+    .trust div { min-width: 76px; }
+    .trust dt { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; }
+    .trust dd {
+      margin: 2px 0 0; font-size: 11.5px; color: var(--text-faint);
+      text-transform: uppercase; letter-spacing: 0.07em; font-weight: 600;
+    }
+
+    /* ============ break-screen mock ============ */
+    .mock {
       position: relative;
-      margin: 0 0 56px;
-      padding-left: 28px;
+      border-radius: var(--r-lg);
+      border: 1px solid var(--border);
+      background:
+        radial-gradient(120% 90% at 50% 0%, var(--brand-soft), transparent 62%),
+        var(--surface);
+      box-shadow: var(--shadow-lg);
+      padding: 26px 24px 22px;
+      overflow: hidden;
+    }
+    .mock::before {
+      content: "";
+      position: absolute; inset: 0;
+      border-radius: inherit;
+      padding: 1px;
+      background: linear-gradient(160deg, var(--brand-line), transparent 45%);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor; mask-composite: exclude;
+      pointer-events: none;
+    }
+    .mock-bar {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--brand); margin-bottom: 18px;
+    }
+    .mock-bar .lock { font-size: 13px; letter-spacing: 0; }
+    .mock-clock {
+      font-size: clamp(2.6rem, 6vw, 3.4rem); font-weight: 700;
+      letter-spacing: -0.04em; line-height: 1; margin: 0 0 4px;
+      font-variant-numeric: tabular-nums;
+    }
+    .mock-sub { margin: 0 0 20px; font-size: 13px; color: var(--text-faint); }
+    .mock-label {
+      display: block; font-size: 12px; font-weight: 700;
+      color: var(--text-dim); margin-bottom: 7px;
+    }
+    .mock-field {
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 12px; padding: 12px 14px;
+      font-size: 13.5px; color: var(--text-dim); min-height: 70px;
+    }
+    .caret {
+      display: inline-block; width: 2px; height: 1em;
+      background: var(--brand); vertical-align: -0.15em; margin-left: 1px;
+      animation: blink 1.1s steps(2, start) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    .mock-challenge {
+      margin-top: 16px; padding: 12px 14px;
+      border: 1px dashed var(--brand-line); border-radius: 12px;
+      background: var(--brand-soft);
+    }
+    .mock-challenge span {
+      display: block; font-size: 10.5px; font-weight: 700;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--brand); margin-bottom: 5px;
+    }
+    .mock-challenge .code-str {
+      font-size: 14px; font-weight: 700; letter-spacing: 0.14em;
+      color: var(--text); word-break: break-all;
+    }
+    .mock-foot {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; margin-top: 18px; font-size: 12px; color: var(--text-faint);
+    }
+    .fake-btn {
+      background: linear-gradient(135deg, var(--brand), var(--brand-2));
+      color: var(--brand-ink); font-size: 12.5px; font-weight: 700;
+      padding: 8px 15px; border-radius: 9px;
+    }
+
+    /* ============ section furniture ============ */
+    .section { padding: 84px 0; }
+    .section-head { max-width: 640px; margin: 0 0 40px; }
+    .section-head.center { margin-left: auto; margin-right: auto; text-align: center; }
+    .eyebrow {
+      display: inline-block; font-size: 11.5px; font-weight: 700;
+      letter-spacing: 0.13em; text-transform: uppercase;
+      color: var(--brand); margin-bottom: 12px;
+    }
+    h2 {
+      font-size: clamp(1.7rem, 3.4vw, 2.4rem);
+      letter-spacing: -0.03em; font-weight: 800; line-height: 1.12; margin: 0 0 12px;
+    }
+    .section-head p { margin: 0; color: var(--text-dim); font-size: 1.02rem; }
+    .rule { height: 1px; background: var(--border); border: 0; margin: 0; }
+
+    /* ============ how it works ============ */
+    .steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+    .step {
+      position: relative; padding: 24px 22px 22px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--r); box-shadow: var(--shadow-sm);
+    }
+    .step-n {
+      display: grid; place-items: center;
+      width: 30px; height: 30px; border-radius: 9px;
+      background: var(--brand-soft); color: var(--brand);
+      font-size: 13px; font-weight: 800; margin-bottom: 14px;
+    }
+    .step h3 { margin: 0 0 6px; font-size: 16px; letter-spacing: -0.01em; }
+    .step p { margin: 0; font-size: 14px; color: var(--text-dim); }
+    .grid-strip {
+      display: flex; gap: 4px; margin-top: 16px;
+      border-radius: 8px; overflow: hidden;
+    }
+    .grid-strip i {
+      height: 26px; border-radius: 5px;
+      display: grid; place-items: center;
+      font-size: 9.5px; font-style: normal; font-weight: 700;
+      letter-spacing: 0.04em; color: var(--text-faint);
+      background: var(--surface-2); border: 1px solid var(--border);
+    }
+    .grid-strip i.work { flex: 5; }
+    .grid-strip i.brk {
+      flex: 1; background: linear-gradient(135deg, var(--brand), var(--brand-2));
+      color: var(--brand-ink); border-color: transparent;
+    }
+
+    /* ============ bento features ============ */
+    .bento {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .card {
+      position: relative;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 22px;
+      box-shadow: var(--shadow-sm);
+      transition: transform 0.22s var(--ease), border-color 0.22s, box-shadow 0.22s;
+    }
+    .card:hover {
+      transform: translateY(-3px);
+      border-color: var(--brand-line);
+      box-shadow: var(--shadow-md);
+    }
+    .card h3 {
+      margin: 0 0 7px; font-size: 15.5px; letter-spacing: -0.01em;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .card p { margin: 0; font-size: 14px; color: var(--text-dim); }
+    .card p + p { margin-top: 4px; }
+    .ico {
+      width: 34px; height: 34px; border-radius: 10px;
+      display: grid; place-items: center; font-size: 16px;
+      background: var(--surface-2); border: 1px solid var(--border);
+      margin-bottom: 13px;
+    }
+    .span-3 { grid-column: span 3; }
+    .span-2 { grid-column: span 2; }
+    .card-feature {
+      grid-column: span 3;
+      background:
+        radial-gradient(130% 120% at 100% 0%, var(--brand-soft), transparent 58%),
+        var(--surface);
+    }
+    .card-feature h3 { font-size: 18px; }
+    .kbd-row { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 16px; }
+    .kbd {
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 11.5px; font-weight: 500;
+      padding: 5px 9px; border-radius: 7px;
+      background: var(--surface-2); border: 1px solid var(--border);
+      color: var(--text-faint); position: relative;
+    }
+    .kbd.struck { text-decoration: line-through; text-decoration-color: var(--brand); }
+    .plat-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+    .plat-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 12.5px; font-weight: 600;
+      padding: 5px 11px; border-radius: 999px;
+      background: var(--surface-2); border: 1px solid var(--border);
+      color: var(--text-dim);
+    }
+    .plat-chip.on { color: var(--text); border-color: var(--brand-line); background: var(--brand-soft); }
+
+    /* ============ benefits ============ */
+    .benefits { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+    .benefit-card { cursor: pointer; display: flex; flex-direction: column; }
+    .benefit-card > p { margin-bottom: 12px; }
+    .benefit-toggle {
+      display: grid; place-items: center; flex: none;
+      width: 26px; height: 26px;
+      margin: auto auto 0; padding-top: 0;
+      border-radius: 50%; background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--brand); font-size: 12px; line-height: 1;
+      transition: transform 0.25s var(--ease), background 0.2s;
+    }
+    .benefit-card:hover .benefit-toggle,
+    .benefit-card:focus-within .benefit-toggle,
+    .benefit-card.expanded .benefit-toggle {
+      transform: rotate(180deg); background: var(--brand-soft);
+    }
+    .benefit-extra {
+      display: flex; flex-direction: column; gap: 8px;
+      max-height: 0; overflow: hidden; opacity: 0;
+      margin-top: 0; padding-top: 0; border-top: 0 solid var(--border);
+      transition: max-height 0.32s var(--ease), opacity 0.24s ease,
+                  margin-top 0.32s var(--ease), padding-top 0.32s var(--ease),
+                  border-top-width 0.32s var(--ease);
+    }
+    .benefit-card:hover .benefit-extra,
+    .benefit-card:focus-within .benefit-extra,
+    .benefit-card.expanded .benefit-extra {
+      max-height: 420px; opacity: 1;
+      margin-top: 14px; padding-top: 13px; border-top-width: 1px;
+    }
+    .benefit-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 12px; padding: 10px 12px;
+      transition: border-color 0.15s, background 0.15s, transform 0.15s;
+    }
+    .benefit-item:hover { border-color: var(--brand-line); background: var(--brand-soft); transform: translateX(2px); }
+    .benefit-icon { flex: none; font-size: 14px; line-height: 1.4; }
+    .benefit-item p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--text-dim); }
+    .benefit-item .tag {
+      display: block; font-size: 9.5px; font-weight: 800;
+      letter-spacing: 0.09em; text-transform: uppercase;
+      color: var(--brand); margin-bottom: 3px;
+    }
+    .benefit-extra cite { font-style: normal; font-weight: 600; color: var(--text); }
+
+    /* ============ screenshots ============ */
+    .shots-wrap { position: relative; max-width: 860px; margin: 0 auto; }
+    .frame {
+      border-radius: var(--r-lg);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      box-shadow: var(--shadow-lg);
+      overflow: hidden;
+    }
+    .carousel-track {
+      display: flex; overflow-x: auto;
+      scroll-snap-type: x mandatory; scroll-behavior: smooth;
+      -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    }
+    .carousel-track::-webkit-scrollbar { display: none; }
+    .carousel-slide { flex: 0 0 100%; scroll-snap-align: center; }
+    .shot { width: 100%; height: auto; display: block; }
+    .carousel-btn {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      width: 40px; height: 40px; border-radius: 50%;
+      border: 1px solid var(--border); background: var(--glass);
+      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+      color: var(--text); font-size: 16px; line-height: 1;
+      cursor: pointer; display: grid; place-items: center; z-index: 2;
+      box-shadow: var(--shadow-md);
+      transition: background 0.15s, transform 0.15s, color 0.15s;
+    }
+    .carousel-btn:hover { color: var(--brand); transform: translateY(-50%) scale(1.06); }
+    .carousel-prev { left: -18px; }
+    .carousel-next { right: -18px; }
+    @media (max-width: 940px) { .carousel-prev { left: 6px; } .carousel-next { right: 6px; } }
+    .carousel-meta {
+      display: flex; align-items: center; justify-content: center;
+      gap: 14px; margin-top: 20px;
+    }
+    .carousel-dots { display: flex; gap: 7px; }
+    .carousel-dot {
+      width: 7px; height: 7px; border-radius: 999px; border: none; padding: 0;
+      background: var(--border-strong); cursor: pointer;
+      transition: background 0.2s, width 0.2s var(--ease);
+    }
+    .carousel-dot.active { background: var(--brand); width: 22px; }
+    .shot-caption {
+      font-size: 13px; color: var(--text-faint); text-align: center;
+      margin: 0; min-height: 1.4em;
+    }
+
+    /* ============ platform table ============ */
+    .table-wrap {
+      overflow-x: auto; border: 1px solid var(--border);
+      border-radius: var(--r); background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .support-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .support-table th, .support-table td {
+      padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--border);
+    }
+    .support-table thead th {
+      font-size: 11.5px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.07em; color: var(--text-faint);
+      background: var(--surface-2); position: sticky; top: 0;
+    }
+    .support-table tbody tr { transition: background 0.15s; }
+    .support-table tbody tr:hover { background: var(--surface-2); }
+    .support-table tbody tr:last-child td { border-bottom: none; }
+    .support-table th:not(:first-child), .support-table td:not(:first-child) {
+      text-align: center; white-space: nowrap;
+    }
+    .support-table td:first-child { font-weight: 500; }
+    .support-table .yes { color: var(--ok); font-weight: 700; }
+    .support-table .no { color: var(--text-faint); font-weight: 700; }
+    .support-table .partial { color: var(--brand); font-weight: 700; }
+    .table-note {
+      display: block; font-size: 10.5px; font-weight: 500;
+      color: var(--text-faint); margin-top: 3px; white-space: normal;
+    }
+
+    /* ============ roadmap ============ */
+    .roadmap { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+    .roadmap .card { border-style: dashed; background: transparent; box-shadow: none; }
+    .roadmap-badge {
+      display: inline-block; font-size: 10.5px; font-weight: 800;
+      letter-spacing: 0.09em; text-transform: uppercase;
+      color: var(--brand); background: var(--brand-soft);
+      padding: 3px 9px; border-radius: 999px; margin-bottom: 10px;
+    }
+
+    /* ============ install accordion ============ */
+    .install {
+      border: 1px solid var(--border); border-radius: var(--r);
+      background: var(--surface); box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+    .install summary {
+      cursor: pointer; list-style: none;
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 600; font-size: 14.5px; color: var(--text);
+      padding: 16px 20px;
+    }
+    .install summary::-webkit-details-marker { display: none; }
+    .install summary::before {
+      content: "\203A"; color: var(--brand); font-size: 20px; line-height: 1;
+      transition: transform 0.2s var(--ease);
+    }
+    .install[open] summary::before { transform: rotate(90deg); }
+    .install-body {
+      padding: 0 20px 20px; font-size: 13.5px; color: var(--text-dim);
+      border-top: 1px solid var(--border); margin-top: 0; padding-top: 16px;
+    }
+    .install-body h4 {
+      margin: 18px 0 6px; font-size: 12px; font-weight: 700;
+      letter-spacing: 0.07em; text-transform: uppercase; color: var(--text);
+    }
+    .install-body h4:first-child { margin-top: 0; }
+    .install-body p { margin: 0 0 4px; }
+
+    /* ============ timeline ============ */
+    .timeline {
+      position: relative; margin: 0; padding-left: 30px;
       border-left: 2px solid var(--border);
     }
-    .timeline-week {
-      position: relative;
-      padding-bottom: 28px;
+    .timeline-tier {
+      font-size: 11px; font-weight: 800; letter-spacing: 0.09em;
+      text-transform: uppercase; color: var(--text-faint);
+      margin: 0 0 18px;
     }
-    .timeline-week:last-child {
-      padding-bottom: 0;
-    }
-    .timeline-week::before {
-      content: "";
-      position: absolute;
-      left: -34px;
-      top: 4px;
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      background: var(--accent);
+    .timeline-tier:not(:first-child) { margin-top: 6px; }
+    .timeline-entry { position: relative; padding-bottom: 32px; }
+    .timeline-entry::before {
+      content: ""; position: absolute; left: -37px; top: 5px;
+      width: 12px; height: 12px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--brand), var(--brand-2));
       border: 2px solid var(--bg);
       box-shadow: 0 0 0 2px var(--border);
     }
     .timeline-date {
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.02em;
-      color: var(--accent);
-      margin: 0 0 8px;
+      font-size: 12.5px; font-weight: 700; letter-spacing: 0.03em;
+      color: var(--brand); margin: 0 0 10px;
     }
-    .timeline-items {
-      margin: 0;
-      padding-left: 18px;
-      font-size: 14px;
-      color: var(--text-dim);
+    .timeline-items { margin: 0; padding-left: 18px; font-size: 14px; color: var(--text-dim); }
+    .timeline-items li { margin-bottom: 6px; }
+
+    /* ============ final cta ============ */
+    .final-cta {
+      position: relative; overflow: hidden;
+      border-radius: var(--r-lg); border: 1px solid var(--border);
+      background:
+        radial-gradient(120% 140% at 50% 0%, var(--brand-soft), transparent 62%),
+        var(--surface);
+      box-shadow: var(--shadow-md);
+      padding: clamp(34px, 6vw, 60px) 28px;
+      text-align: center;
     }
-    .timeline-items li {
-      margin-bottom: 4px;
+    .final-cta h2 { margin-bottom: 10px; }
+    .final-cta p { color: var(--text-dim); margin: 0 auto 26px; max-width: 44ch; }
+    .final-cta .cta-row { justify-content: center; }
+
+    /* ============ footer ============ */
+    footer { border-top: 1px solid var(--border); padding: 34px 0 44px; }
+    .foot-inner {
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--text-faint);
     }
-    footer {
-      border-top: 1px solid var(--border);
-      padding-top: 24px;
-      font-size: 13px;
-      color: var(--text-dim);
-      display: flex;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 8px;
+    .foot-links { display: flex; gap: 18px; flex-wrap: wrap; }
+    .foot-links a { color: var(--text-dim); }
+    .foot-links a:hover { color: var(--brand); }
+
+    /* ============ reveal on scroll ============ */
+    .js .reveal { opacity: 0; transform: translateY(16px); }
+    .js .reveal.in {
+      opacity: 1; transform: none;
+      transition: opacity 0.6s var(--ease), transform 0.6s var(--ease);
     }
-    footer a { color: inherit; }
+    @media (prefers-reduced-motion: reduce) {
+      .js .reveal { opacity: 1; transform: none; }
+    }
+
+    /* ============ responsive ============ */
+    @media (max-width: 980px) {
+      .hero-grid { grid-template-columns: 1fr; gap: 40px; }
+      .steps { grid-template-columns: 1fr; }
+      .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .span-3, .span-2, .card-feature { grid-column: span 2; }
+    }
+    @media (max-width: 620px) {
+      .hero { padding-top: 48px; }
+      .section { padding: 60px 0; }
+      .bento { grid-template-columns: 1fr; }
+      .span-3, .span-2, .card-feature { grid-column: span 1; }
+      .trust { gap: 22px; }
+      /* detected platform gets a full-width CTA; the rest share a row below it */
+      .cta-row .btn-primary { flex: 1 1 100%; }
+      .cta-row .btn-secondary { flex: 1 1 auto; }
+      .wrap { padding: 0 18px; }
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <span class="eyebrow">Windows, macOS, Linux &amp; Android</span>
-    <h1>Reflectodoro</h1>
-    <p class="tagline">
-      A <b>Pomodoro</b> app to <b>force a short break</b> and <b>self-reflection</b> at the end of
-      every session - with <b>hard to dismiss break screen.</b>
-    </p>
+  <script>document.documentElement.classList.add('js');
+    try {
+      if (localStorage.getItem('rd-theme') === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    } catch (e) {}
+  </script>
 
-    <div class="cta-row">
-      <a class="btn btn-primary" data-platform="windows" href="https://github.com/techxapp/reflectodoro/releases/latest">
-        Download for Windows (.exe)
-      </a>
-      <a class="btn btn-primary" data-platform="macos" href="https://github.com/techxapp/reflectodoro/releases/latest">
-        Download for macOS (.dmg)
-      </a>
-      <a class="btn btn-primary" data-platform="linux" href="https://github.com/techxapp/reflectodoro/releases/latest">
-        Download for Linux (.AppImage)
-      </a>
-      <a class="btn btn-primary" data-platform="android" href="https://github.com/techxapp/reflectodoro/releases/latest">
-        Download for Android (.apk)
-      </a>
-      <a class="btn btn-secondary" href="https://github.com/techxapp/reflectodoro">
-        View source on GitHub
-      </a>
-    </div>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="aurora" aria-hidden="true"><span class="a1"></span><span class="a2"></span></div>
 
-    <details class="install-details">
-      <summary>Installation instructions</summary>
-      <p class="note">
-        Windows may show a SmartScreen "unknown publisher" warning on first run &mdash;
-        choose <em>More info &rarr; Run anyway</em>. <br/><br/> On macOS, the app isn't notarized yet,
-        so Gatekeeper will block it the first time &mdash; right-click the app and choose
-        <em>Open</em>, or run <code>xattr -cr /Applications/Reflectodoro.app</code> in Terminal.
-        <br/><br/> On Linux, make the AppImage executable first (<code>chmod +x Reflectodoro*.AppImage</code>);
-        some distros also need <code>libfuse2</code> installed for it to run.
-        <br/><br/> The Android build is a debug-signed APK (no Play Store listing or release
-        keystore yet) &mdash; you'll need to allow "install from unknown sources" for your
-        browser/file manager, and Play Protect may warn about an unrecognized developer.
-        <br/>For reliable break enforcement in the background, also grant <strong>Display over
-        other apps</strong> and <strong>Notifications</strong> when onboarding asks, and
-        disable battery optimization for Reflectodoro in Settings (on Xiaomi/Oppo/Vivo
-        phones, also enable its "auto-start" toggle) &mdash; otherwise some OEMs can kill
-        the background timer.
-        <br/><h5>Note: If pre-builds are not working for your platform, you may do production build yourself using `Pre-requisite` and `Build a production installer` instructions given in <a href="https://github.com/techxapp/reflectodoro">Readme.</a></h5>
+  <div class="page">
+    <header class="nav" id="nav">
+      <div class="wrap nav-inner">
+        <a class="brand" href="#top">
+          <span class="brand-mark" aria-hidden="true">&#9679;</span>
+          Reflectodoro
+        </a>
+        <nav class="nav-links" aria-label="Sections">
+          <a href="#how">How it works</a>
+          <a href="#features">Features</a>
+          <a href="#why">Why it helps</a>
+          <a href="#screenshots">Screenshots</a>
+          <a href="#platforms">Platforms</a>
+          <a href="#journey">Journey</a>
+        </nav>
+        <button class="icon-btn" id="themeToggle" type="button" aria-label="Toggle color theme" title="Toggle theme">
+          <span id="themeIcon" aria-hidden="true">&#9789;</span>
+        </button>
+        <a class="btn btn-primary btn-sm" href="#download">Download</a>
+      </div>
+    </header>
 
-      </p>
-    </details>
+    <main id="main">
+      <!-- ============ hero ============ -->
+      <section class="hero" id="top">
+        <div class="wrap hero-grid">
+          <div>
+            <span class="pill">
+              <span class="dot-live" aria-hidden="true"></span>
+              Windows &middot; macOS &middot; Linux &middot; <b>Android</b>
+            </span>
+            <h2>The <span class="grad">Pomodoro</span> app with <span class="grad">break</span> and <span class="grad">self-reflection</span> you <span class="grad">can't skip</span>.</h2>
+            <br/><p class="lede">
+              Every 25 minutes it takes over your screen for 5 minutes and asks one question:
+              <b>what did you actually just do?</b> &mdash; you write the answer, or the break screen stays.
+            </p>
 
-    <div class="features">
-      <div class="card">
-        <h3>Wall-clock breaks &#9202;</h3>
-        <p>Work and break slots are pinned to fixed clock boundaries.</p>
-      </div>
-      <div class="card">
-        <h3>No free pass &#128274;</h3>
-        <p>The break screen can't be dismissed directly &mdash; you have to write what you did and wait for break time to be over.</p>
-      </div>
-      <div class="card">
-        <h3>Emergency exit &#9889;</h3>
-        <p>Type a random on-screen string to end the break early &mdash; still requires the reflection either way.</p>
-      </div>
-      <div class="card">
-        <h3>Wellness check &#127793;</h3>
-        <p>Wellness check at the end of break to track break items i.e. did short exercise, relaxed eyes, drank water.</p>
-      </div>
-      <div class="card">
-        <h3>Most Important tasks List &#128221;</h3>
-        <p>Capture Most-important and Not to-do task list for day</p>
-      </div>
-      <div class="card">
-        <h3>Fully local and private &#128187;</h3>
-        <p>All of your data is stored on your device. No cloud data transfer.</p>
-      </div>
-      <div class="card">
-        <h3>Auto-pause Media &#9208;&#65039;</h3>
-        <p>Auto-pause music/movies during breaktime, so you do not get spoilers &#128540; when you get back.</p>
-      </div>
-      <div class="card">
-        <h3>Cross-platform support &#128241;</h3>
-        <p>Windows, Linux, Android</p>
-        <p>Under-testing: macOS</p>
-        <p>Planned: iOS</p>
-      </div>
-      <div class="card">
-        <h3>Open Source &#128275;</h3>
-        <p>Code is fully open-sourced and built/released directly via GitHub Actions.</p>
-      </div>
-    </div>
+            <div class="cta-row" id="download">
+              <a class="btn btn-primary" data-platform="windows" href="https://github.com/techxapp/reflectodoro/releases/latest">
+                Download for Windows
+              </a>
+              <a class="btn btn-secondary" data-platform="macos" href="https://github.com/techxapp/reflectodoro/releases/latest">
+                macOS
+              </a>
+              <a class="btn btn-secondary" data-platform="linux" href="https://github.com/techxapp/reflectodoro/releases/latest">
+                Linux
+              </a>
+              <a class="btn btn-secondary" data-platform="android" href="https://github.com/techxapp/reflectodoro/releases/latest">
+                Android
+              </a>
+            </div>
+            <p class="cta-note">
+              Free &amp; open source &middot;
+              <a href="https://github.com/techxapp/reflectodoro">Source on GitHub</a> &middot;
+              <a href="#install">Installation notes</a>
+            </p>
 
-    <h2 class="section-title">How does it help you ?</h2>
-    <div class="features">
-      <div class="card benefit-card" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-1">
-        <h3>Health benefit &#129505;</h3>
-        <p>Regular, enforced breaks cut down on eye strain, stiffness, and the posture damage of sitting through hours of uninterrupted screen time.</p>
-        <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
-        <div class="benefit-extra" id="benefit-extra-1">
-          <div class="benefit-item">
-            <span class="benefit-icon" aria-hidden="true">&#128214;</span>
-            <p><span class="tag">Book</span>Long, uninterrupted sitting harms the body no matter how much you exercise elsewhere &mdash; what matters is breaking it up regularly (James Levine, <cite>Get Up!</cite>).</p>
+            <dl class="trust">
+              <div>
+                <dt>4</dt>
+                <dd>Platforms</dd>
+              </div>
+              <!-- <div>
+                <dt>0</dt>
+                <dd>Accounts</dd>
+              </div> -->
+              <div>
+                <dt>100%</dt>
+                <dd>On-device</dd>
+              </div>
+              <div>
+                <dt class="grad">25 / 5</dt>
+                <dd>Wall-clock grid</dd>
+              </div>
+            </dl>
           </div>
-          <div class="benefit-item">
-            <span class="benefit-icon" aria-hidden="true">&#128300;</span>
-            <p><span class="tag">Research</span>Every 20 minutes, look at something 20 feet away for 20 seconds to reduce digital eye strain (American Optometric Association's "20-20-20" rule).</p>
-          </div>
-        </div>
-      </div>
-      <div class="card benefit-card" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-2">
-        <h3>Mental refresh &#127807;</h3>
-        <p>Stepping away on a fixed clock &mdash; not "just one more thing" &mdash; keeps focus fatigue from building up across the day.</p>
-        <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
-        <div class="benefit-extra" id="benefit-extra-2">
-          <div class="benefit-item">
-            <span class="benefit-icon" aria-hidden="true">&#128214;</span>
-            <p><span class="tag">Book</span>Deliberate, scheduled rest is what makes deep, sustained focus possible &mdash; not productivity's enemy, but its precondition (Alex Soojung-Kim Pang, <cite>Rest</cite>).</p>
-          </div>
-          <div class="benefit-item">
-            <span class="benefit-icon" aria-hidden="true">&#128300;</span>
-            <p><span class="tag">Research</span>The most productive users work in focused ~52-minute bursts, then break for ~17 minutes (2014 DeskTime work-tracking analysis).</p>
+
+          <div class="mock" aria-hidden="true">
+            <div class="mock-bar">
+              <span class="lock">&#128274;</span> Break in progress
+            </div>
+            <p class="mock-clock mono">04:32</p>
+            <p class="mock-sub">Alt+F4, Alt+Tab and the close button are disabled.</p>
+            <span class="mock-label">What did you do in the last pomodoro?</span>
+            <div class="mock-field">Refactored the scheduler so it sleeps to the exact boundary<span class="caret"></span></div>
+            <div class="mock-challenge">
+              <span>Emergency exit &mdash; type it exactly</span>
+              <div class="code-str mono">7hKp2mRtXaQ9vLd</div>
+            </div>
+            <div class="mock-foot">
+              <span>Reflection still required</span>
+              <span class="fake-btn">Submit</span>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="card benefit-card" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-3">
-        <h3>Rethink &amp; reset &#128161;</h3>
-        <p>Writing what you just did forces a quick gut-check on whether it's still the right next step, instead of coasting on autopilot.</p>
-        <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
-        <div class="benefit-extra" id="benefit-extra-3">
-          <div class="benefit-item">
-            <span class="benefit-icon" aria-hidden="true">&#128214;</span>
-            <p><span class="tag">Book</span>"Reflection-in-action" &mdash; pausing mid-task to think and adjust course &mdash; is what separates deliberate work from autopilot (Donald Sch&ouml;n, <cite>The Reflective Practitioner</cite>).</p>
+      </section>
+
+      <!-- ============ how it works ============ -->
+      <section class="section" id="how">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <span class="eyebrow">How it works</span>
+            <h2>Four steps, on repeat, all day.</h2>
+            <p>No configuration ritual, no streaks to protect. Install it and the clock does the rest.</p>
+          </div>
+          <div class="steps">
+            <div class="step reveal">
+              <div class="step-n">1</div>
+              <h3>Work on the wall clock</h3>
+              <p>Slots are pinned to real clock boundaries &mdash; :00&ndash;:25 work, :25&ndash;:30 break.</p>
+              <div class="grid-strip">
+                <i class="work">:00 &ndash; :25 WORK</i>
+                <i class="brk">BREAK</i>
+                <i class="work">:30 &ndash; :55 WORK</i>
+                <i class="brk">BREAK</i>
+              </div>
+            </div>
+            <div class="step reveal">
+              <div class="step-n">2</div>
+              <h3>The break screen takes over</h3>
+              <p>A fullscreen, always-on-top window appears. The close button is intercepted, and on Windows
+                 and Linux/X11 even Alt+Tab is suppressed while it's up.</p>
+              <div class="kbd-row">
+                <span class="kbd struck">Alt + F4</span>
+                <span class="kbd struck">Alt + Tab</span>
+                <span class="kbd struck">Win</span>
+              </div>
+            </div>
+            <div class="step reveal">
+              <div class="step-n">3</div>
+              <h3>Reflect your way out</h3>
+              <p>Write what you actually did. In a hurry? Type the random on-screen code to end the break
+                 early &mdash; you still have to write the reflection.</p>
+              <div class="kbd-row">
+                <span class="kbd">time up</span>
+                <span class="kbd">+</span>
+                <span class="kbd">reflection</span>
+                <span class="kbd">= unlock</span>
+              </div>
+            </div>
+            <div class="step reveal">
+              <div class="step-n">4</div>
+              <h3>Wellness checkin</h3>
+              <p>Quick toggle whether you completed intended tasks in break &mdash; 
+                Water, Exercise, Relax eyes.
+              </p>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="card benefit-card" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-4">
-        <h3>Builds a real record &#128220;</h3>
-        <p>Every reflection is saved, so you end the day with an honest, timestamped log of what you actually worked on &mdash; not a guess.</p>
-        <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
-        <div class="benefit-extra" id="benefit-extra-4">
-          <div class="benefit-item">
-            <span class="benefit-icon" aria-hidden="true">&#128214;</span>
-            <p><span class="tag">Book</span>A brief, honest daily log beats relying on memory to know where your time actually went (Ryder Carroll, <cite>The Bullet Journal Method</cite>).</p>
+      </section>
+
+      <!-- ============ features ============ -->
+      <section class="section" id="features">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <span class="eyebrow">Features</span>
+            <h2>Small app. Stubborn on purpose.</h2>
+            <p>Everything below runs locally on your machine &mdash; there is no server, no account and no sync.</p>
           </div>
-          <div class="benefit-item">
-            <span class="benefit-icon" aria-hidden="true">&#128300;</span>
-            <p><span class="tag">Research</span>Memory of how you spent your day is unreliable unless reconstructed close in time to the events &mdash; a log kept in the moment beats one recalled later (Kahneman, Krueger, Schkade, Schwarz &amp; Stone, <cite>Science</cite>, 2004).</p>
+
+          <div class="bento">
+            <div class="card card-feature reveal">
+              <div class="ico" aria-hidden="true">&#128274;</div>
+              <h3>No free pass</h3>
+              <p>The break screen can't be dismissed directly. You have to write what you did <em>and</em> wait
+                 out the break.</p>
+            </div>
+
+            <div class="card card-feature reveal">
+              <div class="ico" aria-hidden="true">&#9889;</div>
+              <h3>Emergency exit challenge</h3>
+              <p>Need out early? Type a freshly generated random string shown on screen.</p>
+              <div class="mock-challenge" style="margin-top:16px">
+                <span>Exit challenge</span>
+                <div class="code-str mono">qW4hRtY7uNb2xKe</div>
+              </div>
+            </div>
+
+            <div class="card span-2 reveal">
+              <div class="ico" aria-hidden="true">&#9202;</div>
+              <h3>Wall-clock breaks</h3>
+              <p>Work and break slots land on fixed clock boundaries, so your breaks are predictable and easy to
+                 plan around.</p>
+            </div>
+            <div class="card span-2 reveal">
+              <div class="ico" aria-hidden="true">&#127793;</div>
+              <h3>Wellness check</h3>
+              <p>A quick end-of-break check-in for the things you skip when heads-down: eyes rested, stretched,
+                 water, washroom.</p>
+            </div>
+            <div class="card span-2 reveal">
+              <div class="ico" aria-hidden="true">&#128221;</div>
+              <h3>Most Important Tasks</h3>
+              <p>Capture today's must-do list &mdash; plus an explicit &ldquo;not to do&rdquo; list &mdash; shared between the
+                 main window and the break screen.</p>
+            </div>
+
+            <div class="card span-3 reveal">
+              <div class="ico" aria-hidden="true">&#9208;&#65039;</div>
+              <h3>Auto-pause your media</h3>
+              <p>Music or a movie playing when the break starts? Reflectodoro pauses it, so you don't come back
+                 to spoilers. Uses the real media-session APIs on Windows and Linux, and audio-focus on Android.</p>
+            </div>
+            <div class="card span-3 reveal">
+              <div class="ico" aria-hidden="true">&#128187;</div>
+              <h3>Fully local &amp; private</h3>
+              <p>Every reflection lives in a SQLite file on your device. No cloud, no telemetry, no account.                 </p>
+            </div>
+
+            <div class="card span-3 reveal">
+              <div class="ico" aria-hidden="true">&#128241;</div>
+              <h3>Cross-platform</h3>
+              <p>One codebase, four signed builds &mdash; with a native break overlay and foreground scheduler on
+                 Android that survives reboots.</p>
+              <div class="plat-row">
+                <span class="plat-chip on">Windows</span>
+                <span class="plat-chip on">Linux</span>
+                <span class="plat-chip on">Android</span>
+                <span class="plat-chip">macOS &middot; early</span>
+                <span class="plat-chip">iOS &middot; planned</span>
+              </div>
+            </div>
+            <div class="card span-3 reveal">
+              <div class="ico" aria-hidden="true">&#128275;</div>
+              <h3>Open source</h3>
+              <p>The whole app is on GitHub and every release is built and published straight from GitHub
+                 Actions &mdash; you can read exactly what runs on your machine, or build it yourself.</p>
+              <div class="plat-row">
+                <a class="plat-chip on" href="https://github.com/techxapp/reflectodoro">View the source &rarr;</a>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="card benefit-card" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-5">
-        <h3>Fights burnout &#128165;</h3>
-        <p>The wellness check nudges habits (water, exercise, movement) that are easy to skip when you're heads-down, before they add up.</p>
-        <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
-        <div class="benefit-extra" id="benefit-extra-5">
-          <div class="benefit-item">
-            <span class="benefit-icon" aria-hidden="true">&#128214;</span>
-            <p><span class="tag">Book</span>Stress needs to be actively "completed" through small physical actions, not just removing the stressor, or it accumulates (Emily &amp; Amelia Nagoski, <cite>Burnout</cite>).</p>
+      </section>
+
+      <!-- ============ why it helps ============ -->
+      <section class="section" id="why">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <span class="eyebrow">Why it helps</span>
+            <h2>Forced breaks aren't a gimmick.</h2>
+            <p>Each card opens to the research and books the idea comes from &mdash; hover, tap or press Enter.</p>
+          </div>
+
+          <div class="benefits">
+            <div class="card benefit-card reveal" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-1">
+              <h3>Health benefit &#129505;</h3>
+              <p>Regular, enforced breaks cut down on eye strain, stiffness, and the posture damage of sitting through hours of uninterrupted screen time.</p>
+              <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
+              <div class="benefit-extra" id="benefit-extra-1">
+                <div class="benefit-item">
+                  <span class="benefit-icon" aria-hidden="true">&#128214;</span>
+                  <p><span class="tag">Book</span>Long, uninterrupted sitting harms the body no matter how much you exercise elsewhere &mdash; what matters is breaking it up regularly (James Levine, <cite>Get Up!</cite>).</p>
+                </div>
+                <div class="benefit-item">
+                  <span class="benefit-icon" aria-hidden="true">&#128300;</span>
+                  <p><span class="tag">Research</span>Every 20 minutes, look at something 20 feet away for 20 seconds to reduce digital eye strain (American Optometric Association's &ldquo;20-20-20&rdquo; rule).</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="card benefit-card reveal" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-2">
+              <h3>Mental refresh &#127807;</h3>
+              <p>Stepping away on a fixed clock &mdash; not &ldquo;just one more thing&rdquo; &mdash; keeps focus fatigue from building up across the day.</p>
+              <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
+              <div class="benefit-extra" id="benefit-extra-2">
+                <div class="benefit-item">
+                  <span class="benefit-icon" aria-hidden="true">&#128214;</span>
+                  <p><span class="tag">Book</span>Deliberate, scheduled rest is what makes deep, sustained focus possible &mdash; not productivity's enemy, but its precondition (Alex Soojung-Kim Pang, <cite>Rest</cite>).</p>
+                </div>
+                <div class="benefit-item">
+                  <span class="benefit-icon" aria-hidden="true">&#128300;</span>
+                  <p><span class="tag">Research</span>The most productive users work in focused ~52-minute bursts, then break for ~17 minutes (2014 DeskTime work-tracking analysis).</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="card benefit-card reveal" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-3">
+              <h3>Rethink &amp; reset &#128161;</h3>
+              <p>Writing what you just did forces a quick gut-check on whether it's still the right next step, instead of coasting on autopilot.
+                 It also help come out of droom-scrolling.</p>
+              <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
+              <div class="benefit-extra" id="benefit-extra-3">
+                <div class="benefit-item">
+                  <span class="benefit-icon" aria-hidden="true">&#128214;</span>
+                  <p><span class="tag">Book</span>&ldquo;Reflection-in-action&rdquo; &mdash; pausing mid-task to think and adjust course &mdash; is what separates deliberate work from autopilot (Donald Sch&ouml;n, <cite>The Reflective Practitioner</cite>).</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="card benefit-card reveal" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-4">
+              <h3>Builds a real record &#128220;</h3>
+              <p>Every reflection is saved, so you end the day with an honest, timestamped log of what you actually worked on &mdash; not a guess.</p>
+              <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
+              <div class="benefit-extra" id="benefit-extra-4">
+                <div class="benefit-item">
+                  <span class="benefit-icon" aria-hidden="true">&#128214;</span>
+                  <p><span class="tag">Book</span>A brief, honest daily log beats relying on memory to know where your time actually went (Ryder Carroll, <cite>The Bullet Journal Method</cite>).</p>
+                </div>
+                <div class="benefit-item">
+                  <span class="benefit-icon" aria-hidden="true">&#128300;</span>
+                  <p><span class="tag">Research</span>Memory of how you spent your day is unreliable unless reconstructed close in time to the events &mdash; a log kept in the moment beats one recalled later (Kahneman, Krueger, Schkade, Schwarz &amp; Stone, <cite>Science</cite>, 2004).</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="card benefit-card reveal" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-5">
+              <h3>Fights burnout &#128165;</h3>
+              <p>The wellness check nudges habits (water, exercise, movement) that are easy to skip when you're heads-down, before they add up.</p>
+              <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
+              <div class="benefit-extra" id="benefit-extra-5">
+                <div class="benefit-item">
+                  <span class="benefit-icon" aria-hidden="true">&#128214;</span>
+                  <p><span class="tag">Book</span>Stress needs to be actively &ldquo;completed&rdquo; through small physical actions, not just removing the stressor, or it accumulates (Emily &amp; Amelia Nagoski, <cite>Burnout</cite>).</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="card benefit-card reveal" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-6">
+              <h3>Sharper prioritization &#127919;</h3>
+              <p>The Most Important Tasks list keeps today's real priorities in view, so breaks don't derail you &mdash; they refocus you without mental stress.</p>
+              <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
+              <div class="benefit-extra" id="benefit-extra-6">
+                <div class="benefit-item">
+                  <span class="benefit-icon" aria-hidden="true">&#128214;</span>
+                  <p><span class="tag">Book</span>Naming your single most important task keeps ordinary busyness from crowding out what actually matters (Gary Keller, <cite>The One Thing</cite>).</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="card benefit-card" tabindex="0" role="button" aria-expanded="false" aria-controls="benefit-extra-6">
-        <h3>Sharper prioritization &#127919;</h3>
-        <p>The Most Important Tasks list keeps today's real priorities in view, so breaks don't derail you &mdash; they refocus you without mental stress.</p>
-        <div class="benefit-toggle" aria-hidden="true">&#9662;</div>
-        <div class="benefit-extra" id="benefit-extra-6">
-          <div class="benefit-item">
-            <span class="benefit-icon" aria-hidden="true">&#128214;</span>
-            <p><span class="tag">Book</span>Naming your single most important task keeps ordinary busyness from crowding out what actually matters (Gary Keller, <cite>The One Thing</cite>).</p>
+      </section>
+
+      <!-- ============ screenshots ============ -->
+      <section class="section" id="screenshots">
+        <div class="wrap">
+          <div class="section-head center reveal">
+            <span class="eyebrow">Screenshots</span>
+            <h2>See it in action</h2>
+          </div>
+
+          <div class="shots-wrap reveal">
+            <button class="carousel-btn carousel-prev" type="button" aria-label="Previous screenshot">&#8592;</button>
+            <div class="frame">
+              <div class="carousel-track" id="carouselTrack" tabindex="0" role="group" aria-label="Screenshots carousel">
+                <div class="carousel-slide" data-caption="Main window &mdash; wall-clock countdown and Most Important Tasks">
+                  <img class="shot" src="screenshots/SS3.png" alt="Main timer window with wall-clock countdown and Most Important Tasks panel" />
+                </div>
+                <div class="carousel-slide" data-caption="Break screen &mdash; reflection required, with the emergency-exit challenge">
+                  <img class="shot" src="screenshots/SS1.png" alt="Break screen requiring a written reflection, with the emergency-exit code challenge" loading="lazy" />
+                </div>
+                <div class="carousel-slide" data-caption="Wellness check-in at the end of the break">
+                  <img class="shot" src="screenshots/SS2.png" alt="Wellness check-in prompt for relaxed eyes, exercise, water, and washroom breaks" loading="lazy" />
+                </div>
+                <div class="carousel-slide" data-caption="Entries &mdash; daily wellness stats and reflection history">
+                  <img class="shot" src="screenshots/SS4.png" alt="Entries view showing daily wellness stats and reflection history on a calendar" loading="lazy" />
+                </div>
+              </div>
+            </div>
+            <button class="carousel-btn carousel-next" type="button" aria-label="Next screenshot">&#8594;</button>
+          </div>
+
+          <div class="carousel-meta">
+            <div class="carousel-dots" id="carouselDots"></div>
+          </div>
+          <p class="shot-caption" id="shotCaption"></p>
+        </div>
+      </section>
+
+      <!-- ============ platforms ============ -->
+      <section class="section" id="platforms">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <span class="eyebrow">Platform support</span>
+            <h2>What works where</h2>
+            <p>Honest about the gaps: some enforcement depends on what each OS actually lets an app do.</p>
+          </div>
+
+          <div class="table-wrap reveal">
+            <table class="support-table">
+              <thead>
+                <tr>
+                  <th scope="col">Feature</th>
+                  <th scope="col">Windows</th>
+                  <th scope="col">macOS<span class="table-note">Early release</span></th>
+                  <th scope="col">Linux</th>
+                  <th scope="col">Android</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Wall-clock breaks</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                </tr>
+                <tr>
+                  <td>No free pass (reflection required)</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="partial">&#10003;<span class="table-note">Best effort</span></td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                </tr>
+                <tr>
+                  <td>Emergency exit challenge</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                </tr>
+                <tr>
+                  <td>Wellness check</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                </tr>
+                <tr>
+                  <td>Fully local and private</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
+                </tr>
+                <tr>
+                  <td>Auto-pause media on break</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="partial">&#10003;<span class="table-note">Best effort (toggle)</span></td>
+                  <td class="yes">&#10003;</td>
+                  <td class="partial">&#10003;<span class="table-note">Best effort (audio focus)</span></td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
-      </div>
-    </div>
+      </section>
 
-    <h2 class="section-title">Screenshots</h2>
-    <div class="carousel">
-      <button class="carousel-btn carousel-prev" type="button" aria-label="Previous screenshot">&#8592;</button>
-      <div class="carousel-track" id="carouselTrack" tabindex="0" aria-label="Screenshots carousel">
-        <div class="carousel-slide"><img class="shot" src="screenshots/SS3.png" alt="Main timer window with wall-clock countdown and Most Important Tasks panel" loading="lazy" /></div>
-        <div class="carousel-slide"><img class="shot" src="screenshots/SS1.png" alt="Break break screen requiring a written reflection, with the emergency-exit code challenge" loading="lazy" /></div>
-        <div class="carousel-slide"><img class="shot" src="screenshots/SS2.png" alt="Wellness check-in prompt for relaxed eyes, exercise, water, and washroom breaks" loading="lazy" /></div>
-        <div class="carousel-slide"><img class="shot" src="screenshots/SS4.png" alt="Entries view showing daily wellness stats and reflection history on a calendar" loading="lazy" /></div>
-      </div>
-      <button class="carousel-btn carousel-next" type="button" aria-label="Next screenshot">&#8594;</button>
-    </div>
-    <div class="carousel-dots" id="carouselDots"></div>
+      <!-- ============ download + install ============ -->
+      <section class="section" id="install">
+        <div class="wrap">
+          <div class="final-cta reveal">
+            <h2>Stop working through your breaks.</h2>
+            <p>Free, open source, and entirely on your device. Pick your platform and it's running in minutes.</p>
+            <div class="cta-row">
+              <a class="btn btn-primary" data-platform="windows" href="https://github.com/techxapp/reflectodoro/releases/latest">
+                Download for Windows (.exe)
+              </a>
+              <a class="btn btn-secondary" data-platform="macos" href="https://github.com/techxapp/reflectodoro/releases/latest">
+                macOS (.dmg)
+              </a>
+              <a class="btn btn-secondary" data-platform="linux" href="https://github.com/techxapp/reflectodoro/releases/latest">
+                Linux (.AppImage)
+              </a>
+              <a class="btn btn-secondary" data-platform="android" href="https://github.com/techxapp/reflectodoro/releases/latest">
+                Android (.apk)
+              </a>
+            </div>
+          </div>
 
-    <h2 class="section-title">Platform support</h2>
-    <div class="support-table-wrap">
-      <table class="support-table">
-        <thead>
-          <tr>
-            <th>Feature</th>
-            <th>Windows</th>
-            <th>macOS<br/>(Early Release)</th>
-            <th>Linux</th>
-            <th>Android</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Wall-clock breaks</td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-          </tr>
-          <tr>
-            <td>No free pass (reflection required)</td>
-            <td class="yes">&#10003;</td>
-            <td class="partial">&#10003;<span class="table-note">Best efforts</span></td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-          </tr>
-          <tr>
-            <td>Emergency exit challenge</td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-          </tr>
-          <tr>
-            <td>Wellness check</td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-          </tr>
-          <tr>
-            <td>Fully local and private</td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-            <td class="yes">&#10003;</td>
-          </tr>
-          <!-- <tr>
-            <td>Alt+Tab / Cmd+Tab suppression during break</td>
-            <td class="yes">&#10003;</td>
-            <td class="no">&#10007;<span class="table-note">planned</span></td>
-            <td class="partial">&#10003;<span class="table-note">X11 only</span></td>
-            <td class="no">&#10007;</td>
-          </tr> -->
-          <tr>
-            <td>Auto-pause media on break</td>
-            <td class="yes">&#10003;</td>
-            <td class="partial">&#10003;<span class="table-note">Best efforts (Toggle support)</span></td>
-            <td class="yes">&#10003;</td>
-            <td class="partial">&#10003;<span class="table-note">Best efforts (audio focus request)</span></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+          <details class="install" style="margin-top:22px">
+            <summary>Installation notes &amp; permissions</summary>
+            <div class="install-body">
+              <h4>Windows</h4>
+              <p>SmartScreen may show an &ldquo;unknown publisher&rdquo; warning on first run &mdash; choose
+                 <em>More info &rarr; Run anyway</em>.</p>
 
-    <h2 class="section-title">Upcoming Features</h2>
-    <div class="roadmap">
-      <div class="card">
-        <span class="roadmap-badge">Planned</span>
-        <h3>Cross-device sync &#128260;</h3>
-        <p>Sync reflections and task lists across your devices.</p>
-      </div>
-      <div class="card">
-        <span class="roadmap-badge">Planned</span>
-        <h3>AI Assistant &#129302;</h3>
-        <p>Help documenting tasks, tracking progress, and summarizing reflections.</p>
-      </div>
-      <div class="card">
-        <span class="roadmap-badge">Planned</span>
-        <h3>iOS build &#127843;</h3>
-        <p>Equivalent app for iOS.</p>
-      </div>
-    </div>
+              <h4>macOS</h4>
+              <p>The app isn't notarized yet, so Gatekeeper will block it the first time &mdash; right-click the app
+                 and choose <em>Open</em>, or run <code>xattr -cr /Applications/Reflectodoro.app</code> in Terminal.</p>
 
-    <h2 class="section-title">Development journey</h2>
-    <div class="timeline">
-      <div class="timeline-week">
-        <p class="timeline-date">Week of Aug 31 &ndash; Sep 6, 2026</p>
-        <ul class="timeline-items">
-          <li>Shipped signed Android release builds with a real release keystore (no more debug APKs) and shrank the release APK size</li>
-          <li>Made Most Important Tasks and past reflections editable, added a "Not to do" list, and pre-filled the break overlay with your last reflection entry</li>
-          <li>Excluded visually ambiguous characters from the emergency-exit challenge and moved the media pause-on-break toggle to the main window</li>
-          <li>Fixed several reliability bugs: a white-screen overlay after Windows monitor sleep, an Android overlay that didn't auto-close once break time was up, the main window not reopening from the tray, and Linux AppImage packaging dropping Wayland libraries</li>
-          <li>Completed a full-codebase audit, fixing a DST-transition crash, reflections/wellness data misdated across the UTC/local day boundary, a data-import bug that could wipe history, and ways the break overlay could strand users with no way out</li>
-          <li>Hardened Android further: crash-guarded overlay/foreground-service calls, disabled cloud auto-backup of the local database, added an independent overlay watchdog, and fixed task-list/scheduler bugs across midnight and reboot</li>
-          <li>Hardened the release CI pipeline against security issues and fixed several settings/UI race conditions</li>
-          <li>Added a Discord community link and a "How does it help you" section to the landing page</li>
-        </ul>
-      </div>
-      <div class="timeline-week">
-        <p class="timeline-date">Week of Aug 24 &ndash; 30, 2026</p>
-        <ul class="timeline-items">
-          <li>Shipped the wellness check-in overlay after breaks</li>
-          <li>Added an About page, check-for-update button, structured logging, and tightened UI/landing page copy</li>
-          <li>Made settings optional in data export/import and added a setting to pause media on break</li>
-          <li>Added macOS support (basic support, media toggle, early-release notice) and Linux support (including ARM)</li>
-          <li>Restricted the Windows bundle to the NSIS installer, added a Contributor License Agreement, and added a clock to the overlay</li>
-          <li>Shipped the full Android release: native draw-over-other-apps break screen with process-death recovery, foreground service, permissions onboarding, media pause, responsive UI, and a downloadable APK</li>
-          <li>Polished Android further: collapsible install instructions, foreground-on-overlay-close, hibernation handling, and a keyboard-covering-tasklist fix</li>
-        </ul>
-      </div>
-      <div class="timeline-week">
-        <p class="timeline-date">Week of Aug 17 &ndash; 23, 2026</p>
-        <ul class="timeline-items">
-          <li>Initial commit: Reflectodoro Windows MVP</li>
-          <li>Added the auto-updater, GitHub Actions release workflow, and landing page</li>
-          <li>Set the license to Noncommercial and merged db migrations into one</li>
-        </ul>
-      </div>
-    </div>
+              <h4>Linux</h4>
+              <p>Make the AppImage executable first (<code>chmod +x Reflectodoro*.AppImage</code>); some distros
+                 also need <code>libfuse2</code> installed for it to run.</p>
+
+              <h4>Android</h4>
+              <p>You'll need to allow &ldquo;install from unknown sources&rdquo; for your browser or file manager, and
+                 Play Protect may warn about an unrecognized developer (there's no Play Store listing yet).</p>
+              <p>For reliable break enforcement in the background, grant <strong>Display over other apps</strong>,
+                 <strong>Notifications</strong> and <strong>Alarms &amp; reminders</strong> when onboarding asks, and
+                 disable battery optimization for Reflectodoro in Settings &mdash; on Xiaomi/Oppo/Vivo phones, also
+                 enable its &ldquo;auto-start&rdquo; toggle. Otherwise some OEMs can kill the background timer.</p>
+
+              <h4>Build it yourself</h4>
+              <p>If a prebuilt binary doesn't work on your platform, follow the <em>Prerequisites</em> and
+                 <em>Build a production installer</em> instructions in the
+                 <a href="https://github.com/techxapp/reflectodoro">README</a>.</p>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <!-- ============ roadmap ============ -->
+      <section class="section" id="roadmap">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <span class="eyebrow">Roadmap</span>
+            <h2>Coming next</h2>
+          </div>
+          <div class="roadmap">
+            <div class="card reveal">
+              <span class="roadmap-badge">Planned</span>
+              <h3>Cross-device sync &#128260;</h3>
+              <p>Sync reflections and task lists across your devices &mdash; end-to-end encrypted, without turning
+                 this into a cloud app.</p>
+            </div>
+            <div class="card reveal">
+              <span class="roadmap-badge">Planned</span>
+              <h3>AI assistant &#129302;</h3>
+              <p>Help documenting tasks, tracking progress, and summarizing your reflections into a weekly
+                 picture.</p>
+            </div>
+            <div class="card reveal">
+              <span class="roadmap-badge">Planned</span>
+              <h3>iOS build &#127843;</h3>
+              <p>The same app on iOS &mdash; the stack already supports it; the implementation hasn't started.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ journey ============ -->
+      <section class="section" id="journey">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <span class="eyebrow">Development journey</span>
+            <h2>Built in the open, chunk by chunk</h2>
+          </div>
+
+          <div class="timeline">
+            <p class="timeline-tier reveal">Last 7 days</p>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Friday, Sep 4, 2026</p>
+              <ul class="timeline-items">
+                <li>Completed a full-codebase audit, fixing a DST-transition crash, reflections/wellness data misdated across the UTC/local day boundary, a data-import bug that could wipe history, and ways the break screen could strand users with no way out</li>
+                <li>Hardened Android further: crash-guarded overlay/foreground-service calls, disabled cloud auto-backup of the local database, added an independent overlay watchdog, and fixed task-list/scheduler bugs across midnight</li>
+                <li>Hardened the release CI pipeline against security issues and fixed several settings/UI race conditions</li>
+                <li>Fixed a blank check-in window from a missed event, an unreliable Android wake alarm, break-screen escapability, and black nav tabs after the overlay closes</li>
+                <li>Polished the landing page: touch-friendly benefit cards, OS-aware download buttons, and social preview images</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Thursday, Sep 3, 2026</p>
+              <ul class="timeline-items">
+                <li>Added a &ldquo;Why it helps&rdquo; benefits section and a Discord community link to the landing page</li>
+                <li>Fixed the main window not reopening from the tray after being closed on Windows</li>
+                <li>Renamed &ldquo;break overlay&rdquo; to &ldquo;break screen&rdquo; throughout the Settings UI and README</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Wednesday, Sep 2, 2026</p>
+              <ul class="timeline-items">
+                <li>Moved the media pause-on-break toggle to the main window and pre-filled the break screen's reflection field with your last entry</li>
+                <li>Excluded visually ambiguous characters from the emergency-exit challenge</li>
+                <li>Updated the Android download link, dropped early-release labels on the docs site, and refined the Android auto-start guidance</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Tuesday, Sep 1, 2026</p>
+              <ul class="timeline-items">
+                <li>Added a &ldquo;Not to do&rdquo; list alongside Most Important Tasks, and made both Most Important Tasks and past reflection entries editable (with per-slot expand/collapse)</li>
+                <li>Fixed a white-screen overlay after Windows monitor sleep/wake and an early-break issue on Android</li>
+                <li>Fixed Linux AppImage packaging silently dropping Wayland libraries</li>
+                <li>Signed Android release builds and fixed the Android CI build pipeline</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Monday, Aug 31, 2026</p>
+              <ul class="timeline-items">
+                <li>Fixed several Linux build issues and shrank the Android release APK size</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Sunday, Aug 30, 2026</p>
+              <ul class="timeline-items">
+                <li>Published a downloadable Android APK and documented Android support</li>
+                <li>Added the Most Important Tasks list to Android's native break overlay, and made installation instructions collapsible</li>
+                <li>Fixed the app not returning to the foreground when the native break overlay closes, and a hibernation edge case spanning overlay closure</li>
+                <li>Fixed the on-screen keyboard covering the task list on Android's main Timer tab</li>
+              </ul>
+            </div>
+
+            <p class="timeline-tier reveal">Previous 3 weeks</p>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Week of Aug 24 &ndash; 30, 2026</p>
+              <ul class="timeline-items">
+                <li>Shipped the wellness check-in overlay after breaks, with a configurable auto-close window</li>
+                <li>Added an About page, a check-for-update button, structured logging, and tightened UI/landing page copy</li>
+                <li>Made settings optional in data export/import and added a setting to pause media on a break</li>
+                <li>Added macOS support (basic support, a media-pause toggle, and an early-release notice) and Linux support, including ARM builds and an Intel macOS build</li>
+                <li>Restricted the Windows bundle to the NSIS installer and added a Contributor License Agreement</li>
+                <li>Shipped the full Android release: native draw-over-other-apps break screen with process-death recovery, foreground service, permissions onboarding, media pause, and responsive UI</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Week of Aug 17 &ndash; 23, 2026</p>
+              <ul class="timeline-items">
+                <li>Initial commit: Reflectodoro Windows MVP</li>
+                <li>Added the auto-updater, GitHub Actions release workflow, and the first landing page</li>
+                <li>Set the license to Noncommercial and merged database migrations into one</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
 
     <footer>
-      <span>Reflectodoro</span>
-      <span>
-        <a href="https://github.com/techxapp/reflectodoro">github.com/techxapp/reflectodoro</a>
-        &nbsp;&middot;&nbsp;
-        <a href="https://discord.gg/AXEFB5UT">Discord community</a>
-      </span>
+      <div class="wrap foot-inner">
+        <span>
+          <strong style="color:var(--text-dim)">Reflectodoro</strong>
+          &mdash; breaks and self-reflection you can't skip.
+        </span>
+        <nav class="foot-links" aria-label="Footer">
+          <a href="https://github.com/techxapp/reflectodoro">GitHub</a>
+          <a href="https://github.com/techxapp/reflectodoro/releases/latest">Releases</a>
+          <a href="https://discord.gg/AXEFB5UT">Discord community</a>
+        </nav>
+      </div>
     </footer>
   </div>
 
   <script>
+    /* ---------- theme toggle ---------- */
+    (function () {
+      var root = document.documentElement;
+      var btn = document.getElementById('themeToggle');
+      var icon = document.getElementById('themeIcon');
+      var metaTheme = document.getElementById('metaThemeColor');
+
+      function isDark() {
+        return root.getAttribute('data-theme') !== 'light';
+      }
+      function paint() {
+        icon.innerHTML = isDark() ? '&#9728;' : '&#9789;';
+        btn.setAttribute('aria-label', isDark() ? 'Switch to light theme' : 'Switch to dark theme');
+        if (metaTheme) metaTheme.setAttribute('content', isDark() ? '#0a0c11' : '#fbfaf9');
+      }
+      btn.addEventListener('click', function () {
+        var next = isDark() ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        try { localStorage.setItem('rd-theme', next); } catch (e) {}
+        paint();
+      });
+      paint();
+    })();
+
+    /* ---------- sticky nav shadow ---------- */
+    (function () {
+      var nav = document.getElementById('nav');
+      function onScroll() { nav.classList.toggle('scrolled', window.scrollY > 8); }
+      window.addEventListener('scroll', onScroll, { passive: true });
+      onScroll();
+    })();
+
+    /* ---------- reveal on scroll ---------- */
+    (function () {
+      var items = Array.prototype.slice.call(document.querySelectorAll('.reveal'));
+      var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (reduce || !('IntersectionObserver' in window)) {
+        items.forEach(function (el) { el.classList.add('in'); });
+        return;
+      }
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          var el = entry.target;
+          var siblings = Array.prototype.slice.call(el.parentNode.children);
+          var i = Math.min(siblings.indexOf(el), 5);
+          el.style.transitionDelay = (i * 60) + 'ms';
+          el.classList.add('in');
+          io.unobserve(el);
+        });
+      }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+      items.forEach(function (el) { io.observe(el); });
+    })();
+
+    /* ---------- screenshot carousel ---------- */
     (function () {
       var track = document.getElementById('carouselTrack');
+      if (!track) return;
       var dotsWrap = document.getElementById('carouselDots');
+      var caption = document.getElementById('shotCaption');
       var slides = Array.prototype.slice.call(track.children);
       var prevBtn = document.querySelector('.carousel-prev');
       var nextBtn = document.querySelector('.carousel-next');
@@ -771,17 +1391,14 @@
         dot.type = 'button';
         dot.className = 'carousel-dot' + (i === 0 ? ' active' : '');
         dot.setAttribute('aria-label', 'Go to screenshot ' + (i + 1));
-        dot.addEventListener('click', function () {
-          slide.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-        });
+        dot.addEventListener('click', function () { goTo(i); });
         dotsWrap.appendChild(dot);
       });
       var dots = Array.prototype.slice.call(dotsWrap.children);
 
       function currentIndex() {
         var center = track.scrollLeft + track.clientWidth / 2;
-        var closest = 0;
-        var minDist = Infinity;
+        var closest = 0, minDist = Infinity;
         slides.forEach(function (slide, i) {
           var mid = slide.offsetLeft + slide.offsetWidth / 2;
           var dist = Math.abs(mid - center);
@@ -789,28 +1406,32 @@
         });
         return closest;
       }
-
-      function updateDots() {
+      function goTo(i) {
+        var target = slides[Math.max(0, Math.min(slides.length - 1, i))];
+        track.scrollTo({ left: target.offsetLeft, behavior: 'smooth' });
+      }
+      function sync() {
         var idx = currentIndex();
         dots.forEach(function (d, i) { d.classList.toggle('active', i === idx); });
+        caption.innerHTML = slides[idx].getAttribute('data-caption') || '';
       }
 
       var scrollTimeout;
       track.addEventListener('scroll', function () {
         clearTimeout(scrollTimeout);
-        scrollTimeout = setTimeout(updateDots, 100);
-      });
+        scrollTimeout = setTimeout(sync, 90);
+      }, { passive: true });
 
-      prevBtn.addEventListener('click', function () {
-        var idx = Math.max(0, currentIndex() - 1);
-        slides[idx].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+      prevBtn.addEventListener('click', function () { goTo(currentIndex() - 1); });
+      nextBtn.addEventListener('click', function () { goTo(currentIndex() + 1); });
+      track.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowLeft') { e.preventDefault(); goTo(currentIndex() - 1); }
+        if (e.key === 'ArrowRight') { e.preventDefault(); goTo(currentIndex() + 1); }
       });
-      nextBtn.addEventListener('click', function () {
-        var idx = Math.min(slides.length - 1, currentIndex() + 1);
-        slides[idx].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-      });
+      sync();
     })();
 
+    /* ---------- expandable benefit cards ---------- */
     (function () {
       function toggle(card) {
         var expanded = card.classList.toggle('expanded');
@@ -827,24 +1448,40 @@
       });
     })();
 
+    /* ---------- OS-aware download buttons ---------- */
     (function () {
       var ua = navigator.userAgent.toLowerCase();
       var detected = null;
       if (/android/.test(ua)) detected = 'android';
+      else if (/iphone|ipad|ipod/.test(ua)) detected = null;
       else if (/mac/.test(ua)) detected = 'macos';
       else if (/win/.test(ua)) detected = 'windows';
       else if (/linux/.test(ua)) detected = 'linux';
-
       if (!detected) return;
+
       var buttons = Array.prototype.slice.call(document.querySelectorAll('.btn[data-platform]'));
-      var hasMatch = buttons.some(function (btn) { return btn.getAttribute('data-platform') === detected; });
+      var hasMatch = buttons.some(function (b) { return b.getAttribute('data-platform') === detected; });
       if (!hasMatch) return;
 
+      var labels = { windows: 'Windows', macos: 'macOS', linux: 'Linux', android: 'Android' };
       buttons.forEach(function (btn) {
         var isMatch = btn.getAttribute('data-platform') === detected;
         btn.classList.toggle('btn-primary', isMatch);
         btn.classList.toggle('btn-secondary', !isMatch);
       });
+
+      // Promote the detected platform's button to first place in each CTA row.
+      var rows = [];
+      buttons.forEach(function (btn) {
+        var row = btn.parentNode;
+        if (rows.indexOf(row) === -1) rows.push(row);
+      });
+      rows.forEach(function (row) {
+        var match = row.querySelector('.btn[data-platform="' + detected + '"]');
+        if (match && row.firstElementChild !== match) row.insertBefore(match, row.firstElementChild);
+      });
+
+      document.title = 'Reflectodoro for ' + labels[detected] + " — the Pomodoro app you can't skip";
     })();
   </script>
 </body>

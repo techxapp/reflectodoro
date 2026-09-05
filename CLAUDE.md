@@ -9,17 +9,26 @@ This file drifts from the code easily — several sections have gone stale befor
 
 ## Keeping the landing page's development journey current
 
-`docs/index.html` has a "Development journey" section: a vertical timeline (`.timeline`) grouped **by week** (Monday–Sunday, ISO week), summarizing real work from git history. Each `.timeline-week` block's `.timeline-date` reads "Week of *start* &ndash; *end*, YYYY" (cross-month weeks read "Week of Aug 31 &ndash; Sep 6, 2026"; use just the day range plus one year when both ends fall in the same month, e.g. "Week of Aug 24 &ndash; 30, 2026").
+`docs/index.html` has a "Development journey" section: a vertical timeline (`.timeline`) summarizing real work from git history at **three tiers of granularity, newest first, that get coarser the further back you go**:
+
+1. **Daily** — one `.timeline-entry` per calendar day, for each of the **last 7 calendar days** (today back 6 days) that has real commits. `.timeline-date` reads "*Weekday*, *Mon D*, YYYY" (e.g. "Friday, Sep 4, 2026").
+2. **Weekly** — one `.timeline-entry` per ISO week (Monday–Sunday) for the **3 weeks immediately before** the daily tier's window. `.timeline-date` reads "Week of *start* &ndash; *end*, YYYY" (cross-month weeks read "Week of Aug 31 &ndash; Sep 6, 2026"; same-month weeks read just the day range plus one year, e.g. "Week of Aug 24 &ndash; 30, 2026").
+3. **Monthly** — one `.timeline-entry` per calendar month for everything **before** the weekly tier's window. `.timeline-date` reads "*Month* YYYY" (e.g. "August 2026").
+
+Each tier's entries sit under a `<p class="timeline-tier reveal">` label ("Last 7 days", "Previous 3 weeks", "Earlier" for the monthly tier) directly inside `.timeline`, in that order. **Omit a tier's label entirely if it has zero entries** (e.g. a young project has no monthly tier yet, as is currently the case here) — never render an empty placeholder.
 
 **Whenever you make a commit (or a batch of commits in one session) that a user-facing changelog would care about** — new features, fixes, platform support changes, UI changes — update `docs/index.html` in the same session:
 
-1. Compute the Monday–Sunday week today's date falls in (see the `currentDate` context).
-2. If the *topmost* `.timeline-week` in `.timeline` already covers that week, merge into it: fold the new work into its existing bullets by theme (don't just append a raw commit-message list), rewriting bullets as needed so the week reads as one cohesive summary rather than a per-commit log.
-3. If it covers an earlier week, insert a new `.timeline-week` block at the *top* of `.timeline` (most recent week first) for the current week, with merged/themed bullets under `.timeline-items`.
+1. Recompute the tier boundaries from today's date (see the `currentDate` context): the last-7-days window, the 3 ISO weeks before it, and everything older than that.
+2. **Aging out**: entries that have fallen out of a tier's window get folded into the next coarser tier rather than deleted — a day entry older than 7 days gets merged into its ISO week's weekly entry (removing the standalone day block); a weekly entry older than the 3-week window gets merged into its calendar month's monthly entry. When merging, theme-group the folded content into the coarser entry's existing bullets rather than concatenating lists — an entry should always read as one cohesive summary, never a per-commit or per-day log.
+3. **Boundary week**: the ISO week containing the oldest day still in the daily tier will have some of its days already shown as their own day entries. Its weekly-tier bullets should summarize only the *other* days in that week (not duplicate what's already itemized under a day heading above) — but the `.timeline-date` label still shows the week's full Monday–Sunday range.
+4. If today's commits belong to a day/week/month that already has a `.timeline-entry`, merge into it (same "fold by theme" rule as aging out). Otherwise insert a new `.timeline-entry` at the top of the relevant tier's block, with `class="timeline-entry reveal"` — `.reveal` is the page's scroll-in animation hook (its absence only skips the fade-in, it doesn't break anything).
 
-Skip noise: "Bump version to X.Y.Z" commits and `Merge branch ...` commits are deliberately excluded — don't add them. Keep each week to a handful of merged bullets (roughly 4-8), grouped by theme (e.g. "Android release: ...", "Fixed X, Y, and Z") rather than one bullet per commit — the existing weeks in the file are the pattern to match.
+Skip noise: "Bump version to X.Y.Z" commits and `Merge branch ...` commits are deliberately excluded — don't add them, and don't count them toward whether a day/week/month "has" activity. A day/week/month with no other commits gets no entry at all — never show a blank one.
 
-Curate for a public/marketing audience, not a commit log: prioritize what a prospective user would notice (new features, user-facing fixes, platform/support changes). Condense purely internal work (CI/security hardening, code audits, refactors with no user-visible effect) into at most one summarizing bullet per week rather than enumerating each fix. If covering everything that landed in a week would need more than ~8 bullets, that's a signal to cut to the highlights, not to expand past the cap.
+Keep each entry to a handful of merged bullets, grouped by theme (e.g. "Android release: ...", "Fixed X, Y, and Z") rather than one bullet per commit — roughly 2-5 for a day, 4-8 for a week, and 4-8 for a month (a month covers much more, so pick the highlights rather than trying to fit everything). The existing entries in the file are the pattern to match.
+
+Curate for a public/marketing audience, not a commit log: prioritize what a prospective user would notice (new features, user-facing fixes, platform/support changes). Condense purely internal work (CI/security hardening, code audits, refactors with no user-visible effect) into at most one summarizing bullet per entry rather than enumerating each fix. If covering everything that landed in a period would need more bullets than the cap above, that's a signal to cut to the highlights, not to expand past it.
 
 ## Stack
 
