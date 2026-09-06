@@ -138,6 +138,12 @@ const SUSPEND_GAP_THRESHOLD: StdDuration = StdDuration::from_secs(120);
 #[cfg(target_os = "android")]
 pub(crate) const ANDROID_POLL_INTERVAL: StdDuration = StdDuration::from_secs(20);
 
+fn generate_breakit_challenge(app: &AppHandle) -> String {
+    let app_state = app.state::<AppState>();
+    let cfg = app_state.breakit_config.lock().unwrap();
+    breakit::generate_challenge(cfg.length, cfg.include_special)
+}
+
 async fn run_scheduler(app: AppHandle) {
     let mut last_phase: Option<Phase> = None;
     let mut expected_wake: Option<DateTime<Local>> = None;
@@ -197,17 +203,11 @@ async fn run_scheduler(app: AppHandle) {
             if POMODORO_ENABLED.load(Ordering::SeqCst) {
                 match slot.phase {
                     Phase::Break => {
-                        let (len, include_special) = {
-                            let app_state = app.state::<AppState>();
-                            let cfg = app_state.breakit_config.lock().unwrap();
-                            (cfg.length, cfg.include_special)
-                        };
-                        let challenge = breakit::generate_challenge(len, include_special);
                         let this_slot_start = slot.start_iso();
                         {
                             let state = app.state::<AppState>();
                             let mut ov = state.overlay.lock().unwrap();
-                            *ov = OverlayState::opened_for(this_slot_start.clone(), challenge);
+                            *ov = OverlayState::opened_for(this_slot_start.clone(), generate_breakit_challenge(&app));
                         }
                         // Guards against the startup webview blank-page race
                         // when the app boots straight into a live break --
@@ -240,6 +240,23 @@ async fn run_scheduler(app: AppHandle) {
                             ov.open && ov.current_slot_start == this_slot_start
                         };
                         if still_current {
+                            // The challenge generated above may have used
+                            // AppState.breakit_config's hardcoded startup
+                            // default rather than the user's saved setting --
+                            // on a cold process start landing directly inside
+                            // a live break (the common case for Android's
+                            // BreakAlarmReceiver recovery path), the
+                            // frontend's async `sync_breakit_config` push
+                            // can't possibly have landed yet at that point.
+                            // Regenerating here, after the warmup wait above
+                            // has given it a real chance to land, is free:
+                            // the overlay hasn't been shown to anyone yet
+                            // either way.
+                            {
+                                let state = app.state::<AppState>();
+                                let mut ov = state.overlay.lock().unwrap();
+                                ov.breakit_challenge = generate_breakit_challenge(&app);
+                            }
                             overlay::spawn_or_update_overlay(&app).await;
                         } else {
                             log::info!(
