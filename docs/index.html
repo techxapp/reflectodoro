@@ -22,7 +22,64 @@
   <style>
     /* ============ design tokens ============ */
     :root {
-      /* Dark is the default theme regardless of OS preference — [data-theme="light"] below is the explicit opt-out. */
+      /* Default follows the OS/browser color-scheme preference (light shown here; dark applied below
+         via the media query, unless the user picks an explicit theme with the toggle). */
+      color-scheme: light;
+      --bg: #fbfaf9;
+      --tint-a: rgba(220, 79, 44, 0.06);
+      --tint-b: rgba(234, 140, 28, 0.05);
+      --surface: #ffffff;
+      --surface-2: #f4f1ee;
+      --glass: rgba(251, 250, 249, 0.72);
+      --border: rgba(22, 20, 18, 0.10);
+      --border-strong: rgba(22, 20, 18, 0.20);
+      --text: #16181d;
+      --text-dim: #5d6472;
+      --text-faint: #8b93a1;
+      --brand: #dc4f2c;
+      --brand-2: #ea8c1c;
+      --brand-ink: #ffffff;
+      --brand-soft: rgba(220, 79, 44, 0.10);
+      --brand-line: rgba(220, 79, 44, 0.30);
+      --ok: #16a34a;
+      --shadow-sm: 0 1px 2px rgba(16, 18, 22, 0.05), 0 6px 16px -10px rgba(16, 18, 22, 0.18);
+      --shadow-md: 0 12px 34px -18px rgba(16, 18, 22, 0.32);
+      --shadow-lg: 0 34px 70px -34px rgba(16, 18, 22, 0.42);
+      --glow: 0 18px 44px -20px rgba(220, 79, 44, 0.55);
+      --r-sm: 10px;
+      --r: 16px;
+      --r-lg: 22px;
+      --maxw: 1140px;
+      --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --bg: #0a0c11;
+        --tint-a: rgba(91, 140, 255, 0.18);
+        --tint-b: rgba(45, 212, 191, 0.14);
+        --surface: #12151c;
+        --surface-2: #191d26;
+        --glass: rgba(10, 12, 17, 0.72);
+        --border: rgba(255, 255, 255, 0.09);
+        --border-strong: rgba(255, 255, 255, 0.19);
+        --text: #eef1f6;
+        --text-dim: #98a1b2;
+        --text-faint: #6f7889;
+        --brand: #5b8cff;
+        --brand-2: #22d3ee;
+        --brand-ink: #ffffff;
+        --brand-soft: rgba(91, 140, 255, 0.16);
+        --brand-line: rgba(91, 140, 255, 0.36);
+        --ok: #43c877;
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40), 0 6px 16px -10px rgba(0, 0, 0, 0.60);
+        --shadow-md: 0 12px 34px -18px rgba(0, 0, 0, 0.75);
+        --shadow-lg: 0 34px 70px -34px rgba(0, 0, 0, 0.90);
+        --glow: 0 18px 44px -20px rgba(91, 140, 255, 0.45);
+      }
+    }
+    :root[data-theme="dark"] {
+      /* Explicit user choice — applies regardless of OS preference. */
       color-scheme: dark;
       --bg: #0a0c11;
       --tint-a: rgba(91, 140, 255, 0.18);
@@ -45,35 +102,6 @@
       --shadow-md: 0 12px 34px -18px rgba(0, 0, 0, 0.75);
       --shadow-lg: 0 34px 70px -34px rgba(0, 0, 0, 0.90);
       --glow: 0 18px 44px -20px rgba(91, 140, 255, 0.45);
-      --r-sm: 10px;
-      --r: 16px;
-      --r-lg: 22px;
-      --maxw: 1140px;
-      --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
-    }
-    :root[data-theme="light"] {
-      color-scheme: light;
-      --bg: #fbfaf9;
-      --tint-a: rgba(59, 91, 219, 0.13);
-      --tint-b: rgba(13, 165, 187, 0.12);
-      --surface: #ffffff;
-      --surface-2: #f4f1ee;
-      --glass: rgba(251, 250, 249, 0.72);
-      --border: rgba(22, 20, 18, 0.10);
-      --border-strong: rgba(22, 20, 18, 0.20);
-      --text: #16181d;
-      --text-dim: #5d6472;
-      --text-faint: #8b93a1;
-      --brand: #3a5cdc;
-      --brand-2: #0ea5c4;
-      --brand-ink: #ffffff;
-      --brand-soft: rgba(58, 92, 220, 0.10);
-      --brand-line: rgba(58, 92, 220, 0.30);
-      --ok: #16a34a;
-      --shadow-sm: 0 1px 2px rgba(16, 18, 22, 0.05), 0 6px 16px -10px rgba(16, 18, 22, 0.18);
-      --shadow-md: 0 12px 34px -18px rgba(16, 18, 22, 0.32);
-      --shadow-lg: 0 34px 70px -34px rgba(16, 18, 22, 0.42);
-      --glow: 0 18px 44px -20px rgba(58, 92, 220, 0.55);
     }
 
     /* ============ base ============ */
@@ -102,7 +130,7 @@
       white-space: nowrap;
     }
     :focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; border-radius: 8px; }
-    .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+    .wrap { width: 85%; max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
     section { scroll-margin-top: 84px; }
     .skip {
       position: absolute; left: -9999px; top: 0; z-index: 100;
@@ -581,6 +609,8 @@
 
     /* ============ install accordion ============ */
     .install {
+      width: 80%;
+      margin: 0 auto;
       border: 1px solid var(--border); border-radius: var(--r);
       background: var(--surface); box-shadow: var(--shadow-sm);
       overflow: hidden;
@@ -692,7 +722,11 @@
 <body>
   <script>document.documentElement.classList.add('js');
     try {
-      if (localStorage.getItem('rd-theme') === 'light') document.documentElement.setAttribute('data-theme', 'light');
+      var t = localStorage.getItem('rd-theme');
+      if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
+      var dark = t ? t === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var m = document.getElementById('metaThemeColor');
+      if (m) m.setAttribute('content', dark ? '#0a0c11' : '#fbfaf9');
     } catch (e) {}
   </script>
 
@@ -728,26 +762,26 @@
           <div>
             <span class="pill">
               <span class="dot-live" aria-hidden="true"></span>
-              Windows &middot; macOS &middot; Linux &middot; <b>Android</b>
+              Windows &middot; macOS &middot; Linux &middot; Android
             </span>
             <h2>The <span class="grad">Pomodoro</span> app with <span class="grad">break</span> and <span class="grad">self-reflection</span> you <span class="grad">can't skip</span>.</h2>
             <br/><p class="lede">
-              Every 25 minutes it takes over your screen for 5 minutes and asks one question:
-              <b>what did you actually just do?</b> &mdash; you write the answer, or the break screen stays.
+              Every 25 minutes it takes over your screen for 5 minutes and asks :
+              <b>what did you actually just do?</b> 
             </p>
 
             <div class="cta-row" id="download">
               <a class="btn btn-primary" data-platform="windows" href="https://github.com/techxapp/reflectodoro/releases/latest">
-                Download for Windows
+                Download for Windows (.exe)
               </a>
               <a class="btn btn-secondary" data-platform="macos" href="https://github.com/techxapp/reflectodoro/releases/latest">
-                macOS
+                macOS (.dmg)
               </a>
               <a class="btn btn-secondary" data-platform="linux" href="https://github.com/techxapp/reflectodoro/releases/latest">
-                Linux
+                Linux (.AppImage)
               </a>
               <a class="btn btn-secondary" data-platform="android" href="https://github.com/techxapp/reflectodoro/releases/latest">
-                Android
+                Android (.apk)
               </a>
             </div>
             <p class="cta-note">
@@ -761,10 +795,6 @@
                 <dt>4</dt>
                 <dd>Platforms</dd>
               </div>
-              <!-- <div>
-                <dt>0</dt>
-                <dd>Accounts</dd>
-              </div> -->
               <div>
                 <dt>100%</dt>
                 <dd>On-device</dd>
@@ -793,6 +823,40 @@
               <span class="fake-btn">Submit</span>
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- ============ install ============ -->
+      <section id="install">
+          <details class="install" style="margin-top:22px">
+            <summary>Installation notes &amp; permissions</summary>
+            <div class="install-body">
+              <h4>Windows</h4>
+              <p>SmartScreen may show an &ldquo;unknown publisher&rdquo; warning on first run &mdash; choose
+                 <em>More info &rarr; Run anyway</em>.</p>
+
+              <h4>macOS</h4>
+              <p>The app isn't notarized yet, so Gatekeeper will block it the first time &mdash; <br/> 1. right-click the app
+                 and choose <em>Open</em> (Drag to Applications directory) <br/> 2. Run <code>xattr -cr /Applications/Reflectodoro.app</code> in Terminal.</p>
+
+              <h4>Linux</h4>
+              <p>Make the AppImage executable first (<code>chmod +x Reflectodoro*.AppImage</code>); some distros
+                 also need <code>libfuse2</code> installed for it to run.</p>
+
+              <h4>Android</h4>
+              <p>You'll need to allow &ldquo;install from unknown sources&rdquo; for your browser or file manager, and
+                 Play Protect may warn about an unrecognized developer (there's no Play Store listing yet).</p>
+              <p>For reliable break enforcement in the background, grant <strong>Display over other apps</strong>,
+                 <strong>Notifications</strong> and <strong>Alarms &amp; reminders</strong> when onboarding asks, and
+                 disable battery optimization for Reflectodoro in Settings &mdash; on Xiaomi/Oppo/Vivo phones, also
+                 enable its &ldquo;auto-start&rdquo; toggle. Otherwise some OEMs can kill the background timer.</p>
+
+              <h4>Build it yourself</h4>
+              <p>If a prebuilt binary doesn't work on your platform, follow the <em>Prerequisites</em> and
+                 <em>Build a production installer</em> instructions in the
+                 <a href="https://github.com/techxapp/reflectodoro">README</a>.</p>
+            </div>
+          </details>
         </div>
       </section>
 
@@ -841,7 +905,7 @@
             </div>
             <div class="step reveal">
               <div class="step-n">4</div>
-              <h3>Wellness checkin</h3>
+              <h3>Wellness check-in</h3>
               <p>Quick toggle whether you completed intended tasks in break &mdash; 
                 Water, Exercise, Relax eyes.
               </p>
@@ -860,14 +924,22 @@
           </div>
 
           <div class="bento">
-            <div class="card card-feature reveal">
+
+            <div class="card span-2 reveal">
+              <div class="ico" aria-hidden="true">&#9202;</div>
+              <h3>Wall-clock breaks</h3>
+              <p>Work and break slots land on fixed clock boundaries, so your breaks are predictable and easy to
+                 plan around.</p>
+            </div>
+
+            <div class="card span-2 reveal">
               <div class="ico" aria-hidden="true">&#128274;</div>
               <h3>No free pass</h3>
               <p>The break screen can't be dismissed directly. You have to write what you did <em>and</em> wait
                  out the break.</p>
             </div>
 
-            <div class="card card-feature reveal">
+            <div class="card span-2 reveal">
               <div class="ico" aria-hidden="true">&#9889;</div>
               <h3>Emergency exit challenge</h3>
               <p>Need out early? Type a freshly generated random string shown on screen.</p>
@@ -877,12 +949,7 @@
               </div>
             </div>
 
-            <div class="card span-2 reveal">
-              <div class="ico" aria-hidden="true">&#9202;</div>
-              <h3>Wall-clock breaks</h3>
-              <p>Work and break slots land on fixed clock boundaries, so your breaks are predictable and easy to
-                 plan around.</p>
-            </div>
+            
             <div class="card span-2 reveal">
               <div class="ico" aria-hidden="true">&#127793;</div>
               <h3>Wellness check</h3>
@@ -896,23 +963,23 @@
                  main window and the break screen.</p>
             </div>
 
-            <div class="card span-3 reveal">
+            <div class="card span-2 reveal">
               <div class="ico" aria-hidden="true">&#9208;&#65039;</div>
               <h3>Auto-pause your media</h3>
               <p>Music or a movie playing when the break starts? Reflectodoro pauses it, so you don't come back
-                 to spoilers. Uses the real media-session APIs on Windows and Linux, and audio-focus on Android.</p>
+                 to spoilers.</p>
             </div>
-            <div class="card span-3 reveal">
+            <div class="card span-2 reveal">
               <div class="ico" aria-hidden="true">&#128187;</div>
               <h3>Fully local &amp; private</h3>
-              <p>Every reflection lives in a SQLite file on your device. No cloud, no telemetry, no account.                 </p>
+              <p>Every reflection lives in a SQLite file on your device. No cloud, no account.  </p>
             </div>
 
-            <div class="card span-3 reveal">
+            <div class="card span-2 reveal">
               <div class="ico" aria-hidden="true">&#128241;</div>
               <h3>Cross-platform</h3>
               <p>One codebase, four signed builds &mdash; with a native break overlay and foreground scheduler on
-                 Android that survives reboots.</p>
+                 Android.</p>
               <div class="plat-row">
                 <span class="plat-chip on">Windows</span>
                 <span class="plat-chip on">Linux</span>
@@ -921,7 +988,7 @@
                 <span class="plat-chip">iOS &middot; planned</span>
               </div>
             </div>
-            <div class="card span-3 reveal">
+            <div class="card span-2 reveal">
               <div class="ico" aria-hidden="true">&#128275;</div>
               <h3>Open source</h3>
               <p>The whole app is on GitHub and every release is built and published straight from GitHub
@@ -1012,7 +1079,7 @@
               <div class="benefit-extra" id="benefit-extra-5">
                 <div class="benefit-item">
                   <span class="benefit-icon" aria-hidden="true">&#128214;</span>
-                  <p><span class="tag">Book</span>Stress needs to be actively &ldquo;completed&rdquo; through small physical actions, not just removing the stressor, or it accumulates (Emily &amp; Amelia Nagoski, <cite>Burnout</cite>).</p>
+                  <p><span class="tag">Book</span>Stress cycle needs to be actively &ldquo;completed&rdquo; through small physical actions, not just removing the stressor, or it accumulates (Emily &amp; Amelia Nagoski, <cite>Burnout</cite>).</p>
                 </div>
               </div>
             </div>
@@ -1137,59 +1204,7 @@
         </div>
       </section>
 
-      <!-- ============ download + install ============ -->
-      <section class="section" id="install">
-        <div class="wrap">
-          <div class="final-cta reveal">
-            <h2>Stop working through your breaks.</h2>
-            <p>Free, open source, and entirely on your device. Pick your platform and it's running in minutes.</p>
-            <div class="cta-row">
-              <a class="btn btn-primary" data-platform="windows" href="https://github.com/techxapp/reflectodoro/releases/latest">
-                Download for Windows (.exe)
-              </a>
-              <a class="btn btn-secondary" data-platform="macos" href="https://github.com/techxapp/reflectodoro/releases/latest">
-                macOS (.dmg)
-              </a>
-              <a class="btn btn-secondary" data-platform="linux" href="https://github.com/techxapp/reflectodoro/releases/latest">
-                Linux (.AppImage)
-              </a>
-              <a class="btn btn-secondary" data-platform="android" href="https://github.com/techxapp/reflectodoro/releases/latest">
-                Android (.apk)
-              </a>
-            </div>
-          </div>
-
-          <details class="install" style="margin-top:22px">
-            <summary>Installation notes &amp; permissions</summary>
-            <div class="install-body">
-              <h4>Windows</h4>
-              <p>SmartScreen may show an &ldquo;unknown publisher&rdquo; warning on first run &mdash; choose
-                 <em>More info &rarr; Run anyway</em>.</p>
-
-              <h4>macOS</h4>
-              <p>The app isn't notarized yet, so Gatekeeper will block it the first time &mdash; right-click the app
-                 and choose <em>Open</em>, or run <code>xattr -cr /Applications/Reflectodoro.app</code> in Terminal.</p>
-
-              <h4>Linux</h4>
-              <p>Make the AppImage executable first (<code>chmod +x Reflectodoro*.AppImage</code>); some distros
-                 also need <code>libfuse2</code> installed for it to run.</p>
-
-              <h4>Android</h4>
-              <p>You'll need to allow &ldquo;install from unknown sources&rdquo; for your browser or file manager, and
-                 Play Protect may warn about an unrecognized developer (there's no Play Store listing yet).</p>
-              <p>For reliable break enforcement in the background, grant <strong>Display over other apps</strong>,
-                 <strong>Notifications</strong> and <strong>Alarms &amp; reminders</strong> when onboarding asks, and
-                 disable battery optimization for Reflectodoro in Settings &mdash; on Xiaomi/Oppo/Vivo phones, also
-                 enable its &ldquo;auto-start&rdquo; toggle. Otherwise some OEMs can kill the background timer.</p>
-
-              <h4>Build it yourself</h4>
-              <p>If a prebuilt binary doesn't work on your platform, follow the <em>Prerequisites</em> and
-                 <em>Build a production installer</em> instructions in the
-                 <a href="https://github.com/techxapp/reflectodoro">README</a>.</p>
-            </div>
-          </details>
-        </div>
-      </section>
+      
 
       <!-- ============ roadmap ============ -->
       <section class="section" id="roadmap">
@@ -1202,19 +1217,22 @@
             <div class="card reveal">
               <span class="roadmap-badge">Planned</span>
               <h3>Cross-device sync &#128260;</h3>
-              <p>Sync reflections and task lists across your devices &mdash; end-to-end encrypted, without turning
-                 this into a cloud app.</p>
+              <p>Sync reflections and task lists across your devices.</p>
             </div>
             <div class="card reveal">
               <span class="roadmap-badge">Planned</span>
               <h3>AI assistant &#129302;</h3>
-              <p>Help documenting tasks, tracking progress, and summarizing your reflections into a weekly
-                 picture.</p>
+              <p>Help documenting tasks, tracking progress, and summarizing your reflections.</p>
+            </div>
+            <div class="card reveal">
+              <span class="roadmap-badge">Planned</span>
+              <h3>Custom API Support</h3>
+              <p>Integrate any API to display motivational quotes, word of the day, etc.</p>
             </div>
             <div class="card reveal">
               <span class="roadmap-badge">Planned</span>
               <h3>iOS build &#127843;</h3>
-              <p>The same app on iOS &mdash; the stack already supports it; the implementation hasn't started.</p>
+              <p>Add support for same app on iOS.</p>
             </div>
           </div>
         </div>
@@ -1328,9 +1346,13 @@
       var btn = document.getElementById('themeToggle');
       var icon = document.getElementById('themeIcon');
       var metaTheme = document.getElementById('metaThemeColor');
+      var mql = window.matchMedia('(prefers-color-scheme: dark)');
 
       function isDark() {
-        return root.getAttribute('data-theme') !== 'light';
+        var set = root.getAttribute('data-theme');
+        if (set === 'dark') return true;
+        if (set === 'light') return false;
+        return mql.matches;
       }
       function paint() {
         icon.innerHTML = isDark() ? '&#9728;' : '&#9789;';
@@ -1343,6 +1365,7 @@
         try { localStorage.setItem('rd-theme', next); } catch (e) {}
         paint();
       });
+      if (mql.addEventListener) mql.addEventListener('change', paint);
       paint();
     })();
 
