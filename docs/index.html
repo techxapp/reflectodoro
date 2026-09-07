@@ -597,6 +597,38 @@
       color: var(--text-faint); margin-top: 3px; white-space: normal;
     }
 
+    /* ============ faq ============ */
+    .faq-list { display: flex; flex-direction: column; gap: 10px; }
+    .faq-item {
+      border: 1px solid var(--border); border-radius: var(--r);
+      background: var(--surface); box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+    .faq-item summary {
+      cursor: pointer; list-style: none;
+      display: flex; align-items: center; gap: 12px;
+      font-weight: 600; font-size: 15px; color: var(--text);
+      padding: 16px 20px;
+    }
+    .faq-item summary::-webkit-details-marker { display: none; }
+    .faq-item summary::before {
+      content: "\203A"; color: var(--brand); font-size: 20px; line-height: 1; flex: none;
+      transition: transform 0.2s var(--ease);
+    }
+    .faq-item[open] summary::before { transform: rotate(90deg); }
+    .faq-answer {
+      padding: 0 20px 18px; font-size: 14px; color: var(--text-dim);
+      border-top: 1px solid var(--border); padding-top: 14px;
+    }
+    .faq-answer p { margin: 0 0 8px; }
+    .faq-answer p:last-child { margin-bottom: 0; }
+    .faq-answer ul { margin: 0 0 8px; padding-left: 20px; }
+    .faq-answer ul:last-child { margin-bottom: 0; }
+    .faq-answer li { margin-bottom: 6px; }
+    .faq-answer li:last-child { margin-bottom: 0; }
+    .faq-answer strong { color: var(--text); }
+    .faq-answer code { white-space: normal; }
+
     /* ============ roadmap ============ */
     .roadmap { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
     .roadmap .card { border-style: dashed; background: transparent; box-shadow: none; }
@@ -637,6 +669,7 @@
     }
     .install-body h4:first-child { margin-top: 0; }
     .install-body p { margin: 0 0 4px; }
+    .install-body code { white-space: normal; }
 
     /* ============ timeline ============ */
     .timeline {
@@ -746,6 +779,7 @@
           <a href="#why">Why it helps</a>
           <a href="#screenshots">Screenshots</a>
           <a href="#platforms">Platforms</a>
+          <a href="#faq">FAQ</a>
           <a href="#journey">Journey</a>
         </nav>
         <button class="icon-btn" id="themeToggle" type="button" aria-label="Toggle color theme" title="Toggle theme">
@@ -1204,7 +1238,144 @@
         </div>
       </section>
 
-      
+      <!-- ============ faq ============ -->
+      <section class="section" id="faq">
+        <div class="wrap">
+          <div class="section-head reveal">
+            <span class="eyebrow">FAQ</span>
+            <h2>Questions people actually ask</h2>
+            <p>Especially about getting out of a break screen that won't budge.</p>
+          </div>
+
+          <div class="faq-list">
+            <details class="faq-item reveal">
+              <summary>The break screen won't close &mdash; how do I get out?</summary>
+              <div class="faq-answer">
+                <p>The normal way out is writing your reflection, then either waiting out the timer or typing the
+                   on-screen emergency-exit code &mdash; both still require the reflection to be submitted.</p>
+                <p>If it's genuinely stuck (a bug, not the enforcement working as intended), keep in mind the
+                   break screen is fullscreen and always-on-top &mdash; you generally can't click through to the
+                   taskbar, tray, or Task Manager to close it that way, so use one of these instead:</p>
+                <ul>
+                  <li><strong>Windows / Linux</strong> &mdash; press <code>Ctrl+Alt+Shift+F12</code> to instantly
+                      force-destroy the break screen. This is the reliable escape hatch on these platforms.</li>
+                  <li><strong>macOS</strong> &mdash; press <code>Cmd+Option+Shift+F12</code>.</li>
+                  <li><strong>Android</strong> &mdash; there's no keyboard shortcut equivalent. Go to
+                      <em>Settings &rarr; Apps &rarr; Reflectodoro</em> and either revoke &ldquo;Display over
+                      other apps&rdquo; or force-stop the app.</li>
+                  <li><strong>Any platform, last resort</strong> &mdash; restart your PC or phone. If the
+                      overlay stops you reaching the normal restart menu, hold the physical power button
+                      down for several seconds (on a PC, this force-shuts-it-down; press it again to power
+                      back on) to force a restart.</li>
+                </ul>
+                <p>A dev build additionally shows a visible &ldquo;Close (DEV)&rdquo; button on the break screen.</p>
+              </div>
+            </details>
+
+            <details class="faq-item reveal">
+              <summary>Can I still answer a phone call while the break screen is up on Android?</summary>
+              <div class="faq-answer">
+                <p>Yes. Android's break screen is a system overlay drawn on top of other apps, not a lock
+                   screen, so incoming-call UI and the notification shade still work over it. If the call's
+                   own full-screen UI doesn't pop up automatically, pull down the notification bar from the
+                   top of the screen and answer from there &mdash; the break screen resumes underneath once
+                   you're done.</p>
+              </div>
+            </details>
+
+            <details class="faq-item reveal">
+              <summary>How do I contact someone for help?</summary>
+              <div class="faq-answer">
+                <p>Join the <a href="https://discord.gg/AXEFB5UT">Discord community</a> &mdash; that's the fastest
+                   way to reach the developer and other users. For bugs or feature requests you can also open an
+                   issue on <a href="https://github.com/techxapp/reflectodoro">GitHub</a>.</p>
+              </div>
+            </details>
+
+            <details class="faq-item reveal">
+              <summary>What happens if I don't enter a reflection before the break timer runs out?</summary>
+              <div class="faq-answer">
+                <p>The break screen simply stays up. Unlocking always requires a submitted reflection &mdash; the
+                   timer running out by itself never ends the break. In formula terms:
+                   <code>(time expired AND reflection entered) OR (challenge typed AND reflection entered)</code>.
+                   So a break can run well past its nominal 5 minutes if you just don't write anything.</p>
+              </div>
+            </details>
+
+            <details class="faq-item reveal">
+              <summary>Does the break screen eventually auto-close on its own in that case?</summary>
+              <div class="faq-answer">
+                <p>Yes, as a backstop for a genuinely stuck screen &mdash; after a configurable grace period
+                   (Settings &rarr; break screen auto-close, 1&ndash;60 minutes) it force-closes itself, the same
+                   as using a kill switch: no reflection is recorded and no wellness check-in opens.</p>
+                <p>On Android, the native overlay also carries its own independent 20-minute watchdog as a second
+                   layer, in case the usual auto-close signal never reaches it.</p>
+              </div>
+            </details>
+
+            <details class="faq-item reveal">
+              <summary>Can I skip the reflection using the emergency-exit challenge?</summary>
+              <div class="faq-answer">
+                <p>No. Typing the challenge only replaces waiting out the timer &mdash; it's an early exit from the
+                   <em>time</em> requirement, not the reflection requirement. You still have to write and submit
+                   what you did either way.</p>
+              </div>
+            </details>
+
+            <details class="faq-item reveal">
+              <summary>Is my data private? Does Reflectodoro sync across devices?</summary>
+              <div class="faq-answer">
+                <p>Everything is stored locally in a SQLite file on your device &mdash; there's no account, no
+                   server, and nothing is uploaded anywhere. Cross-device sync is on the roadmap but not built
+                   yet, so today each install's history is fully independent.</p>
+              </div>
+            </details>
+
+            <details class="faq-item reveal">
+              <summary>Can I change the work/break lengths from 25 and 5 minutes?</summary>
+              <div class="faq-answer">
+                <p>Not yet &mdash; they're fixed constants for now. Configurable durations are a planned addition,
+                   not currently exposed in Settings.</p>
+              </div>
+            </details>
+
+            <details class="faq-item reveal">
+              <summary>Why does macOS block the app with a Gatekeeper warning on first launch?</summary>
+              <div class="faq-answer">
+                <p>The macOS build isn't code-signed or notarized yet (no Apple Developer account). Right-click the
+                   app and choose <em>Open</em>, or run <code>xattr -cr /Applications/Reflectodoro.app</code> in
+                   Terminal to clear the quarantine flag.</p>
+              </div>
+            </details>
+
+            <details class="faq-item reveal">
+              <summary>Why does Android show a persistent alarm-clock icon in the status bar?</summary>
+              <div class="faq-answer">
+                <p>That's Android itself, not a bug: reliable break scheduling uses
+                   <code>AlarmManager.setAlarmClock</code>, which is the only alarm API exempt from Android's
+                   background-launch restrictions. The OS shows that icon for any app using it, for as long as
+                   Pomodoro mode is on.</p>
+              </div>
+            </details>
+
+            <details class="faq-item reveal">
+              <summary>What permissions does the Android app need, and why?</summary>
+              <div class="faq-answer">
+                <ul>
+                  <li><strong>Display over other apps</strong> &mdash; draws the break screen on top of whatever
+                      you're using.</li>
+                  <li><strong>Notifications</strong> &mdash; shows the break notification, and a fallback if the
+                      overlay permission isn't granted.</li>
+                  <li><strong>Alarms &amp; reminders</strong> &mdash; needed for exact, on-time break scheduling.</li>
+                </ul>
+                <p>Onboarding and Settings also recommend disabling battery optimization for Reflectodoro (and
+                   enabling &ldquo;auto-start&rdquo; on Xiaomi/Oppo/Vivo phones) &mdash; some OEMs otherwise kill
+                   the background timer outright.</p>
+              </div>
+            </details>
+          </div>
+        </div>
+      </section>
 
       <!-- ============ roadmap ============ -->
       <section class="section" id="roadmap">
