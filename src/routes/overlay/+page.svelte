@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { info as logInfo } from "@tauri-apps/plugin-log";
   import {
     findMissedSlots,
     saveReflection,
@@ -233,6 +234,9 @@
     unlisten = await listen<OverlayState>("overlay://state", async (event) => {
       const prevSlot = overlayState?.current_slot_start;
       overlayState = event.payload;
+      void logInfo(
+        `[overlay] event: open=${overlayState.open} slot=${overlayState.current_slot_start} challenge=${JSON.stringify(overlayState.breakit_challenge)}`,
+      );
       if (overlayState.current_slot_start !== prevSlot) {
         breakitInput = "";
         saveError = null;
@@ -243,6 +247,9 @@
     });
 
     overlayState = await invoke<OverlayState>("get_overlay_state");
+    void logInfo(
+      `[overlay] fallback invoke: open=${overlayState.open} slot=${overlayState.current_slot_start} challenge=${JSON.stringify(overlayState.breakit_challenge)}`,
+    );
     await refreshCoverage();
     await prefillReflection();
     taskListContent = await getTaskList(localDateStamp());
@@ -324,6 +331,7 @@
             type="text"
             autocomplete="off"
             spellcheck="false"
+            enterkeyhint="done"
             class:shake={breakitShake}
             bind:value={breakitInput}
             onkeydown={onBreakitKeydown}

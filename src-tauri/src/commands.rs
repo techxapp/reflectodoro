@@ -41,6 +41,11 @@ pub fn sync_breakit_config(state: State<AppState>, length: u32, include_special:
     let mut cfg = state.breakit_config.lock().unwrap();
     cfg.length = length.clamp(4, 64);
     cfg.include_special = include_special;
+    log::info!(
+        "sync_breakit_config: length={} include_special={}",
+        cfg.length,
+        cfg.include_special
+    );
 }
 
 #[tauri::command]

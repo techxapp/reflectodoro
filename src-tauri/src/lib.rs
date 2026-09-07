@@ -141,7 +141,15 @@ pub(crate) const ANDROID_POLL_INTERVAL: StdDuration = StdDuration::from_secs(20)
 fn generate_breakit_challenge(app: &AppHandle) -> String {
     let app_state = app.state::<AppState>();
     let cfg = app_state.breakit_config.lock().unwrap();
-    breakit::generate_challenge(cfg.length, cfg.include_special)
+    let challenge = breakit::generate_challenge(cfg.length, cfg.include_special);
+    log::info!(
+        "generate_breakit_challenge: cfg.length={} include_special={} generated_len={} value={:?}",
+        cfg.length,
+        cfg.include_special,
+        challenge.chars().count(),
+        challenge
+    );
+    challenge
 }
 
 async fn run_scheduler(app: AppHandle) {

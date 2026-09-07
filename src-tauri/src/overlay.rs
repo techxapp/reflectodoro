@@ -187,6 +187,13 @@ fn overlay_state_json_for_android(app: &AppHandle) -> serde_json::Value {
 pub fn emit_state(app: &AppHandle) {
     let state = app.state::<AppState>();
     let snapshot = state.overlay.lock().unwrap().clone();
+    log::info!(
+        "emit_state: open={} slot={} challenge_len={} challenge={:?}",
+        snapshot.open,
+        snapshot.current_slot_start,
+        snapshot.breakit_challenge.chars().count(),
+        snapshot.breakit_challenge
+    );
 
     // Keeps the native WindowManager overlay (if it's currently showing --
     // Kotlin decides that, not Rust) in sync with every state change: the
