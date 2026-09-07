@@ -1420,6 +1420,27 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
+              <p class="timeline-date">Monday, Sep 7, 2026</p>
+              <ul class="timeline-items">
+                <li>Added an FAQ section to the landing page</li>
+                <li>Fixed the emergency-exit challenge (breakit) not accepting Enter to submit in common overlay on Android, and added diagnostics for the challenge flow</li>
+                <li>Fixed the emergency-exit challenge sometimes using default settings instead of your saved length/character-set on a cold start</li>
+                <li>Fixed reflections being timestamped to the break slot instead of the work slot they were actually about</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Sunday, Sep 6, 2026</p>
+              <ul class="timeline-items">
+                <li>Reworked the landing page's visual theme, layout, and copy</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Saturday, Sep 5, 2026</p>
+              <ul class="timeline-items">
+                <li>Redesigned the landing page and restructured the development journey timeline into daily/weekly/monthly tiers</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
               <p class="timeline-date">Friday, Sep 4, 2026</p>
               <ul class="timeline-items">
                 <li>Completed a full-codebase audit, fixing a DST-transition crash, reflections/wellness data misdated across the UTC/local day boundary, a data-import bug that could wipe history, and ways the break screen could strand users with no way out</li>
@@ -1454,32 +1475,23 @@
                 <li>Signed Android release builds and fixed the Android CI build pipeline</li>
               </ul>
             </div>
+            <p class="timeline-tier reveal">Previous 3 weeks</p>
             <div class="timeline-entry reveal">
-              <p class="timeline-date">Monday, Aug 31, 2026</p>
+              <p class="timeline-date">Week of Aug 31 &ndash; Sep 6, 2026</p>
               <ul class="timeline-items">
                 <li>Fixed several Linux build issues and shrank the Android release APK size</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">
-              <p class="timeline-date">Sunday, Aug 30, 2026</p>
-              <ul class="timeline-items">
-                <li>Published a downloadable Android APK and documented Android support</li>
-                <li>Added the Most Important Tasks list to Android's native break overlay, and made installation instructions collapsible</li>
-                <li>Fixed the app not returning to the foreground when the native break overlay closes, and a hibernation edge case spanning overlay closure</li>
-                <li>Fixed the on-screen keyboard covering the task list on Android's main Timer tab</li>
-              </ul>
-            </div>
-
-            <p class="timeline-tier reveal">Previous 3 weeks</p>
-            <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Aug 24 &ndash; 30, 2026</p>
               <ul class="timeline-items">
                 <li>Shipped the wellness check-in overlay after breaks, with a configurable auto-close window</li>
-                <li>Added an About page, a check-for-update button, structured logging, and tightened UI/landing page copy</li>
+                <li>Added an About page, a check-for-update button, structured logging, tightened UI/landing page copy, and made installation instructions collapsible</li>
                 <li>Made settings optional in data export/import and added a setting to pause media on a break</li>
                 <li>Added macOS support (basic support, a media-pause toggle, and an early-release notice) and Linux support, including ARM builds and an Intel macOS build</li>
                 <li>Restricted the Windows bundle to the NSIS installer and added a Contributor License Agreement</li>
-                <li>Shipped the full Android release: native draw-over-other-apps break screen with process-death recovery, foreground service, permissions onboarding, media pause, and responsive UI</li>
+                <li>Shipped the full Android release &mdash; native draw-over-other-apps break screen with process-death recovery, foreground service, permissions onboarding, media pause, responsive UI, and the Most Important Tasks list &mdash; then published the downloadable APK and documented Android support</li>
+                <li>Fixed the app not returning to the foreground after the native break overlay closes, a hibernation edge case spanning overlay closure, and the on-screen keyboard covering the task list on Android's Timer tab</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">
