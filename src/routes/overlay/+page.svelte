@@ -13,6 +13,7 @@
     localDateStamp,
     listenForTaskListUpdates,
     listenForNotToDoListUpdates,
+    precedingWorkSlotStartIso,
   } from "$lib/db";
 
   interface OverlayState {
@@ -79,7 +80,7 @@
 
   async function refreshCoverage() {
     if (!overlayState?.current_slot_start) return;
-    missedSlots = await findMissedSlots(overlayState.current_slot_start);
+    missedSlots = await findMissedSlots(precedingWorkSlotStartIso(overlayState.current_slot_start));
   }
 
   /** Pre-fills (never saves) the reflection field with the last entry saved

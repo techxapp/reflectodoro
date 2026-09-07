@@ -476,7 +476,21 @@
 
   <section class="card">
     <h2>Wellness check-in</h2>
-    <p class="hint">
+    
+    {#if checkinAutoCloseLoaded}
+      <form onsubmit={saveCheckinAutoClose}>
+        <label>
+          Auto-close after (minutes, if untouched)
+          <input type="number" min="1" max="60" bind:value={checkinAutoCloseMinutes} />
+        </label>
+        <button type="submit">Save</button>
+        {#if checkinAutoCloseSaved}
+          <span class="hint saved">Saved</span>
+        {/if}
+      </form>
+    {/if}
+
+    <!-- <p class="hint">
       Comma-separated list of check-in items (Relaxed eyes, Exercise, Drank water, Washroom) that
       should stay quiet -- no "Let's Try Next Time :)" nudge when switched off.
     </p>
@@ -492,20 +506,8 @@
           <span class="hint saved">Saved</span>
         {/if}
       </form>
-    {/if}
+    {/if} -->
 
-    {#if checkinAutoCloseLoaded}
-      <form onsubmit={saveCheckinAutoClose}>
-        <label>
-          Auto-close after (minutes, if untouched)
-          <input type="number" min="1" max="60" bind:value={checkinAutoCloseMinutes} />
-        </label>
-        <button type="submit">Save</button>
-        {#if checkinAutoCloseSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-    {/if}
   </section>
 
 

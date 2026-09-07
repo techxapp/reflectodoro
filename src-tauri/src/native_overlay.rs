@@ -164,7 +164,13 @@ pub async fn refresh_missed_slot_count(app: &AppHandle) {
     if current_slot_start.is_empty() {
         return;
     }
-    let count = find_missed_slots(pool(app).await, &current_slot_start).await.len();
+    // See handle_submit_reflection below: `current_slot_start` is the break
+    // slot's start, but `reflection.slot_start_at` is keyed on the preceding
+    // work slot's start -- this count must walk the same anchor the actual
+    // submit will use, or it double-counts/undercounts already-covered slots.
+    let reflection_slot_start = crate::grid::preceding_work_slot_start_iso(&current_slot_start)
+        .unwrap_or(current_slot_start);
+    let count = find_missed_slots(pool(app).await, &reflection_slot_start).await.len();
     *app.state::<AppState>().missed_slot_count.lock().unwrap() = count;
 }
 
@@ -365,8 +371,13 @@ async fn handle_submit_reflection(app: AppHandle, text: String) {
     if current_slot_start.is_empty() || already_entered {
         return;
     }
+    // `current_slot_start` is the break slot's start (`:25`/`:55`);
+    // `reflection.slot_start_at` should record the work slot it follows
+    // (`:00`/`:30`) -- see grid::preceding_work_slot_start_iso.
+    let reflection_slot_start = crate::grid::preceding_work_slot_start_iso(&current_slot_start)
+        .unwrap_or(current_slot_start);
     let db = pool(&app).await;
-    let covered = find_missed_slots(db, &current_slot_start).await;
+    let covered = find_missed_slots(db, &reflection_slot_start).await;
     save_reflection(db, &covered, &text).await;
 
     let state = app.state::<AppState>();

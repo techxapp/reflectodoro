@@ -102,7 +102,7 @@ No `pomodoro_session` table — deliberately. Slot identity/boundaries are fully
 reflection
   id INTEGER PK
   created_at TEXT
-  slot_start_at TEXT          -- one row per covered slot; usually 1 row per reflection, sometimes 2 when merged
+  slot_start_at TEXT          -- start of the *work* slot the reflection is about (:00/:30), NOT the break slot's start (:25/:55); one row per covered slot, usually 1 per reflection, sometimes more when merged
   text TEXT
 
 daily_task_list              -- "Most Important Tasks Today", shared between main window and overlay
@@ -116,6 +116,12 @@ app_setting
 ```
 
 Migrations live in `src-tauri/src/db.rs` (`tauri-plugin-sql` migration list). Applied versions are tracked per-database in `_sqlx_migrations` and never re-run — so editing an already-shipped migration silently skips on any db that already applied it. Before the first tagged release, squashing/rewriting migrations freely is fine (nothing but local dev dbs has run them). From the first tagged release onward, always add a new versioned migration for schema/default changes instead.
+
+**On-disk location** (Tauri's `app_config_dir()`, identifier `com.reflectodoro.app` from `tauri.conf.json`) — useful for inspecting `pomodoro.db` directly with the `sqlite3` CLI when diagnosing a silent write/migration issue (see "Known gotchas" below):
+- Windows: `%APPDATA%\com.reflectodoro.app\pomodoro.db`
+- macOS: `~/Library/Application Support/com.reflectodoro.app/pomodoro.db`
+- Linux: `~/.config/com.reflectodoro.app/pomodoro.db`
+- Android: app-private storage, not directly browsable without root/debug tooling (`run-as com.reflectodoro.app` via `adb shell`)
 
 ## Kill switches (must always work, tested explicitly)
 

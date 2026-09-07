@@ -357,7 +357,13 @@ pub fn close_overlay(app: &AppHandle) {
     // the Ctrl+Alt+Shift+F12 kill switch) where nothing was ever saved to
     // link a wellness_check row to.
     if had_reflection && !slot_start.is_empty() {
-        open_checkin_for_slot(app, slot_start);
+        // `slot_start` here is the *break* slot's start (`:25`/`:55`); the
+        // check-in window links its wellness_check row to the reflection by
+        // `slot_start_at`, which is stored as the preceding *work* slot's
+        // start (`:00`/`:30`) -- see saveReflection/find_missed_slots.
+        let reflection_slot_start = crate::grid::preceding_work_slot_start_iso(&slot_start)
+            .unwrap_or_else(|| slot_start.clone());
+        open_checkin_for_slot(app, reflection_slot_start);
     }
 }
 

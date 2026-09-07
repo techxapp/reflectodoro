@@ -20,6 +20,19 @@ impl Slot {
     }
 }
 
+/// Given the ISO start of a *break* slot (`Slot::start_iso()` when `phase ==
+/// Break`), returns the ISO start of the *work* slot it follows -- i.e. the
+/// pomodoro the reflection is actually about. Both break-slot gaps (`:00`-
+/// `:25` work -> `:25` break, `:30`-`:55` work -> `:55` break) are exactly 25
+/// minutes, so this is a fixed offset, not another `slot_for` recomputation.
+/// `reflection.slot_start_at` should always be this value, not the raw break
+/// start -- otherwise entries display as starting at `:25`/`:55` instead of
+/// the `:00`/`:30` the work slot actually began.
+pub fn preceding_work_slot_start_iso(break_slot_start_iso: &str) -> Option<String> {
+    let dt = DateTime::parse_from_rfc3339(break_slot_start_iso).ok()?;
+    Some((dt - ChronoDuration::minutes(25)).to_rfc3339())
+}
+
 /// Builds "today's wall-clock HH:mm:00" in the Local timezone, for `now`'s
 /// hour and the given `minute`. Deliberately does NOT go through
 /// `DateTime::<Local>::with_minute` (which routes through chrono's
@@ -127,6 +140,20 @@ mod tests {
         assert_eq!(slot.phase, Phase::Work);
         assert_eq!(slot.start, local(10, 30));
         assert_eq!(slot.end, local(10, 55));
+    }
+
+    #[test]
+    fn preceding_work_slot_start_maps_first_break_to_top_of_hour() {
+        let break_start = slot_for(local(10, 27)).start_iso();
+        let work_start = preceding_work_slot_start_iso(&break_start).unwrap();
+        assert_eq!(work_start, local(10, 0).to_rfc3339());
+    }
+
+    #[test]
+    fn preceding_work_slot_start_maps_second_break_to_half_past() {
+        let break_start = slot_for(local(10, 58)).start_iso();
+        let work_start = preceding_work_slot_start_iso(&break_start).unwrap();
+        assert_eq!(work_start, local(10, 30).to_rfc3339());
     }
 
     #[test]

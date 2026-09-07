@@ -266,7 +266,7 @@
             {@const clusterKey = cluster.rows[0].id}
             <li>
               <div class="meta">
-                <span class="time">{formatTime(cluster.rows[0].created_at)}</span>
+                <span class="time">{formatTime(cluster.rows[0].slot_start_at)}</span>
                 {#if cluster.rows.length === 1}
                   {@render editButton(cluster.rows[0])}
                 {:else}

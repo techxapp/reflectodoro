@@ -140,5 +140,32 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 11,
+            // Backfills rows written before the fix that changed
+            // reflection.slot_start_at's meaning from "start of the break
+            // slot" (:25/:55) to "start of the work slot the break follows"
+            // (:00/:30) -- see CLAUDE.md's Data model. Without this, old rows
+            // never match the new coverage-check anchor findMissedSlots
+            // uses, so every future submit walks the full missed-slot
+            // lookback cap treating already-reflected history as uncovered.
+            //
+            // Classifies old-format rows by LOCAL minute (25/55), not the
+            // raw UTC value: a half-hour-offset timezone (e.g. IST, +5:30)
+            // can flip which UTC minute a given local :25/:55 lands on.
+            // `localtime` re-derives that from whatever timezone this device
+            // is in right now -- safe because reflection.slot_start_at is
+            // only ever written and read on a single local device (this app
+            // has no sync). The shift itself (-25 minutes) is a fixed
+            // duration subtracted from the underlying instant, so it's
+            // correct regardless of timezone once a row is classified.
+            description: "backfill reflection.slot_start_at from break-slot-start to work-slot-start",
+            sql: r#"
+                UPDATE reflection
+                SET slot_start_at = strftime('%Y-%m-%dT%H:%M:%f', datetime(slot_start_at, '-25 minutes')) || 'Z'
+                WHERE CAST(strftime('%M', slot_start_at, 'localtime') AS INTEGER) IN (25, 55);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

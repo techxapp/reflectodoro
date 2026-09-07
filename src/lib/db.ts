@@ -70,6 +70,18 @@ export function previousSlotIso(slotIso: string): string {
   return new Date(new Date(slotIso).getTime() - 30 * 60 * 1000).toISOString();
 }
 
+/**
+ * Rust hands the overlay `current_slot_start` as the *break* slot's start
+ * (`:25`/`:55` -- see grid.rs::slot_for), but `reflection.slot_start_at`
+ * should record the *work* slot it follows (`:00`/`:30`), so entries display
+ * as starting when the pomodoro actually began. Both break-slot gaps are
+ * exactly 25 minutes, so this is a fixed offset, not a grid recomputation --
+ * mirrors `grid::preceding_work_slot_start_iso` on the Rust side.
+ */
+export function precedingWorkSlotStartIso(breakSlotStartIso: string): string {
+  return new Date(new Date(breakSlotStartIso).getTime() - 25 * 60 * 1000).toISOString();
+}
+
 /** Was the given slot (by its canonical ISO start timestamp) already reflected on? */
 export async function isSlotCovered(slotStartIso: string): Promise<boolean> {
   const db = await getDb();
