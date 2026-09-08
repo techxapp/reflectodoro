@@ -349,6 +349,36 @@ async fn run_scheduler(app: AppHandle) {
     }
 }
 
+// Shared by the tray "Open" item and the single-instance re-launch handler --
+// both need to bring the (hidden, not destroyed -- see the CloseRequested
+// handler below) main window back. Errors are logged rather than silently
+// discarded (`let _ = ...`) because a failure here is otherwise invisible:
+// exactly the "no thrown error visible to the user" failure mode this
+// codebase has already hit twice (see CLAUDE.md's Known gotchas).
+//
+// macOS-only: `window.show()`/`set_focus()` alone can fail to visually raise
+// the window if the whole app (NSApp), not just this window, is inactive --
+// a known Tauri/macOS gap. `AppHandle::show()` on macOS is a distinct,
+// app-level call (NSApp unhide + activate, akin to undoing Cmd+H) with no
+// equivalent/need on Windows or Linux.
+#[cfg(desktop)]
+fn open_main_window(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    if let Err(e) = app.show() {
+        log::error!("failed to activate app on macOS before showing main window: {e:?}");
+    }
+    if let Some(win) = app.get_webview_window("main") {
+        if let Err(e) = win.show() {
+            log::error!("failed to show main window: {e:?}");
+        }
+        if let Err(e) = win.set_focus() {
+            log::error!("failed to focus main window: {e:?}");
+        }
+    } else {
+        log::error!("open_main_window: no window labeled \"main\" found");
+    }
+}
+
 #[cfg(desktop)]
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let open_item = MenuItem::with_id(app, "open", "Open Reflectodoro", true, None::<&str>)?;
@@ -361,12 +391,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .icon(app.default_window_icon().unwrap().clone())
         .on_menu_event(move |app, event| match event.id.as_ref() {
-            "open" => {
-                if let Some(win) = app.get_webview_window("main") {
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                }
-            }
+            "open" => open_main_window(app),
             "toggle" => {
                 let enabled = !POMODORO_ENABLED.load(Ordering::SeqCst);
                 POMODORO_ENABLED.store(enabled, Ordering::SeqCst);
@@ -468,10 +493,7 @@ pub fn run() {
     #[cfg(desktop)]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
-                let _ = win.set_focus();
-            }
+            open_main_window(app);
         }));
     }
 
