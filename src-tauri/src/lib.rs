@@ -5,6 +5,7 @@ mod commands;
 mod db;
 mod grid;
 mod hook;
+mod macos_overlay;
 mod media;
 mod native_overlay;
 mod overlay;
@@ -31,9 +32,13 @@ use grid::Phase;
 use state::{AppState, OverlayState};
 
 /// Debug builds (`npm run tauri dev`) run in dev mode by default: the overlay
-/// shows a visible "Close (DEV)" button and skips the Alt-Tab/Win-key hook.
-/// Override with POMODORO_DEV_MODE=0/1 if you need to test enforcement in a
-/// debug build, or force it on in a release build for QA.
+/// shows a visible "Close (DEV)" button. The Alt-Tab/Win-key/Cmd-Tab
+/// suppression hooks install unconditionally regardless of dev mode (dev
+/// builds and release builds behave identically there now) -- the "Close
+/// (DEV)" button, plus the always-registered Ctrl/Cmd+Alt+Shift+F12 kill
+/// switch, are the way to escape the overlay while testing. Override with
+/// POMODORO_DEV_MODE=0/1 if you need to test enforcement in a debug build, or
+/// force it on in a release build for QA.
 fn resolve_dev_mode() -> bool {
     match std::env::var("POMODORO_DEV_MODE").as_deref() {
         Ok("1") => true,
@@ -74,6 +79,18 @@ pub(crate) static MEDIA_PAUSE_ON_BREAK_ENABLED: AtomicBool = AtomicBool::new(tru
 /// is to stop the user from using the phone for something else during a
 /// break, not just to politely mention it.
 pub(crate) static BREAK_NOTIFICATION_PERSISTENT_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// macOS only: whether a break additionally hides the menu bar and Dock (see
+/// macos_overlay.rs). This is the *only* part of macOS break enforcement
+/// gated behind a Settings toggle -- following the user to every Space
+/// (including another app's full-screen Space) and blocking Cmd+Tab are both
+/// always on, dev_mode or not, same tier as fullscreen/always-on-top. Backed
+/// by `app_setting.macos_hide_menu_bar_dock_enabled`; same load/push pattern
+/// as `MEDIA_PAUSE_ON_BREAK_ENABLED`. Defaults to `false` here too, matching
+/// the migration's default -- opt-in, unlike the other toggles above, since
+/// hiding system UI is a materially more disruptive change to the user's
+/// desktop than anything else this app does.
+pub(crate) static MACOS_HIDE_MENU_BAR_DOCK_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// macOS-only media-toggle guard state (see media.rs's macos_impl module for
 /// the full rationale). Both are RFC3339/ISO8601 UTC strings, same convention
@@ -537,6 +554,8 @@ pub fn run() {
             commands::sync_last_wellness_check_at,
             commands::get_break_notification_persistent_enabled,
             commands::set_break_notification_persistent_enabled,
+            commands::get_macos_hide_menu_bar_dock_enabled,
+            commands::set_macos_hide_menu_bar_dock_enabled,
             commands::can_draw_overlays,
             commands::request_draw_overlays_permission,
             commands::can_schedule_exact_alarms,

@@ -24,6 +24,8 @@
     saveOverlayAutoCloseMinutes,
     getCheckinAutoCloseMinutes,
     saveCheckinAutoCloseMinutes,
+    getMacosHideMenuBarDockEnabled,
+    saveMacosHideMenuBarDockEnabled,
     type BreakitSettings,
     type ImportMode,
   } from "$lib/db";
@@ -60,6 +62,11 @@
   let breakNotificationPersistentEnabled = $state(true);
   let breakNotificationPersistentLoaded = $state(false);
   let breakNotificationPersistentBusy = $state(false);
+
+  let isMacos = $state(false);
+  let macosHideMenuBarDockEnabled = $state(false);
+  let macosHideMenuBarDockLoaded = $state(false);
+  let macosHideMenuBarDockBusy = $state(false);
 
   let overlayGranted = $state(false);
   let overlayChecked = $state(false);
@@ -108,6 +115,12 @@
     const os = await invoke<string>("current_os");
     if (os === "macos") forceCloseShortcutLabel = "Cmd+Option+Shift+F12";
     isAndroid = os === "android";
+    isMacos = os === "macos";
+  });
+
+  onMount(async () => {
+    macosHideMenuBarDockEnabled = await getMacosHideMenuBarDockEnabled();
+    macosHideMenuBarDockLoaded = true;
   });
 
   onMount(async () => {
@@ -249,6 +262,17 @@
       breakNotificationPersistentEnabled = next;
     } finally {
       breakNotificationPersistentBusy = false;
+    }
+  }
+
+  async function toggleMacosHideMenuBarDock() {
+    const next = !macosHideMenuBarDockEnabled;
+    macosHideMenuBarDockBusy = true;
+    try {
+      await saveMacosHideMenuBarDockEnabled(next);
+      macosHideMenuBarDockEnabled = next;
+    } finally {
+      macosHideMenuBarDockBusy = false;
     }
   }
 
@@ -461,6 +485,32 @@
       <p class="hint">
         Only affects a break that starts while you're using another app &mdash; it can't wake or
         take over a locked screen.
+      </p>
+    {/if}
+
+    {#if isMacos}
+      <p class="hint">
+        Cmd+Tab is always blocked during a break, and the break screen always stays visible if you
+        swipe to another desktop Space or into another app's full-screen window.
+      </p>
+    {/if}
+
+    {#if isMacos && macosHideMenuBarDockLoaded}
+      <div class="data-row">
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={macosHideMenuBarDockEnabled}
+            disabled={macosHideMenuBarDockBusy}
+            onchange={toggleMacosHideMenuBarDock}
+          />
+          Also hide the menu bar &amp; Dock during a break
+        </label>
+      </div>
+      <p class="hint">
+        Off by default since it's a bigger change to your desktop than anything else here &mdash;
+        like the rest of the break screen, it's a strong deterrent, not an absolute lock: Activity
+        Monitor/Force Quit always still works.
       </p>
     {/if}
   </section>

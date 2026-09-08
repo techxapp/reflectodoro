@@ -11,8 +11,8 @@ use crate::overlay;
 use crate::state::{AppState, OverlayState};
 use crate::{
     BREAK_NOTIFICATION_PERSISTENT_ENABLED, FORCE_CLOSE_SHORTCUT_ENABLED, LAST_MEDIA_TOGGLE_AT,
-    LAST_WELLNESS_CHECK_AT, MEDIA_PAUSE_ON_BREAK_ENABLED, OVERLAY_AUTO_CLOSE_MINUTES,
-    POMODORO_ENABLED,
+    LAST_WELLNESS_CHECK_AT, MACOS_HIDE_MENU_BAR_DOCK_ENABLED, MEDIA_PAUSE_ON_BREAK_ENABLED,
+    OVERLAY_AUTO_CLOSE_MINUTES, POMODORO_ENABLED,
 };
 
 #[tauri::command]
@@ -307,6 +307,24 @@ pub fn get_media_pause_on_break_enabled() -> bool {
 #[tauri::command]
 pub fn set_media_pause_on_break_enabled(enabled: bool) {
     MEDIA_PAUSE_ON_BREAK_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+/// Mirrors app_setting.macos_hide_menu_bar_dock_enabled -- loaded and pushed
+/// here by the frontend on boot and on every Settings save (see
+/// loadAndSyncMacosHideMenuBarDockSetting in db.ts). This only gates menu
+/// bar/Dock hiding; Space-following and the Cmd+Tab block are always on (see
+/// macos_overlay.rs's module doc). Registered unconditionally (not
+/// `#[cfg(target_os = "macos")]`) so the frontend can call it on any platform
+/// without a per-platform invoke gate; the flag itself is simply never read
+/// on non-macOS (see overlay.rs's spawn_or_update_overlay).
+#[tauri::command]
+pub fn get_macos_hide_menu_bar_dock_enabled() -> bool {
+    MACOS_HIDE_MENU_BAR_DOCK_ENABLED.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+pub fn set_macos_hide_menu_bar_dock_enabled(enabled: bool) {
+    MACOS_HIDE_MENU_BAR_DOCK_ENABLED.store(enabled, Ordering::SeqCst);
 }
 
 /// Pushes both halves of the macOS media-toggle guard (see media.rs) into

@@ -99,15 +99,24 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
         };
 
         if !win.is_visible().unwrap_or(false) {
-            let dev_mode = app.state::<AppState>().dev_mode;
             let _ = win.show();
             let _ = win.set_focus();
             if crate::MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst) {
                 crate::media::pause_playing_sessions(app);
             }
-            if !dev_mode {
-                crate::hook::install();
-            }
+            // Installs unconditionally, dev_mode or not: the "Close (DEV)"
+            // button and the always-registered F12 kill switch (see lib.rs)
+            // are the escape hatches during local testing now, so dev builds
+            // exercise the same suppression behavior as a real release.
+            crate::hook::install();
+            // Space-following and the Cmd+Tab block are always on (see
+            // macos_overlay.rs's module doc); only menu bar/Dock hiding is
+            // gated behind the Settings toggle.
+            #[cfg(target_os = "macos")]
+            crate::macos_overlay::enter_kiosk_mode(
+                &win,
+                crate::MACOS_HIDE_MENU_BAR_DOCK_ENABLED.load(Ordering::SeqCst),
+            );
         }
     }
 
@@ -358,6 +367,8 @@ pub fn close_overlay(app: &AppHandle) {
     }
 
     crate::hook::uninstall();
+    #[cfg(target_os = "macos")]
+    crate::macos_overlay::exit_kiosk_mode(app);
 
     // Only prompt for the wellness check-in when a reflection was actually
     // recorded for this slot -- excludes force-closes (dev "Close (DEV)",

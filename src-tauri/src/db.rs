@@ -167,5 +167,19 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 12,
+            // Off by default, unlike every other app_setting toggle here --
+            // this is an opt-in feature (hides the macOS menu bar/Dock during
+            // a break), materially more disruptive to the user's desktop than
+            // anything else this app does. Only gates menu bar/Dock hiding --
+            // Space-following and the Cmd+Tab block are always on. See
+            // macos_overlay.rs.
+            description: "default macos_hide_menu_bar_dock_enabled setting to disabled",
+            sql: r#"
+                INSERT INTO app_setting (key, value) VALUES ('macos_hide_menu_bar_dock_enabled', 'false');
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

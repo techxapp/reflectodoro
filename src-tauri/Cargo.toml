@@ -59,7 +59,11 @@ windows = { version = "0.61", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6.4"
+# "exception" feature: lets macos_overlay.rs catch an Objective-C exception
+# from -setPresentationOptions: instead of letting it abort the process (see
+# that file's doc comment on enter_kiosk_mode for why this only helps in dev
+# builds -- release uses panic = "abort", see Cargo.toml's [profile.release]).
+objc2 = { version = "0.6.4", features = ["exception"] }
 objc2-app-kit = "0.3.2"
 objc2-core-graphics = "0.3.2"
 objc2-foundation = "0.3.2"

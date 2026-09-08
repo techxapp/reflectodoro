@@ -16,6 +16,7 @@
     saveMediaPauseOnBreakEnabled,
     loadAndSyncBreakNotificationPersistentSetting,
     loadAndSyncMediaToggleGuard,
+    loadAndSyncMacosHideMenuBarDockSetting,
     listenForTaskListUpdates,
     listenForNotToDoListUpdates,
     listenForMediaToggleRecorded,
@@ -83,6 +84,7 @@
     mediaPauseOnBreakLoaded = true;
     await loadAndSyncBreakNotificationPersistentSetting();
     await loadAndSyncMediaToggleGuard();
+    await loadAndSyncMacosHideMenuBarDockSetting();
     enabled = await invoke<boolean>("get_enabled");
     taskListContent = await getTaskList(localDateStamp());
     notToDoContent = await getNotToDoList(localDateStamp());

@@ -575,6 +575,49 @@ export async function loadAndSyncMediaPauseOnBreakSetting(): Promise<boolean> {
   return enabled;
 }
 
+// --- macOS menu bar/Dock hiding toggle (Settings) -----------------------
+// macOS only in effect (see overlay.rs's spawn_or_update_overlay /
+// macos_overlay.rs) -- whether a break additionally hides the menu bar and
+// Dock. This is the *only* part of macOS break enforcement gated behind a
+// setting: keeping the overlay visible across every Space and blocking
+// Cmd+Tab are both always on. Off by default, unlike most other toggles here
+// -- opt-in, since hiding system UI is a more disruptive change to the user's
+// desktop than anything else this app does. Read/settable cross-platform like
+// the other toggles so the Settings page doesn't need its own platform
+// branching just to persist a value.
+
+const MACOS_HIDE_MENU_BAR_DOCK_KEY = "macos_hide_menu_bar_dock_enabled";
+
+export async function getMacosHideMenuBarDockEnabled(): Promise<boolean> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [MACOS_HIDE_MENU_BAR_DOCK_KEY],
+  );
+  return (rows[0]?.value ?? "false") === "true";
+}
+
+export async function saveMacosHideMenuBarDockEnabled(enabled: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [MACOS_HIDE_MENU_BAR_DOCK_KEY, String(enabled)],
+  );
+  await syncMacosHideMenuBarDockToBackend(enabled);
+}
+
+export async function syncMacosHideMenuBarDockToBackend(enabled: boolean): Promise<void> {
+  await invoke("set_macos_hide_menu_bar_dock_enabled", { enabled });
+}
+
+/** Call once on app boot (main window) so Rust's in-memory flag matches SQLite. */
+export async function loadAndSyncMacosHideMenuBarDockSetting(): Promise<boolean> {
+  const enabled = await getMacosHideMenuBarDockEnabled();
+  await syncMacosHideMenuBarDockToBackend(enabled);
+  return enabled;
+}
+
 // --- Android break-notification persistence toggle (Settings) ----------
 // Android only in effect (see overlay.rs's spawn_or_update_overlay /
 // BreakScheduling.kt's postBreakNotification) -- whether the break
