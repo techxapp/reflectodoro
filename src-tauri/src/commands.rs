@@ -6,6 +6,7 @@ use tauri::Manager;
 #[cfg(desktop)]
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::breakit;
 use crate::overlay;
 use crate::state::{AppState, OverlayState};
 use crate::{
@@ -37,15 +38,40 @@ pub fn current_os() -> &'static str {
 /// Settings saves, so SQLite stays the source of truth while the scheduler
 /// still has a fast in-memory copy to use when it spawns a fresh overlay.
 #[tauri::command]
-pub fn sync_breakit_config(state: State<AppState>, length: u32, include_special: bool) {
-    let mut cfg = state.breakit_config.lock().unwrap();
-    cfg.length = length.clamp(4, 64);
-    cfg.include_special = include_special;
-    log::info!(
-        "sync_breakit_config: length={} include_special={}",
-        cfg.length,
-        cfg.include_special
-    );
+pub fn sync_breakit_config(app: AppHandle, state: State<AppState>, length: u32, include_special: bool) {
+    let (len, include_special) = {
+        let mut cfg = state.breakit_config.lock().unwrap();
+        cfg.length = length.clamp(4, 64);
+        cfg.include_special = include_special;
+        (cfg.length, cfg.include_special)
+    };
+    log::info!("sync_breakit_config: length={len} include_special={include_special}");
+
+    // Cold-start config race (see run_scheduler's Break arm, lib.rs): this
+    // sync can still land after a break has already opened and shown a
+    // challenge generated from the pre-sync default -- run_scheduler's own
+    // post-warmup regeneration narrows that window but can't close it
+    // outright (confirmed live: a real device's frontend boot took ~7.5s,
+    // past the 6s warmup). Rather than widen that window further, correct
+    // any already-open, not-yet-solved overlay in place the moment the real
+    // config finally arrives, however late. Lock ordering: `breakit_config`
+    // above is already released before `overlay` is taken below -- never
+    // nest them the other way, since run_scheduler nests overlay-then-
+    // breakit_config (opened_for/generate_breakit_challenge) and holding
+    // both at once in opposite orders across two threads is a deadlock.
+    let corrected = {
+        let mut overlay = state.overlay.lock().unwrap();
+        if overlay.open && !overlay.breakit_matched {
+            overlay.breakit_challenge = breakit::generate_challenge(len, include_special);
+            true
+        } else {
+            false
+        }
+    };
+    if corrected {
+        log::info!("sync_breakit_config: corrected already-open overlay's challenge");
+        overlay::emit_state(&app);
+    }
 }
 
 #[tauri::command]
