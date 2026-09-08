@@ -245,7 +245,12 @@ export interface WellnessSummary {
   washroom: number;
 }
 
-/** Totals for each wellness check-in item on a given day, keyed off wellness_check's own created_at (when it was saved), same grouping basis getReflectionsForDate uses for reflections. */
+/** Totals for each wellness check-in item on a given day, keyed off the
+ * *reflection's* slot_start_at (via reflection_id) rather than
+ * wellness_check's own created_at -- same grouping basis getReflectionsForDate
+ * uses, so a late-night check-in submitted after midnight stays filed under
+ * the pomodoro it was actually about instead of leaking onto the next day
+ * and disagreeing with the reflections shown beside it on the Entries page. */
 export async function getWellnessSummaryForDate(dateStamp: string): Promise<WellnessSummary> {
   const db = await getDb();
   const rows = await db.select<
@@ -263,7 +268,8 @@ export async function getWellnessSummaryForDate(dateStamp: string): Promise<Well
             SUM(drank_water) as drank_water,
             SUM(washroom) as washroom
      FROM wellness_check
-     WHERE date(created_at, 'localtime') = $1`,
+     JOIN reflection ON reflection.id = wellness_check.reflection_id
+     WHERE date(reflection.slot_start_at, 'localtime') = $1`,
     [dateStamp],
   );
   const row = rows[0];
@@ -277,24 +283,27 @@ export async function getWellnessSummaryForDate(dateStamp: string): Promise<Well
 }
 
 /**
- * `date(created_at, 'localtime')`, not bare `date(created_at)`: `created_at`
- * is stored as a UTC ISO string (`new Date().toISOString()`, see
- * saveReflection), so a bare `date()` returns its *UTC* calendar date --
- * while `dateStamp` here always comes from `localDateStamp()`, the *local*
- * calendar date. In UTC+5:30, every reflection written before 05:30 local
- * was filed under the previous day; in UTC-5, every evening reflection
- * jumped to tomorrow. `getWellnessSummaryForDate` above had the identical
- * bug -- its wellness tiles were computed over a different row set than the
- * reflections shown beside them on the same Entries page. SQLite's
- * `'localtime'` modifier delegates to the platform's own DST-aware
- * timezone conversion (`localtime_r`/equivalent), so this stays correct
- * across DST transitions too, not just a fixed current-offset shift.
+ * Filters on `slot_start_at`, not `created_at`: a reflection's day identity
+ * is which pomodoro it's *about* (the work slot it covers), not the moment
+ * it happened to be typed. A late-night pomodoro (e.g. the 23:30 slot) whose
+ * reflection isn't submitted until after midnight has a `created_at` that
+ * rolls onto the next calendar day while `slot_start_at` stays on the day
+ * the work actually happened -- filtering on `created_at` used to leak that
+ * row onto the following day's Entries view instead of the day it belongs
+ * to. `date(slot_start_at, 'localtime')`, not bare `date(slot_start_at)`:
+ * both timestamps are stored as UTC ISO strings (`new Date().toISOString()`,
+ * see saveReflection/precedingWorkSlotStartIso), so a bare `date()` would
+ * return the *UTC* calendar date while `dateStamp` here always comes from
+ * `localDateStamp()`, the *local* calendar date -- SQLite's `'localtime'`
+ * modifier delegates to the platform's own DST-aware timezone conversion
+ * (`localtime_r`/equivalent), so this stays correct across DST transitions
+ * too, not just a fixed current-offset shift.
  */
 export async function getReflectionsForDate(dateStamp: string): Promise<ReflectionRow[]> {
   const db = await getDb();
   return db.select<ReflectionRow[]>(
     `SELECT id, created_at, slot_start_at, text FROM reflection
-     WHERE date(created_at, 'localtime') = $1
+     WHERE date(slot_start_at, 'localtime') = $1
      ORDER BY slot_start_at ASC`,
     [dateStamp],
   );
