@@ -33,4 +33,4 @@ vite.config.ts.timestamp-*
 *.jks
 
 # Local-only audit/planning notes -- not meant for the repo history.
-/.claude/plans/audit-findings.md
+/.claude/plans/*
