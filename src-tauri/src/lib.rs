@@ -467,9 +467,27 @@ pub fn run() {
     // Windows-only: WebView2 is the Windows-only webview backend (macOS/
     // Linux use WKWebView/WebKitGTK, unaffected). Safety: single-threaded at
     // this point, before the Tokio runtime or any other thread starts.
+    //
+    // `--disable-features=CalculateNativeWinOcclusion` is a second, separate
+    // workaround bundled in here for the same reason (must precede window
+    // creation): Chromium's Windows-only native window occlusion tracker
+    // marks a window "occluded" (and throttles its renderer/timers, same
+    // treatment as a backgrounded tab) whenever another window fully covers
+    // it on screen -- exactly what happens to "main" for the whole
+    // break+check-in duration, since the overlay is always-on-top/fullscreen
+    // and the check-in popup that follows it is always-on-top/maximized.
+    // Symptom actually reported in the wild: the main window's countdown
+    // frozen on a stale time after the check-in window closed and "main"
+    // became visible again -- a stuck-renderer bug distinct from the
+    // solid-white swapchain-loss one above (that one needs a monitor
+    // power-cycle to reproduce; this one just needs an ordinary break to run
+    // its course with another window on top of "main" the whole time).
     #[cfg(target_os = "windows")]
     unsafe {
-        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu");
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--disable-gpu --disable-features=CalculateNativeWinOcclusion",
+        );
     }
 
     let dev_mode = resolve_dev_mode();
