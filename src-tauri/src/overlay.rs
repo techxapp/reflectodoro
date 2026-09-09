@@ -55,17 +55,28 @@ pub fn precreate_windows(_app: &AppHandle) {}
 
 #[cfg(desktop)]
 fn build_overlay_window(app: &AppHandle, visible: bool) -> WebviewWindow {
-    let win = WebviewWindowBuilder::new(app, OVERLAY_LABEL, WebviewUrl::App("overlay".into()))
+    #[allow(unused_mut)]
+    let mut builder = WebviewWindowBuilder::new(app, OVERLAY_LABEL, WebviewUrl::App("overlay".into()))
         .title("Break")
         .resizable(false)
         .visible(visible)
-        .fullscreen(true)
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
-        .focused(visible)
-        .build()
-        .expect("failed to build overlay window");
+        .focused(visible);
+
+    // NOT macOS: real (`toggleFullScreen:`-driven) fullscreen there conflicts
+    // with macos_overlay.rs's NSWindowCollectionBehavior tricks -- see
+    // spawn_or_update_overlay's macOS arm, which covers the screen a
+    // different way instead. Windows/Linux have no such conflict (no
+    // per-window dedicated-Space concept), so this keeps their existing,
+    // already-working behavior unchanged.
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder = builder.fullscreen(true);
+    }
+
+    let win = builder.build().expect("failed to build overlay window");
 
     let app_handle = app.clone();
     win.on_window_event(move |event| {
@@ -99,6 +110,13 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
         };
 
         if !win.is_visible().unwrap_or(false) {
+            // Sizes/positions the window to cover the whole screen before
+            // showing it -- the macOS substitute for the `.fullscreen(true)`
+            // skipped above (see build_overlay_window). Must happen before
+            // `.show()`: doing it after would show the window at its
+            // previous (small default) frame for one visible frame first.
+            #[cfg(target_os = "macos")]
+            crate::macos_overlay::cover_current_monitor(&win);
             let _ = win.show();
             let _ = win.set_focus();
             if crate::MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst) {
