@@ -523,6 +523,22 @@ pub fn run() {
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
                 ])
                 .level(log::LevelFilter::Info)
+                // Overrides two defaults that would otherwise quietly destroy
+                // exactly the evidence a real-device bug report needs:
+                // RotationStrategy::KeepOne (the plugin's default) doesn't
+                // archive on rotation, it *deletes* the whole file and starts
+                // over -- and the default max_file_size (40KB) is small
+                // enough that ordinary Info-level logging (a phase transition
+                // + breakit challenge every ~25min, plus the macOS overlay
+                // path's logging) can fill and wipe it in about a day of
+                // normal use. KeepSome(5) archives up to 5 rotated,
+                // date-stamped files instead of deleting, and 1MB is large
+                // enough that a bug reported "sometime today" almost
+                // certainly still has its log lines somewhere in the active
+                // file or the most recent archive. See CLAUDE.md's
+                // "Debugging from production logs".
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5))
+                .max_file_size(1_000_000)
                 .build(),
         );
 
