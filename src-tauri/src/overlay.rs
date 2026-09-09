@@ -109,7 +109,17 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
             None => build_overlay_window(app, false),
         };
 
-        if !win.is_visible().unwrap_or(false) {
+        // Logged unconditionally (not just on the failure paths below): this
+        // is the one line in production logs that says whether the show path
+        // was even entered at all. A previously-reported real bug (overlay
+        // never appearing on its own on macOS) turned out to be downstream of
+        // here, not upstream -- but `is_visible()` reporting stale/wrong
+        // would otherwise be a silent, unloggable way to skip this entire
+        // block, so it's worth a line even though it's cheap.
+        let is_visible = win.is_visible();
+        log::info!("spawn_or_update_overlay: overlay window is_visible={is_visible:?}");
+
+        if !is_visible.unwrap_or(false) {
             // Sizes/positions the window to cover the whole screen before
             // showing it -- the macOS substitute for the `.fullscreen(true)`
             // skipped above (see build_overlay_window). Must happen before
@@ -117,8 +127,19 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
             // previous (small default) frame for one visible frame first.
             #[cfg(target_os = "macos")]
             crate::macos_overlay::cover_current_monitor(&win);
-            let _ = win.show();
-            let _ = win.set_focus();
+            // Previously `let _ = ...`, silently discarding a failure here --
+            // this is exactly the step in the middle of the "overlay didn't
+            // open on its own" bug report that had no log coverage at all.
+            if let Err(e) = win.show() {
+                log::error!("spawn_or_update_overlay: win.show() failed: {e:?}");
+            }
+            if let Err(e) = win.set_focus() {
+                log::warn!("spawn_or_update_overlay: win.set_focus() failed: {e:?}");
+            }
+            log::info!(
+                "spawn_or_update_overlay: after show()/set_focus(), is_visible={:?}",
+                win.is_visible()
+            );
             if crate::MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst) {
                 crate::media::pause_playing_sessions(app);
             }

@@ -158,6 +158,20 @@ Android is a real, signed release target, not experimental scaffolding — `src-
 - **Signed CI releases**: `.github/workflows/release.yml`'s `android` job sets up JDK 17 + the Android SDK/NDK, decodes a signing keystore from the `ANDROID_KEYSTORE_BASE64` secret, runs `npm run tauri android build -- --apk --split-per-abi --target aarch64 armv7`, and uploads signed release APKs to the GitHub Release.
 - **iOS has none of the above** — it's excluded from the same Cargo `cfg` groups as Android but has zero implementation behind it. "Planned but not yet started" (the phrase this doc used to apply to Android as a whole) is accurate only for iOS now.
 
+## Debugging from production logs
+
+`tauri-plugin-log` is wired up in `lib.rs`'s `run()` with three targets — `Stdout`, `LogDir`, and `Webview` (the last one mirrors frontend `@tauri-apps/plugin-log` calls into the same file too, useful since the hidden overlay/checkin windows have no devtools window open by default) — filtered to `log::LevelFilter::Info`, so `log::info!`/`warn!`/`error!` all persist; `debug!`/`trace!` do not. This means a real installed build (not just `npm run tauri dev`) already writes a durable log file, which matters a lot when a bug only reproduces on a device you don't have physical/remote access to (e.g. reported by someone else testing a release build).
+
+**Log file location** (`LogDir` resolves to Tauri's `app_log_dir()` — note this is a *different* base directory than `app_config_dir()`, which is where the SQLite db's "On-disk location" above lives; don't assume they share a parent folder). The current file is `Reflectodoro.log` inside that directory (rotated backups are named `Reflectodoro_<timestamp>.log`) —
+- Windows: `%LOCALAPPDATA%\com.reflectodoro.app\logs\Reflectodoro.log` (Local, not Roaming/`%APPDATA%` — that's where the db lives instead)
+- macOS: `~/Library/Logs/com.reflectodoro.app/Reflectodoro.log`
+- Linux: `~/.local/share/com.reflectodoro.app/logs/Reflectodoro.log` (`$XDG_DATA_HOME` if set, not `~/.config` — that's where the db lives instead)
+- Android: app-private storage, same `run-as`/adb caveat as the db.
+
+When asking someone else to help diagnose a bug they hit (rather than you), the log file from around the time it happened is usually more useful than a description of what they saw — ask for it (or the last screenful of it) before guessing from symptoms alone.
+
+**Silently-discarded `Result`s are the recurring way real bugs here go unlogged** — `let _ = win.show()`/`win.set_focus()`/etc. throws away exactly the information you'd need if that call ever actually failed. `overlay.rs`'s `spawn_or_update_overlay` and `open_main_window` (`lib.rs`) both learned this the hard way and now log every step of showing a window (entry visibility check, the show/focus calls' own `Result`s, post-show visibility) rather than discarding them — worth matching that pattern (log both the attempt and its outcome, not just failures) in any new code that drives window/OS state changes, since those are exactly the class of thing that fails silently and differently on a machine you can't get onto.
+
 ## Known gotchas already hit in this codebase
 
 - **`sql:default` (tauri-plugin-sql) does not include `execute`** — only `select`/`load`/`close`. Every INSERT/UPDATE needs the capability to also list `sql:allow-execute` explicitly, or writes silently no-op with no visible error.

@@ -68,18 +68,27 @@ use tauri::{AppHandle, Position, Size, WebviewWindow};
 pub fn cover_current_monitor(win: &WebviewWindow) {
     let monitor = match win.current_monitor() {
         Ok(Some(m)) => Some(m),
-        Ok(None) => win.primary_monitor().unwrap_or(None),
+        Ok(None) => {
+            log::info!("macos_overlay::cover_current_monitor: current_monitor() returned None, falling back to primary_monitor()");
+            win.primary_monitor().unwrap_or(None)
+        }
         Err(e) => {
-            log::warn!("macos_overlay::cover_current_monitor: current_monitor() failed: {e:?}");
+            log::warn!("macos_overlay::cover_current_monitor: current_monitor() failed: {e:?}, falling back to primary_monitor()");
             win.primary_monitor().unwrap_or(None)
         }
     };
     let Some(monitor) = monitor else {
         log::warn!(
-            "macos_overlay::cover_current_monitor: no monitor found, leaving the overlay at its previous size/position"
+            "macos_overlay::cover_current_monitor: no monitor found (current_monitor() and primary_monitor() both empty), leaving the overlay at its previous size/position"
         );
         return;
     };
+    log::info!(
+        "macos_overlay::cover_current_monitor: covering monitor name={:?} position={:?} size={:?}",
+        monitor.name(),
+        monitor.position(),
+        monitor.size()
+    );
     if let Err(e) = win.set_position(Position::Physical(*monitor.position())) {
         log::warn!("macos_overlay::cover_current_monitor: set_position failed: {e:?}");
     }
@@ -93,12 +102,22 @@ pub fn cover_current_monitor(win: &WebviewWindow) {
 /// (see overlay.rs) -- everything else here (Space-following, Cmd+Tab block)
 /// applies unconditionally, every break, regardless of that setting.
 pub fn enter_kiosk_mode(win: &WebviewWindow, hide_menu_bar_and_dock: bool) {
+    log::info!(
+        "macos_overlay::enter_kiosk_mode: queuing onto main thread (hide_menu_bar_and_dock={hide_menu_bar_and_dock})"
+    );
     // Cloned for the closure, not moved: `win` (the receiver below) stays
     // borrowed for the duration of the `run_on_main_thread` call itself, so
     // the `move` closure needs its own owned copy rather than trying to move
     // the same binding it's being called on.
     let win_for_closure = win.clone();
     if let Err(e) = win.run_on_main_thread(move || {
+        // Logged from inside the queued closure, not just at the call site
+        // above: `run_on_main_thread` only *queues* the work, so this is the
+        // line that actually confirms the main thread's event loop got
+        // around to running it (rather than the closure being dropped, or
+        // the loop stalling) -- worth distinguishing in logs if this ever
+        // needs debugging again without live access to the machine.
+        log::info!("macos_overlay::enter_kiosk_mode: running on main thread now");
         match win_for_closure.ns_window() {
             Ok(ptr) => configure_window(ptr),
             Err(e) => log::warn!("macos_overlay::enter_kiosk_mode: ns_window() failed: {e:?}"),
@@ -117,13 +136,19 @@ pub fn enter_kiosk_mode(win: &WebviewWindow, hide_menu_bar_and_dock: bool) {
 /// Space, dev_mode or not, `macos_hide_menu_bar_dock_enabled` or not.
 fn configure_window(ptr: *mut c_void) {
     let ns_window: &NSWindow = unsafe { &*(ptr as *mut NSWindow) };
-    ns_window.setCollectionBehavior(
-        NSWindowCollectionBehavior::CanJoinAllSpaces
-            | NSWindowCollectionBehavior::FullScreenAuxiliary
-            | NSWindowCollectionBehavior::Stationary
-            | NSWindowCollectionBehavior::IgnoresCycle,
-    );
+    let behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
+        | NSWindowCollectionBehavior::FullScreenAuxiliary
+        | NSWindowCollectionBehavior::Stationary
+        | NSWindowCollectionBehavior::IgnoresCycle;
+    ns_window.setCollectionBehavior(behavior);
     ns_window.setLevel(NSScreenSaverWindowLevel);
+    log::info!(
+        "macos_overlay::configure_window: set collectionBehavior={:?} level={:?} (readback: collectionBehavior={:?} level={:?})",
+        behavior,
+        NSScreenSaverWindowLevel,
+        ns_window.collectionBehavior(),
+        ns_window.level()
+    );
 }
 
 /// `DisableProcessSwitching` (blocks Cmd+Tab) is always included; `HideMenuBar`
@@ -153,7 +178,13 @@ fn enable_presentation_lockdown(hide_menu_bar_and_dock: bool) {
     // macos_overlay.rs's module doc for why the flag choice itself is the
     // real mitigation.
     let result = objc2::exception::catch(|| {
-        NSApplication::sharedApplication(mtm).setPresentationOptions(options);
+        let app = NSApplication::sharedApplication(mtm);
+        app.setPresentationOptions(options);
+        log::info!(
+            "macos_overlay::enable_presentation_lockdown: set presentationOptions={:?} (readback: {:?})",
+            options,
+            app.presentationOptions()
+        );
     });
     if let Err(e) = result {
         log::error!("macos_overlay: setPresentationOptions raised an exception: {e:?}");
@@ -166,6 +197,7 @@ fn enable_presentation_lockdown(hide_menu_bar_and_dock: bool) {
 /// could have been toggled off mid-break), same "harmless no-op" pattern as
 /// `media::resume_playing_sessions` and `hook::uninstall()`.
 pub fn exit_kiosk_mode(app: &AppHandle) {
+    log::info!("macos_overlay::exit_kiosk_mode: queuing onto main thread");
     if let Err(e) = app.run_on_main_thread(|| {
         let Some(mtm) = MainThreadMarker::new() else {
             log::error!("macos_overlay: exit_kiosk_mode called off the main thread");
@@ -173,6 +205,7 @@ pub fn exit_kiosk_mode(app: &AppHandle) {
         };
         NSApplication::sharedApplication(mtm)
             .setPresentationOptions(NSApplicationPresentationOptions::Default);
+        log::info!("macos_overlay::exit_kiosk_mode: presentationOptions restored to Default");
     }) {
         log::warn!("macos_overlay::exit_kiosk_mode: run_on_main_thread failed: {e:?}");
     }
