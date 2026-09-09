@@ -391,6 +391,16 @@
 </script>
 
 <div class="page">
+
+  <section class="card">
+    <h2>Session schedule</h2>
+    <p class="hint">
+      (Fixed for now)<br/> 
+      Work runs :00&ndash;:25 and :30&ndash;:55 each hour <br/> 
+      Breaks run :25&ndash;:30 and :55&ndash;:00
+    </p>
+  </section>
+
   <section class="card">
     <h2>Break screen</h2>
     <p class="hint">
@@ -515,14 +525,7 @@
     {/if}
   </section>
 
-  <section class="card">
-    <h2>Session schedule</h2>
-    <p class="hint">
-      Fixed for now (Not configurable in this build) <br/> 
-      Work runs :00&ndash;:25 and :30&ndash;:55 each hour <br/> 
-      Breaks run :25&ndash;:30 and :55&ndash;:00
-    </p>
-  </section>
+
 
   <section class="card">
     <h2>Wellness check-in</h2>
