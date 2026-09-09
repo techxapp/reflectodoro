@@ -32,6 +32,13 @@ tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
 tauri-plugin-http = "2.0"
 log = "0.4"
+# Backs the About page's "export last N log files" archive feature
+# (log_export.rs). default-features=false + this one feature skips the
+# crate's default codec bundle (bzip2/lzma/zstd/ppmd/aes, several of which
+# are C-backed and not worth dragging into the Android/iOS cross-compile) --
+# deflate-flate2-zlib-rs is a pure-Rust zlib reimplementation, plenty for
+# zipping a handful of small plain-text log files.
+zip = { version = "4", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"

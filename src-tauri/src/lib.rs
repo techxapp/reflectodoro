@@ -5,6 +5,7 @@ mod commands;
 mod db;
 mod grid;
 mod hook;
+mod log_export;
 mod macos_overlay;
 mod media;
 mod native_overlay;
@@ -549,14 +550,17 @@ pub fn run() {
                 // enough that ordinary Info-level logging (a phase transition
                 // + breakit challenge every ~25min, plus the macOS overlay
                 // path's logging) can fill and wipe it in about a day of
-                // normal use. KeepSome(5) archives up to 5 rotated,
-                // date-stamped files instead of deleting, and 1MB is large
-                // enough that a bug reported "sometime today" almost
-                // certainly still has its log lines somewhere in the active
-                // file or the most recent archive. See CLAUDE.md's
+                // normal use. KeepSome(10) archives up to 10 rotated,
+                // date-stamped files instead of deleting, and 50KB (roughly
+                // a day of normal-use logging before rotating) keeps a bug
+                // reported "sometime today" almost certainly still in the
+                // active file or the most recent archive, while keeping
+                // each individual file small enough to paste into a
+                // conversation whole -- 11 files at this cap span roughly
+                // 1-2 weeks of retained history. See CLAUDE.md's
                 // "Debugging from production logs".
-                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5))
-                .max_file_size(1_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(10))
+                .max_file_size(50_000)
                 .build(),
         );
 
@@ -616,6 +620,8 @@ pub fn run() {
             commands::request_draw_overlays_permission,
             commands::can_schedule_exact_alarms,
             commands::request_schedule_exact_alarm_permission,
+            log_export::export_last_log_file,
+            log_export::export_log_archive,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

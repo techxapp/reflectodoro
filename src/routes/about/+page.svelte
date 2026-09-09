@@ -4,6 +4,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { check } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
+  import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 
   let version = $state("");
   let isAndroid = $state(false);
@@ -14,11 +15,62 @@
   let latestVersion = $state("");
   let installing = $state(false);
 
+  type ExportStatus = "idle" | "busy" | "success" | "error";
+  let exportLastLogStatus = $state<ExportStatus>("idle");
+  let exportLastLogError = $state("");
+  let exportArchiveStatus = $state<ExportStatus>("idle");
+  let exportArchiveError = $state("");
+  let archiveCount = $state(10);
+
+  function localDateStamp(): string {
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
   onMount(async () => {
     version = await getVersion();
     const os = await invoke<string>("current_os");
     isAndroid = os === "android";
   });
+
+  async function exportLastLogFile() {
+    exportLastLogStatus = "idle";
+    exportLastLogError = "";
+    try {
+      const dest = await saveDialog({
+        defaultPath: `reflectodoro-log-${localDateStamp()}.log`,
+        filters: [{ name: "Log", extensions: ["log"] }],
+      });
+      if (!dest) return;
+      exportLastLogStatus = "busy";
+      await invoke("export_last_log_file", { dest });
+      exportLastLogStatus = "success";
+      setTimeout(() => (exportLastLogStatus = "idle"), 3000);
+    } catch (e) {
+      exportLastLogError = e instanceof Error ? e.message : String(e);
+      exportLastLogStatus = "error";
+    }
+  }
+
+  async function exportLogArchive() {
+    exportArchiveStatus = "idle";
+    exportArchiveError = "";
+    try {
+      const dest = await saveDialog({
+        defaultPath: `reflectodoro-logs-${localDateStamp()}.zip`,
+        filters: [{ name: "Zip archive", extensions: ["zip"] }],
+      });
+      if (!dest) return;
+      exportArchiveStatus = "busy";
+      await invoke("export_log_archive", { dest, count: archiveCount });
+      exportArchiveStatus = "success";
+      setTimeout(() => (exportArchiveStatus = "idle"), 3000);
+    } catch (e) {
+      exportArchiveError = e instanceof Error ? e.message : String(e);
+      exportArchiveStatus = "error";
+    }
+  }
 
   async function checkForUpdates() {
     updateStatus = "checking";
@@ -96,6 +148,49 @@
     {/if}
   </section>
   {/if}
+
+  <section class="card">
+    <h2>Logs</h2>
+    <p class="hint">
+      Export the app's log file to share with someone helping diagnose a problem. See CLAUDE.md's
+      "Debugging from production logs" for what's in it (none of your reflection text, wellness
+      check-in answers, or Most Important Tasks / Not-To-Do list content is ever logged).
+    </p>
+
+    <div class="data-row">
+      <button type="button" disabled={exportLastLogStatus === "busy"} onclick={exportLastLogFile}>
+        {exportLastLogStatus === "busy" ? "Exporting…" : "Export last log file"}
+      </button>
+      {#if exportLastLogStatus === "success"}
+        <span class="hint saved">Saved.</span>
+      {:else if exportLastLogStatus === "error"}
+        <span class="hint error">{exportLastLogError}</span>
+      {/if}
+    </div>
+
+    <div class="data-row">
+      <button
+        type="button"
+        disabled={exportArchiveStatus === "busy"}
+        onclick={exportLogArchive}
+      >
+        {exportArchiveStatus === "busy" ? "Exporting…" : "Export last"}
+      </button>
+      <input
+        type="number"
+        min="1"
+        max="11"
+        bind:value={archiveCount}
+        aria-label="Number of log files to export"
+      />
+      <span class="hint">log files as .zip</span>
+      {#if exportArchiveStatus === "success"}
+        <span class="hint saved">Saved.</span>
+      {:else if exportArchiveStatus === "error"}
+        <span class="hint error">{exportArchiveError}</span>
+      {/if}
+    </div>
+  </section>
 </div>
 
 <style>
@@ -151,6 +246,17 @@
 
   button:disabled {
     opacity: 0.6;
+  }
+
+  input[type="number"] {
+    width: 52px;
+    background: var(--surface);
+    color: inherit;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 6px;
+    font-size: 14px;
+    text-align: center;
   }
 
   .saved {
