@@ -777,7 +777,6 @@
           <a href="#how">How it works</a>
           <a href="#features">Features</a>
           <a href="#why">Why it helps</a>
-          <a href="#screenshots">Screenshots</a>
           <a href="#platforms">Platforms</a>
           <a href="#different">Comparison</a>
           <a href="#faq">FAQ</a>
@@ -946,6 +945,42 @@
               </p>
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- ============ screenshots ============ -->
+      <section class="section" id="screenshots">
+        <div class="wrap">
+          <div class="section-head center reveal">
+            <span class="eyebrow">Screenshots</span>
+            <h2>See it in action</h2>
+          </div>
+
+          <div class="shots-wrap reveal">
+            <button class="carousel-btn carousel-prev" type="button" aria-label="Previous screenshot">&#8592;</button>
+            <div class="frame">
+              <div class="carousel-track" id="carouselTrack" tabindex="0" role="group" aria-label="Screenshots carousel">
+                <div class="carousel-slide" data-caption="Main window &mdash; wall-clock countdown and Most Important Tasks">
+                  <img class="shot" src="screenshots/SS3.png" alt="Main timer window with wall-clock countdown and Most Important Tasks panel" />
+                </div>
+                <div class="carousel-slide" data-caption="Break screen &mdash; reflection required, with the emergency-exit challenge">
+                  <img class="shot" src="screenshots/SS1.png" alt="Break screen requiring a written reflection, with the emergency-exit code challenge" loading="lazy" />
+                </div>
+                <div class="carousel-slide" data-caption="Wellness check-in at the end of the break">
+                  <img class="shot" src="screenshots/SS2.png" alt="Wellness check-in prompt for relaxed eyes, exercise, water, and washroom breaks" loading="lazy" />
+                </div>
+                <div class="carousel-slide" data-caption="Entries &mdash; daily wellness stats and reflection history">
+                  <img class="shot" src="screenshots/SS4.png" alt="Entries view showing daily wellness stats and reflection history on a calendar" loading="lazy" />
+                </div>
+              </div>
+            </div>
+            <button class="carousel-btn carousel-next" type="button" aria-label="Next screenshot">&#8594;</button>
+          </div>
+
+          <div class="carousel-meta">
+            <div class="carousel-dots" id="carouselDots"></div>
+          </div>
+          <p class="shot-caption" id="shotCaption"></p>
         </div>
       </section>
 
@@ -1134,41 +1169,7 @@
         </div>
       </section>
 
-      <!-- ============ screenshots ============ -->
-      <section class="section" id="screenshots">
-        <div class="wrap">
-          <div class="section-head center reveal">
-            <span class="eyebrow">Screenshots</span>
-            <h2>See it in action</h2>
-          </div>
-
-          <div class="shots-wrap reveal">
-            <button class="carousel-btn carousel-prev" type="button" aria-label="Previous screenshot">&#8592;</button>
-            <div class="frame">
-              <div class="carousel-track" id="carouselTrack" tabindex="0" role="group" aria-label="Screenshots carousel">
-                <div class="carousel-slide" data-caption="Main window &mdash; wall-clock countdown and Most Important Tasks">
-                  <img class="shot" src="screenshots/SS3.png" alt="Main timer window with wall-clock countdown and Most Important Tasks panel" />
-                </div>
-                <div class="carousel-slide" data-caption="Break screen &mdash; reflection required, with the emergency-exit challenge">
-                  <img class="shot" src="screenshots/SS1.png" alt="Break screen requiring a written reflection, with the emergency-exit code challenge" loading="lazy" />
-                </div>
-                <div class="carousel-slide" data-caption="Wellness check-in at the end of the break">
-                  <img class="shot" src="screenshots/SS2.png" alt="Wellness check-in prompt for relaxed eyes, exercise, water, and washroom breaks" loading="lazy" />
-                </div>
-                <div class="carousel-slide" data-caption="Entries &mdash; daily wellness stats and reflection history">
-                  <img class="shot" src="screenshots/SS4.png" alt="Entries view showing daily wellness stats and reflection history on a calendar" loading="lazy" />
-                </div>
-              </div>
-            </div>
-            <button class="carousel-btn carousel-next" type="button" aria-label="Next screenshot">&#8594;</button>
-          </div>
-
-          <div class="carousel-meta">
-            <div class="carousel-dots" id="carouselDots"></div>
-          </div>
-          <p class="shot-caption" id="shotCaption"></p>
-        </div>
-      </section>
+      
 
       <!-- ============ platforms ============ -->
       <section class="section" id="platforms">
@@ -1381,7 +1382,9 @@
               <div class="faq-answer">
                 <p>Join the <a href="https://discord.gg/AXEFB5UT">Discord community</a> &mdash; that's the fastest
                    way to reach the developer and other users. For bugs or feature requests you can also open an
-                   issue on <a href="https://github.com/techxapp/reflectodoro">GitHub</a>.</p>
+                   issue on <a href="https://github.com/techxapp/reflectodoro/issues">GitHub</a>.
+                   Log file can be downloaded from About tab.
+                  </p>
               </div>
             </details>
 
@@ -1479,6 +1482,11 @@
           </div>
           <div class="roadmap">
             <div class="card reveal">
+              <span class="roadmap-badge">In Progress</span>
+              <h3>Screen Time &#128241;</h3>
+              <p>Capture app usage screen time.</p>
+            </div>
+            <div class="card reveal">
               <span class="roadmap-badge">Planned</span>
               <h3>Cross-device sync &#128260;</h3>
               <p>Sync reflections and task lists across your devices.</p>
@@ -1490,7 +1498,7 @@
             </div>
             <div class="card reveal">
               <span class="roadmap-badge">Planned</span>
-              <h3>Custom API Support</h3>
+              <h3>Custom API Support &#128268;</h3>
               <p>Integrate any API to display motivational quotes, word of the day, etc.</p>
             </div>
             <div class="card reveal">
@@ -1745,6 +1753,29 @@
           }
         });
       });
+    })();
+
+    /* ---------- point download buttons at the actual latest-release asset ---------- */
+    (function () {
+      var patterns = {
+        windows: /x64-setup\.exe$/,
+        macos: /universal\.dmg$/,
+        linux: /amd64\.AppImage$/,
+        android: /arm64-release\.apk$/
+      };
+      fetch('https://api.github.com/repos/techxapp/reflectodoro/releases/latest')
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(function (release) {
+          var assets = release.assets || [];
+          Object.keys(patterns).forEach(function (platform) {
+            var re = patterns[platform];
+            var asset = assets.filter(function (a) { return re.test(a.name); })[0];
+            if (!asset) return;
+            var links = document.querySelectorAll('.btn[data-platform="' + platform + '"]');
+            links.forEach(function (a) { a.href = asset.browser_download_url; });
+          });
+        })
+        .catch(function () { /* leave the releases/latest fallback hrefs in place */ });
     })();
 
     /* ---------- OS-aware download buttons ---------- */
