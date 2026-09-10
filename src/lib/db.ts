@@ -2,6 +2,7 @@ import Database from "@tauri-apps/plugin-sql";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { error as logError } from "@tauri-apps/plugin-log";
 
 let dbPromise: ReturnType<typeof Database.load> | null = null;
 
@@ -24,7 +25,13 @@ function getDb() {
     // a later call to `getDb()` could already have replaced it with a fresh
     // attempt of its own by the time this rejection handler runs, and this
     // must not clobber that newer attempt out from under it.
-    attempt.catch(() => {
+    attempt.catch((e) => {
+      // Logged, not swallowed: a failed load (most often a migration that
+      // can't apply) otherwise makes every DB-backed feature silently do
+      // nothing, with the only visible symptom being missing data much later.
+      // plugin-log's Webview target puts this in the same file as the Rust
+      // side's, which is what makes it diagnosable from a user's log export.
+      void logError(`db: failed to open pomodoro.db: ${e instanceof Error ? e.message : String(e)}`);
       if (dbPromise === attempt) dbPromise = null;
     });
   }
@@ -719,6 +726,250 @@ export async function listenForMediaToggleRecorded(): Promise<UnlistenFn> {
   });
 }
 
+// --- Screen time tracking (Settings) -----------------------------------
+//
+// Foreground-app focus tracking -- which app had focus, for how long (see
+// screen_time.rs). Rust buffers sessions in memory, closes one only when a
+// real app switch happens, and emits whatever accumulated as one batch every
+// minute; everything below is the write side of that. SQLite stays
+// frontend-written, the same split "media-toggle://recorded" already uses.
+
+const SCREEN_TIME_TRACKING_KEY = "screen_time_tracking_enabled";
+
+export async function getScreenTimeTrackingEnabled(): Promise<boolean> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [SCREEN_TIME_TRACKING_KEY],
+  );
+  return (rows[0]?.value ?? "true") === "true";
+}
+
+export async function saveScreenTimeTrackingEnabled(enabled: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [SCREEN_TIME_TRACKING_KEY, String(enabled)],
+  );
+  await syncScreenTimeTrackingToBackend(enabled);
+}
+
+export async function syncScreenTimeTrackingToBackend(enabled: boolean): Promise<void> {
+  await invoke("set_screen_time_tracking_enabled", { enabled });
+}
+
+/** Call once on app boot (main window) so Rust's in-memory flag matches SQLite. */
+export async function loadAndSyncScreenTimeTrackingSetting(): Promise<boolean> {
+  const enabled = await getScreenTimeTrackingEnabled();
+  await syncScreenTimeTrackingToBackend(enabled);
+  return enabled;
+}
+
+// --- Device name (stamped onto every screen-time row) -------------------
+//
+// This app is single-device by design, but Settings -> Data export/import is
+// the one path rows can cross devices -- and `platform` alone would merge
+// "Chrome on laptop A" with "Chrome on laptop B" into one `windows` bucket.
+// Seeded once from the OS hostname, renameable in Settings. Purely a display
+// disambiguator: never an identity/sync key, so a non-unique or later-changed
+// hostname is harmless.
+
+const DEVICE_NAME_KEY = "device_name";
+
+/** Read once per process and reused by saveScreenTimeSessions (which runs on
+ * every flush) rather than re-queried per batch. Invalidated by saveDeviceName
+ * so a rename takes effect on the very next batch. */
+let cachedDeviceName: string | null = null;
+
+export async function getDeviceName(): Promise<string> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [DEVICE_NAME_KEY],
+  );
+  return rows[0]?.value ?? "";
+}
+
+export async function saveDeviceName(name: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [DEVICE_NAME_KEY, name],
+  );
+  cachedDeviceName = name;
+}
+
+/** Seeds the device name from the OS hostname the first time, and only then --
+ * an explicit rename (including back to empty) is never overwritten on a later
+ * boot. Call once from the main window's boot sequence. */
+export async function ensureDeviceName(): Promise<string> {
+  const existing = await getDeviceName();
+  if (existing) {
+    cachedDeviceName = existing;
+    return existing;
+  }
+  const hostname = (await invoke<string>("get_hostname")).trim();
+  if (hostname) await saveDeviceName(hostname);
+  cachedDeviceName = hostname;
+  return hostname;
+}
+
+/** One closed focus session, exactly as Rust emits it. `device_name` is filled
+ * in here rather than carried through Rust's buffer. `display_name` is a
+ * best-effort friendly label (e.g. "Google Chrome" for app_id "chrome.exe")
+ * -- may be "" wherever Rust couldn't resolve one (no version resource, or no
+ * capture on this platform yet); every reader falls back to app_id then. */
+export interface ScreenTimeSessionInput {
+  app_id: string;
+  display_name: string;
+  platform: string;
+  started_at: string;
+  ended_at: string;
+}
+
+/** SQLite's default bound-variable ceiling is 999; at 6 columns per row this
+ * keeps a chunk well under it while still collapsing a whole batch into one or
+ * two statements instead of one per session. */
+const SCREEN_TIME_INSERT_CHUNK = 100;
+
+export async function saveScreenTimeSessions(sessions: ScreenTimeSessionInput[]): Promise<void> {
+  if (sessions.length === 0) return;
+  const db = await getDb();
+  const deviceName = cachedDeviceName ?? (await getDeviceName());
+  cachedDeviceName = deviceName;
+
+  for (let i = 0; i < sessions.length; i += SCREEN_TIME_INSERT_CHUNK) {
+    const chunk = sessions.slice(i, i + SCREEN_TIME_INSERT_CHUNK);
+    const values: string[] = [];
+    const placeholders = chunk
+      .map((session, index) => {
+        const base = index * 6;
+        values.push(
+          session.app_id,
+          session.display_name,
+          session.platform,
+          deviceName,
+          session.started_at,
+          session.ended_at,
+        );
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`;
+      })
+      .join(", ");
+    await db.execute(
+      `INSERT INTO screen_time_session (app_id, display_name, platform, device_name, started_at, ended_at)
+       VALUES ${placeholders}`,
+      values,
+    );
+  }
+}
+
+/** Persists each batch Rust flushes. Call once from the main window (the
+ * always-alive route -- it's hidden, not destroyed, on close, so its listeners
+ * keep receiving batches while the app runs tray-only); unlisten in onDestroy
+ * like every other listener in this app. */
+export async function listenForScreenTimeSessionBatches(): Promise<UnlistenFn> {
+  return listen<ScreenTimeSessionInput[]>("screentime://session-batch", (event) => {
+    // Failures are logged, never swallowed: Rust considers a batch delivered
+    // once the event is emitted and drops it from its buffer, so a rejected
+    // insert here is data gone with nothing else to notice it -- exactly the
+    // silent-write-failure class this codebase has been bitten by before.
+    void saveScreenTimeSessions(event.payload).catch((e) => {
+      void logError(
+        `screen time: failed to persist ${event.payload.length} session(s): ${e instanceof Error ? e.message : String(e)}`,
+      );
+    });
+  });
+}
+
+export interface ScreenTimeEntry {
+  appId: string;
+  /** Falls back to appId wherever no friendly name could be resolved --
+   * always safe to render directly, never "". */
+  displayName: string;
+  platform: string;
+  deviceName: string;
+  ms: number;
+}
+
+/**
+ * Per-app totals for one local day, aggregated in SQL rather than by pulling
+ * raw rows into JS -- same approach getWellnessSummaryForDate takes, and it
+ * matters more here since this is the table that grows fastest.
+ *
+ * Filed by the local date the session *started* on (`date(started_at,
+ * 'localtime')`, the same DST-aware conversion getReflectionsForDate uses), so
+ * a session running across midnight counts entirely toward the day it began --
+ * simple and stable, at the cost of a little drift for anyone working through
+ * midnight.
+ *
+ * Grouped by app_id (not display_name) -- app_id is the stable identity key,
+ * display_name is just a label for it, so this stays correct even if a
+ * FileDescription somehow resolved differently across two sessions of the
+ * same exe. MAX(display_name) picks whichever non-empty label exists among
+ * the grouped rows (display_name is constant per app_id in practice).
+ *
+ * Grouped by device_name as well as app_id, so the same app on two devices
+ * (only possible after a cross-device import) reads as two rows instead of
+ * being silently summed -- invisible in the ordinary single-device case.
+ */
+export async function getScreenTimeForDate(dateStamp: string): Promise<ScreenTimeEntry[]> {
+  const db = await getDb();
+  const rows = await db.select<
+    {
+      app_id: string;
+      display_name: string | null;
+      platform: string;
+      device_name: string;
+      ms: number | null;
+    }[]
+  >(
+    `SELECT app_id,
+            MAX(display_name) as display_name,
+            platform,
+            device_name,
+            SUM((julianday(ended_at) - julianday(started_at)) * 86400000) as ms
+     FROM screen_time_session
+     WHERE date(started_at, 'localtime') = $1
+     GROUP BY app_id, platform, device_name
+     ORDER BY ms DESC`,
+    [dateStamp],
+  );
+  return rows.map((row) => ({
+    appId: row.app_id,
+    displayName: row.display_name || row.app_id,
+    platform: row.platform,
+    deviceName: row.device_name,
+    ms: Math.max(0, Math.round(row.ms ?? 0)),
+  }));
+}
+
+export interface CurrentScreenTimeSession {
+  appId: string;
+  /** Falls back to appId, same as ScreenTimeEntry.displayName. */
+  displayName: string;
+  elapsedMs: number;
+}
+
+/** The app in focus right now and how long it's been focused, read from Rust's
+ * in-memory buffer -- nothing is written and no row is created. Blended into
+ * today's breakdown so the in-progress app isn't missing from it (persisted
+ * rows only cover sessions a real switch already closed). `null` when nothing
+ * is being tracked (tracking off, Reflectodoro itself in focus, or no capture
+ * on this platform yet). */
+export async function getCurrentScreenTimeSession(): Promise<CurrentScreenTimeSession | null> {
+  const snapshot = await invoke<{ app_id: string; display_name: string; elapsed_ms: number } | null>(
+    "get_current_session_snapshot",
+  );
+  if (!snapshot) return null;
+  return {
+    appId: snapshot.app_id,
+    displayName: snapshot.display_name || snapshot.app_id,
+    elapsedMs: Math.max(0, snapshot.elapsed_ms),
+  };
+}
+
 // --- Overlay auto-close timeout (Settings) -----------------------------
 
 const OVERLAY_AUTO_CLOSE_KEY = "overlay_auto_close_minutes";
@@ -866,6 +1117,16 @@ interface WellnessCheckRow {
   created_at: string;
 }
 
+export interface ScreenTimeSessionRow {
+  id: number;
+  app_id: string;
+  display_name: string;
+  platform: string;
+  device_name: string;
+  started_at: string;
+  ended_at: string;
+}
+
 export interface ExportPayload {
   app: "reflectodoro";
   export_format_version: number;
@@ -876,12 +1137,14 @@ export interface ExportPayload {
     not_to_do_list: NotToDoRow[];
     app_setting: SettingRow[];
     wellness_check: WellnessCheckRow[];
+    screen_time_session: ScreenTimeSessionRow[];
   };
 }
 
 export async function exportAllData(includeSettings: boolean = true): Promise<ExportPayload> {
   const db = await getDb();
-  const [reflection, daily_task_list, not_to_do_list, app_setting, wellness_check] = await Promise.all([
+  const [reflection, daily_task_list, not_to_do_list, app_setting, wellness_check, screen_time_session] =
+    await Promise.all([
     db.select<ReflectionRow[]>(`SELECT id, created_at, slot_start_at, text FROM reflection`),
     db.select<TaskListRow[]>(`SELECT date, content, updated_at FROM daily_task_list`),
     db.select<NotToDoRow[]>(`SELECT date, content, updated_at FROM not_to_do_list`),
@@ -891,12 +1154,15 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
     db.select<WellnessCheckRow[]>(
       `SELECT id, reflection_id, relaxed_eyes, exercise, drank_water, washroom, created_at FROM wellness_check`,
     ),
+    db.select<ScreenTimeSessionRow[]>(
+      `SELECT id, app_id, display_name, platform, device_name, started_at, ended_at FROM screen_time_session`,
+    ),
   ]);
   return {
     app: "reflectodoro",
     export_format_version: EXPORT_FORMAT_VERSION,
     exported_at: new Date().toISOString(),
-    data: { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check },
+    data: { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check, screen_time_session },
   };
 }
 
@@ -1065,11 +1331,36 @@ export function parseAndValidateExport(raw: string): ExportPayload {
     };
   });
 
+  // Deliberately tolerant of absence rather than gated behind a bumped
+  // EXPORT_FORMAT_VERSION: screen_time_session arrived after the format did,
+  // and rejecting every file exported before it -- the user's existing
+  // backups -- to gain a field that's purely additive would be a bad trade.
+  // A missing array simply imports as no screen-time rows.
+  const screenTimeRaw = data.screen_time_session ?? [];
+  if (!Array.isArray(screenTimeRaw)) throw new Error("data.screen_time_session is not an array");
+  const screen_time_session: ScreenTimeSessionRow[] = screenTimeRaw.map((row, i) => {
+    if (typeof row !== "object" || row === null) throw new Error(`screen_time_session[${i}] is not an object`);
+    const r = row as Record<string, unknown>;
+    return {
+      id: assertNumber(r.id, `screen_time_session[${i}].id`),
+      app_id: assertString(r.app_id, `screen_time_session[${i}].app_id`),
+      // Tolerant default, not assertString: display_name arrived after
+      // screen_time_session itself did, so a file exported in that window
+      // has rows without it -- same "purely additive" reasoning as the
+      // missing-array case above, just at the per-row level instead.
+      display_name: typeof r.display_name === "string" ? r.display_name : "",
+      platform: assertString(r.platform, `screen_time_session[${i}].platform`),
+      device_name: assertString(r.device_name, `screen_time_session[${i}].device_name`),
+      started_at: assertString(r.started_at, `screen_time_session[${i}].started_at`),
+      ended_at: assertString(r.ended_at, `screen_time_session[${i}].ended_at`),
+    };
+  });
+
   return {
     app: "reflectodoro",
     export_format_version: obj.export_format_version,
     exported_at: obj.exported_at,
-    data: { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check },
+    data: { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check, screen_time_session },
   };
 }
 
@@ -1081,6 +1372,7 @@ export interface ImportResult {
   notToDoListCount: number;
   settingCount: number;
   wellnessCheckCount: number;
+  screenTimeSessionCount: number;
 }
 
 /**
@@ -1129,7 +1421,8 @@ export async function importData(
   includeSettings: boolean = true,
 ): Promise<ImportResult> {
   const db = await getDb();
-  const { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check } = payload.data;
+  const { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check, screen_time_session } =
+    payload.data;
 
   if (mode === "replace") {
     // Child table first: wellness_check references reflection(id).
@@ -1137,6 +1430,7 @@ export async function importData(
     await db.execute(`DELETE FROM reflection`);
     await db.execute(`DELETE FROM daily_task_list`);
     await db.execute(`DELETE FROM not_to_do_list`);
+    await db.execute(`DELETE FROM screen_time_session`);
     if (includeSettings) await db.execute(`DELETE FROM app_setting`);
   }
 
@@ -1179,6 +1473,31 @@ export async function importData(
     );
   }
 
+  // Appended fresh (own autoincrement id, the file's is never reused), like
+  // reflection rows -- screen-time sessions have no natural dedupe key either,
+  // and nothing else references their ids, so no id remapping is needed.
+  // Reuses saveScreenTimeSessions' chunked multi-row INSERT rather than one
+  // statement per row: this is by far the highest-row-count table in an
+  // export, and a per-row loop is where a large import would actually crawl.
+  // device_name is carried from the file, not overwritten with this device's,
+  // so imported rows keep saying which machine they came from.
+  for (let i = 0; i < screen_time_session.length; i += SCREEN_TIME_INSERT_CHUNK) {
+    const chunk = screen_time_session.slice(i, i + SCREEN_TIME_INSERT_CHUNK);
+    const values: string[] = [];
+    const placeholders = chunk
+      .map((row, index) => {
+        const base = index * 6;
+        values.push(row.app_id, row.display_name, row.platform, row.device_name, row.started_at, row.ended_at);
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`;
+      })
+      .join(", ");
+    await db.execute(
+      `INSERT INTO screen_time_session (app_id, display_name, platform, device_name, started_at, ended_at)
+       VALUES ${placeholders}`,
+      values,
+    );
+  }
+
   if (includeSettings) {
     for (const row of app_setting) {
       await db.execute(
@@ -1198,6 +1517,11 @@ export async function importData(
     await loadAndSyncForceCloseShortcutSetting();
     await loadAndSyncOverlayAutoClose();
     await loadAndSyncMediaPauseOnBreakSetting();
+    await loadAndSyncScreenTimeTrackingSetting();
+    // device_name is read through a process-lifetime cache (see
+    // cachedDeviceName) -- drop it so an imported value doesn't keep getting
+    // stamped onto new rows from the pre-import name until the next restart.
+    cachedDeviceName = null;
   }
 
   // Unconditional (unlike the block above): wellness_check rows -- half of
@@ -1211,5 +1535,6 @@ export async function importData(
     notToDoListCount: not_to_do_list.length,
     settingCount: includeSettings ? app_setting.length : 0,
     wellnessCheckCount: wellness_check.length,
+    screenTimeSessionCount: screen_time_session.length,
   };
 }

@@ -8,11 +8,12 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::breakit;
 use crate::overlay;
+use crate::screen_time;
 use crate::state::{AppState, OverlayState};
 use crate::{
     BREAK_NOTIFICATION_PERSISTENT_ENABLED, FORCE_CLOSE_SHORTCUT_ENABLED, LAST_MEDIA_TOGGLE_AT,
     LAST_WELLNESS_CHECK_AT, MACOS_HIDE_MENU_BAR_DOCK_ENABLED, MEDIA_PAUSE_ON_BREAK_ENABLED,
-    OVERLAY_AUTO_CLOSE_MINUTES, POMODORO_ENABLED,
+    OVERLAY_AUTO_CLOSE_MINUTES, POMODORO_ENABLED, SCREEN_TIME_TRACKING_ENABLED,
 };
 
 #[tauri::command]
@@ -342,6 +343,78 @@ pub fn sync_media_toggle_guard(last_toggle_at: Option<String>, last_wellness_che
 #[tauri::command]
 pub fn sync_last_wellness_check_at(at: String) {
     *LAST_WELLNESS_CHECK_AT.lock().unwrap() = Some(at);
+}
+
+/// Mirrors app_setting.screen_time_tracking_enabled -- loaded and pushed here
+/// by the frontend on boot and on every Settings save (see
+/// loadAndSyncScreenTimeTrackingSetting in db.ts).
+#[tauri::command]
+pub fn get_screen_time_tracking_enabled() -> bool {
+    SCREEN_TIME_TRACKING_ENABLED.load(Ordering::SeqCst)
+}
+
+/// Switching this off closes out and flushes whatever session was in
+/// progress right away (see screen_time::flush_now), rather than leaving it
+/// stranded in memory until tracking is switched back on -- at which point
+/// it would otherwise be recorded as one session spanning the entire
+/// tracking-disabled period.
+#[tauri::command]
+pub fn set_screen_time_tracking_enabled(app: AppHandle, enabled: bool) {
+    SCREEN_TIME_TRACKING_ENABLED.store(enabled, Ordering::SeqCst);
+    if enabled {
+        // Start attributing whatever is focused right now instead of waiting
+        // for the next window switch.
+        screen_time::resync_current_focus();
+    } else {
+        screen_time::flush_now(&app);
+    }
+}
+
+/// The app currently in focus and how long it's been focused, read straight
+/// from memory -- nothing is written and no row is created. The Entries page
+/// blends this into today's breakdown so the in-progress app shows a live
+/// total without needing periodic DB writes (see screen_time.rs's module
+/// doc). `None` when nothing is being tracked right now (tracking off, focus
+/// on Reflectodoro itself, or no capture on this platform yet).
+#[tauri::command]
+pub fn get_current_session_snapshot() -> Option<CurrentSessionSnapshot> {
+    screen_time::current_session_elapsed_ms().map(|(app_id, display_name, elapsed_ms)| {
+        CurrentSessionSnapshot { app_id, display_name, elapsed_ms }
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct CurrentSessionSnapshot {
+    pub app_id: String,
+    pub display_name: String,
+    pub elapsed_ms: i64,
+}
+
+/// This device's hostname, used to seed `app_setting.device_name` once on
+/// first boot so screen-time rows carry which machine they came from (the
+/// user can rename it in Settings afterwards). Read-only, same shape as
+/// `current_os`.
+///
+/// Deliberately env/procfs based rather than pulling in a crate for it.
+/// Returns "" where that isn't available -- an empty device name is a
+/// perfectly fine state (the Entries breakdown just doesn't show a device
+/// label), and the Settings field lets the user type one in.
+#[tauri::command]
+pub fn get_hostname() -> String {
+    #[cfg(windows)]
+    {
+        std::env::var("COMPUTERNAME").unwrap_or_default()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/sys/kernel/hostname")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        std::env::var("HOSTNAME").unwrap_or_default()
+    }
 }
 
 /// Whether the native break overlay (native_overlay.rs) can actually be

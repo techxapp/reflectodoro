@@ -181,5 +181,65 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 13,
+            // Foreground-app focus tracking (see screen_time.rs). One row per
+            // closed focus session, written in batches by the main window from
+            // the "screentime://session-batch" event -- no per-focus-change
+            // write, and nothing written at all during a stretch with no app
+            // switches.
+            //
+            // `platform` is per-row because app_id's format is OS-specific
+            // (exe basename / bundle id / WM_CLASS / package name), which only
+            // matters once an export is opened on a different OS.
+            // `device_name` disambiguates the same app on two machines (e.g.
+            // two Windows laptops merged via Settings -> Data import) -- the
+            // one path data crosses devices in this otherwise single-device
+            // app. Seeded empty; the main window fills it from the OS hostname
+            // on first boot (commands::get_hostname) and Settings lets the
+            // user rename it.
+            description: "create screen_time_session table",
+            sql: r#"
+                CREATE TABLE screen_time_session (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    app_id TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    device_name TEXT NOT NULL DEFAULT '',
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT NOT NULL
+                );
+
+                CREATE INDEX idx_screen_time_session_started_at ON screen_time_session(started_at);
+                CREATE INDEX idx_screen_time_session_app_id ON screen_time_session(app_id);
+
+                -- OR IGNORE, like migration 5 and unlike the other seeding
+                -- migrations here: a db that already carries either key (an
+                -- import from a newer export, or a dev db that ran the
+                -- frontend's device-name seeding against a pre-migration
+                -- binary) would otherwise hit the PRIMARY KEY, roll the whole
+                -- migration back -- taking CREATE TABLE with it -- and abort
+                -- every migration after it. Hit for real during development.
+                INSERT OR IGNORE INTO app_setting (key, value) VALUES ('screen_time_tracking_enabled', 'true');
+                INSERT OR IGNORE INTO app_setting (key, value) VALUES ('device_name', '');
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 14,
+            // Adds a best-effort friendly display name (e.g. "Google Chrome"
+            // for app_id 'chrome.exe', read from the exe's FileDescription
+            // version-resource string -- see screen_time.rs's Windows
+            // platform_impl) alongside the stable app_id already captured.
+            // Purely additive/display-only: app_id stays the grouping key
+            // used everywhere (aggregation, self-exclusion, dedupe), so this
+            // needs no backfill -- existing rows simply show '' until they
+            // next age out, and getScreenTimeForDate (db.ts) already falls
+            // back to app_id wherever display_name is empty.
+            description: "add display_name to screen_time_session",
+            sql: r#"
+                ALTER TABLE screen_time_session ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

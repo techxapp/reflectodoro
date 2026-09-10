@@ -62,6 +62,15 @@ windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
+    # SetWinEventHook/HWINEVENTHOOK/WINEVENT_OUTOFCONTEXT (Accessibility),
+    # OpenProcess/QueryFullProcessImageNameW (Threading), and
+    # GetFileVersionInfoW/VerQueryValueW (Storage_FileSystem) back
+    # screen_time.rs's foreground-focus watcher -- the hook itself, resolving
+    # the focused window's exe name, and reading its FileDescription for a
+    # friendly display name (e.g. "Google Chrome" for chrome.exe) respectively.
+    "Win32_UI_Accessibility",
+    "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
     "Media_Control",
 ] }
 

@@ -10,6 +10,7 @@ mod macos_overlay;
 mod media;
 mod native_overlay;
 mod overlay;
+mod screen_time;
 mod state;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -80,6 +81,14 @@ pub(crate) static MEDIA_PAUSE_ON_BREAK_ENABLED: AtomicBool = AtomicBool::new(tru
 /// is to stop the user from using the phone for something else during a
 /// break, not just to politely mention it.
 pub(crate) static BREAK_NOTIFICATION_PERSISTENT_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Whether foreground-app focus tracking is running (see screen_time.rs).
+/// Backed by `app_setting.screen_time_tracking_enabled`; same load/push
+/// pattern as `MEDIA_PAUSE_ON_BREAK_ENABLED`. Defaults to `true` here too,
+/// matching the migration's default -- on by default. Checked inside
+/// screen_time.rs's `record_focus_change`, not by installing/uninstalling the
+/// OS watcher, so toggling it never touches a live hook.
+pub(crate) static SCREEN_TIME_TRACKING_ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// macOS only: whether a break additionally hides the menu bar and Dock (see
 /// macos_overlay.rs). This is the *only* part of macOS break enforcement
@@ -616,6 +625,10 @@ pub fn run() {
             commands::set_break_notification_persistent_enabled,
             commands::get_macos_hide_menu_bar_dock_enabled,
             commands::set_macos_hide_menu_bar_dock_enabled,
+            commands::get_screen_time_tracking_enabled,
+            commands::set_screen_time_tracking_enabled,
+            commands::get_current_session_snapshot,
+            commands::get_hostname,
             commands::can_draw_overlays,
             commands::request_draw_overlays_permission,
             commands::can_schedule_exact_alarms,
@@ -684,6 +697,15 @@ pub fn run() {
 
             let scheduler_handle = handle.clone();
             tauri::async_runtime::spawn(run_scheduler(scheduler_handle));
+
+            // Installed unconditionally, like hook.rs's keyboard hook: the
+            // Settings toggle is checked inside the callback instead (see
+            // SCREEN_TIME_TRACKING_ENABLED). The flush loop is what batches
+            // whatever real focus switches accumulated into one event per
+            // minute -- it never invents rows on its own.
+            screen_time::start_tracking(&handle);
+            let screen_time_handle = handle.clone();
+            tauri::async_runtime::spawn(screen_time::run_flush_loop(screen_time_handle));
 
             Ok(())
         })

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import {
     clusterReflectionRows,
     getReflectionsForDate,
@@ -10,7 +11,12 @@
     saveTaskList,
     saveNotToDoList,
     updateReflectionText,
+    getScreenTimeForDate,
+    getScreenTimeTrackingEnabled,
+    getCurrentScreenTimeSession,
+    getDeviceName,
     type ReflectionRow,
+    type ScreenTimeEntry,
     type WellnessSummary,
   } from "$lib/db";
 
@@ -32,6 +38,13 @@
   let expandedClusters = $state<Set<number>>(new Set());
   let editingId = $state<number | null>(null);
   let editText = $state("");
+  let screenTime = $state<ScreenTimeEntry[]>([]);
+  let screenTimeLoaded = $state(false);
+  let screenTimeTrackingOn = $state(true);
+  // Windows is the only platform capturing focus so far -- without this the
+  // empty state on the others reads as "you did nothing today" rather than
+  // "nothing is recording yet".
+  let captureSupported = $state(true);
   let taskSaveTimer: ReturnType<typeof setTimeout> | undefined;
   let notToDoSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -131,6 +144,81 @@
     editText = "";
   }
 
+  /** Same generation guard as load() above, for the same reason: a
+   * slow screen-time query for a day the user has navigated away from must
+   * not overwrite the day they're now looking at. */
+  let screenTimeGeneration = 0;
+
+  async function loadScreenTime() {
+    const stamp = selectedStamp;
+    const forToday = stamp === localDateStamp(new Date());
+    const generation = ++screenTimeGeneration;
+    const [enabled, entries, deviceName, current] = await Promise.all([
+      getScreenTimeTrackingEnabled(),
+      getScreenTimeForDate(stamp),
+      getDeviceName(),
+      // Only today can have an in-progress session to blend in; asking on any
+      // other day would attribute the currently-focused app to that day.
+      forToday ? getCurrentScreenTimeSession() : Promise.resolve(null),
+    ]);
+    if (generation !== screenTimeGeneration) return;
+
+    let blended = entries;
+    if (current) {
+      const existing = blended.find(
+        (e) => e.appId === current.appId && e.deviceName === deviceName,
+      );
+      blended = existing
+        ? blended.map((e) => (e === existing ? { ...e, ms: e.ms + current.elapsedMs } : e))
+        : [
+            ...blended,
+            {
+              appId: current.appId,
+              displayName: current.displayName,
+              platform: "",
+              deviceName,
+              ms: current.elapsedMs,
+            },
+          ];
+      blended = [...blended].sort((a, b) => b.ms - a.ms);
+    }
+
+    screenTimeTrackingOn = enabled;
+    screenTime = blended;
+    screenTimeLoaded = true;
+  }
+
+  const screenTimeTotalMs = $derived(screenTime.reduce((sum, e) => sum + e.ms, 0));
+  const screenTimeMaxMs = $derived(screenTime.reduce((max, e) => Math.max(max, e.ms), 0));
+  /** Only worth showing a device label once rows from more than one device
+   * actually exist -- i.e. after a cross-device import. */
+  const showDeviceNames = $derived(new Set(screenTime.map((e) => e.deviceName)).size > 1);
+
+  function formatDuration(ms: number): string {
+    const totalMinutes = Math.floor(ms / 60000);
+    if (totalMinutes < 1) return `${Math.max(0, Math.round(ms / 1000))}s`;
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+  }
+
+  /** The in-progress session's elapsed time is read live from memory, not from
+   * the DB, so today's totals go stale while the window sits in the
+   * background. Refresh on focus rather than on a timer -- there's nothing to
+   * see while the window isn't being looked at. */
+  function onWindowFocus() {
+    void loadScreenTime();
+  }
+
+  onMount(async () => {
+    window.addEventListener("focus", onWindowFocus);
+    captureSupported = (await invoke<string>("current_os")) === "windows";
+  });
+
+  onDestroy(() => {
+    window.removeEventListener("focus", onWindowFocus);
+  });
+
   const calendarDays = $derived.by(() => {
     const year = calendarMonth.getFullYear();
     const month = calendarMonth.getMonth();
@@ -146,6 +234,7 @@
   $effect(() => {
     void selectedStamp;
     void load();
+    void loadScreenTime();
   });
 </script>
 
@@ -177,6 +266,48 @@
         {/if}
       {/each}
     </div>
+  </section>
+
+  <section class="card screen-time">
+    <h2>Screen time</h2>
+
+    <!-- Rows first, whatever the current settings say: a day can hold data
+         recorded before tracking was switched off, or imported from a
+         platform that does capture. The messages below are empty states, not
+         status banners. -->
+    {#if !screenTimeLoaded}
+      <p class="hint">Loading&hellip;</p>
+    {:else if screenTime.length === 0 && !screenTimeTrackingOn}
+      <p class="hint">
+        Tracking is off. Turn it on in <a href="/settings">Settings</a> to see where your day went.
+      </p>
+    {:else if screenTime.length === 0 && !captureSupported}
+      <p class="hint">Screen time isn't captured on this platform yet.</p>
+    {:else if screenTime.length === 0}
+      <p class="hint">Nothing recorded for this day.</p>
+    {:else}
+      <p class="st-total">{formatDuration(screenTimeTotalMs)} total</p>
+      <ul class="st-list">
+        {#each screenTime as entry (entry.appId + "|" + entry.deviceName)}
+          <li>
+            <div class="st-row">
+              <span class="st-app" title={entry.appId}>
+                {entry.displayName}{#if showDeviceNames && entry.deviceName}<span class="st-device"
+                    >{entry.deviceName}</span
+                  >{/if}
+              </span>
+              <span class="st-duration">{formatDuration(entry.ms)}</span>
+            </div>
+            <div class="st-bar">
+              <div
+                class="st-bar-fill"
+                style={`width: ${screenTimeMaxMs > 0 ? (entry.ms / screenTimeMaxMs) * 100 : 0}%`}
+              ></div>
+            </div>
+          </li>
+        {/each}
+      </ul>
+    {/if}
   </section>
 
   <section class="card entries">
@@ -313,11 +444,39 @@
     margin: 0 auto;
   }
 
+  /* Explicit placement so the left column stacks calendar-then-screen-time
+     while the reflections list spans both rows beside them (it would
+     otherwise collapse to the calendar's height). */
+  .card.calendar {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .card.screen-time {
+    grid-column: 1;
+    grid-row: 2;
+    align-self: start;
+  }
+
+  .card.entries {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
   @media (max-width: 600px) {
     .page {
       grid-template-columns: 1fr;
       padding: 16px;
       gap: 16px;
+    }
+
+    /* Single column: fall back to plain DOM order, which is already
+       calendar -> screen time -> reflections. */
+    .card.calendar,
+    .card.screen-time,
+    .card.entries {
+      grid-column: auto;
+      grid-row: auto;
     }
   }
 
@@ -634,5 +793,67 @@
   .hint {
     color: var(--text-dim);
     font-size: 13px;
+  }
+
+  .screen-time h2 {
+    font-size: 14px;
+    margin: 0 0 4px;
+  }
+
+  .st-total {
+    color: var(--text-dim);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    margin: 0 0 12px;
+  }
+
+  .st-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .st-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .st-app {
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .st-device {
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-left: 6px;
+  }
+
+  .st-duration {
+    font-size: 12px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+  }
+
+  .st-bar {
+    background: var(--surface-2);
+    border-radius: 999px;
+    height: 6px;
+    overflow: hidden;
+  }
+
+  .st-bar-fill {
+    background: var(--accent);
+    height: 100%;
+    border-radius: 999px;
   }
 </style>

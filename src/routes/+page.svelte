@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { error as logError, info as logInfo } from "@tauri-apps/plugin-log";
   import { slotFor } from "$lib/grid";
   import {
     getTaskList,
@@ -20,6 +21,8 @@
     listenForTaskListUpdates,
     listenForNotToDoListUpdates,
     listenForMediaToggleRecorded,
+    loadAndSyncScreenTimeTrackingSetting,
+    ensureDeviceName,
   } from "$lib/db";
 
   let now = $state(new Date());
@@ -76,7 +79,12 @@
     }
   }
 
-  onMount(async () => {
+  /** The boot sequence below is a chain of awaits: before this wrapper, the
+   * first one to throw silently killed every step after it -- including the
+   * event-listener registrations at the end, so the window kept running while
+   * quietly not receiving task-list updates or screen-time batches, with no
+   * error anywhere. Log it instead. */
+  async function bootMainWindow() {
     await loadAndSyncBreakitSettings();
     await loadAndSyncForceCloseShortcutSetting();
     await loadAndSyncOverlayAutoClose();
@@ -85,6 +93,8 @@
     await loadAndSyncBreakNotificationPersistentSetting();
     await loadAndSyncMediaToggleGuard();
     await loadAndSyncMacosHideMenuBarDockSetting();
+    await loadAndSyncScreenTimeTrackingSetting();
+    await ensureDeviceName();
     enabled = await invoke<boolean>("get_enabled");
     taskListContent = await getTaskList(localDateStamp());
     notToDoContent = await getNotToDoList(localDateStamp());
@@ -99,8 +109,21 @@
       notToDoContent = content;
     });
     unlistenMediaToggle = await listenForMediaToggleRecorded();
+    // The screen-time batch listener lives in +layout.svelte, not here --
+    // this route ("/") unmounts on every tab navigation, which would tear
+    // the listener down and silently drop any batch Rust flushes while the
+    // user is sitting on another tab. See +layout.svelte's onMount for why.
+    void logInfo("main window: boot sequence complete, all listeners registered");
 
     tickInterval = setInterval(() => (now = new Date()), 1000);
+  }
+
+  onMount(async () => {
+    try {
+      await bootMainWindow();
+    } catch (e) {
+      void logError(`main window boot failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   });
 
   onDestroy(() => {

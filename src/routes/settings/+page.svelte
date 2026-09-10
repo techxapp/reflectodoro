@@ -26,6 +26,10 @@
     saveCheckinAutoCloseMinutes,
     getMacosHideMenuBarDockEnabled,
     saveMacosHideMenuBarDockEnabled,
+    getScreenTimeTrackingEnabled,
+    saveScreenTimeTrackingEnabled,
+    getDeviceName,
+    saveDeviceName,
     type BreakitSettings,
     type ImportMode,
   } from "$lib/db";
@@ -64,9 +68,22 @@
   let breakNotificationPersistentBusy = $state(false);
 
   let isMacos = $state(false);
+  let isWindows = $state(false);
+  // Gates the "not captured on this platform yet" screen-time hint on
+  // current_os having actually resolved -- without it that hint flashes on
+  // Windows too, since isWindows starts false.
+  let osResolved = $state(false);
   let macosHideMenuBarDockEnabled = $state(false);
   let macosHideMenuBarDockLoaded = $state(false);
   let macosHideMenuBarDockBusy = $state(false);
+
+  let screenTimeTrackingEnabled = $state(true);
+  let screenTimeTrackingLoaded = $state(false);
+  let screenTimeTrackingBusy = $state(false);
+
+  let deviceName = $state("");
+  let deviceNameLoaded = $state(false);
+  let deviceNameSaved = $state(false);
 
   let overlayGranted = $state(false);
   let overlayChecked = $state(false);
@@ -116,6 +133,8 @@
     if (os === "macos") forceCloseShortcutLabel = "Cmd+Option+Shift+F12";
     isAndroid = os === "android";
     isMacos = os === "macos";
+    isWindows = os === "windows";
+    osResolved = true;
   });
 
   onMount(async () => {
@@ -126,6 +145,16 @@
   onMount(async () => {
     breakNotificationPersistentEnabled = await getBreakNotificationPersistentEnabled();
     breakNotificationPersistentLoaded = true;
+  });
+
+  onMount(async () => {
+    screenTimeTrackingEnabled = await getScreenTimeTrackingEnabled();
+    screenTimeTrackingLoaded = true;
+  });
+
+  onMount(async () => {
+    deviceName = await getDeviceName();
+    deviceNameLoaded = true;
   });
 
   async function refreshOverlayPermission() {
@@ -276,6 +305,24 @@
     }
   }
 
+  async function toggleScreenTimeTracking() {
+    const next = !screenTimeTrackingEnabled;
+    screenTimeTrackingBusy = true;
+    try {
+      await saveScreenTimeTrackingEnabled(next);
+      screenTimeTrackingEnabled = next;
+    } finally {
+      screenTimeTrackingBusy = false;
+    }
+  }
+
+  async function saveDeviceNameSetting(e: Event) {
+    e.preventDefault();
+    await saveDeviceName(deviceName.trim());
+    deviceNameSaved = true;
+    setTimeout(() => (deviceNameSaved = false), 2000);
+  }
+
   async function saveWellnessExclusions(e: Event) {
     e.preventDefault();
     await saveWellnessTextExclusions(wellnessExclusions);
@@ -377,7 +424,7 @@
       const payload = parseAndValidateExport(raw);
       const result = await importData(payload, mode, includeSettingsInTransfer);
       await loadBreakitSettings();
-      importMessage = `Imported ${result.reflectionCount} reflection${result.reflectionCount === 1 ? "" : "s"}, ${result.taskListCount} task list${result.taskListCount === 1 ? "" : "s"}, ${result.notToDoListCount} not-to-do list${result.notToDoListCount === 1 ? "" : "s"}, ${result.settingCount} setting${result.settingCount === 1 ? "" : "s"}, ${result.wellnessCheckCount} wellness check-in${result.wellnessCheckCount === 1 ? "" : "s"}.`;
+      importMessage = `Imported ${result.reflectionCount} reflection${result.reflectionCount === 1 ? "" : "s"}, ${result.taskListCount} task list${result.taskListCount === 1 ? "" : "s"}, ${result.notToDoListCount} not-to-do list${result.notToDoListCount === 1 ? "" : "s"}, ${result.settingCount} setting${result.settingCount === 1 ? "" : "s"}, ${result.wellnessCheckCount} wellness check-in${result.wellnessCheckCount === 1 ? "" : "s"}, ${result.screenTimeSessionCount} screen time session${result.screenTimeSessionCount === 1 ? "" : "s"}.`;
       importStatus = "success";
       importPath = null;
       importFileName = "";
@@ -610,6 +657,53 @@
   </section>
   {/if}
 
+
+  <section class="card">
+    <h2>Screen time</h2>
+    <p class="hint">
+      Records which app has focus and for how long, so the Entries tab can show where your day
+      actually went. Everything stays on this device &mdash; nothing is uploaded, and only the app's
+      name is recorded, never window titles or anything you type.
+    </p>
+
+    {#if screenTimeTrackingLoaded}
+      <div class="data-row">
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={screenTimeTrackingEnabled}
+            disabled={screenTimeTrackingBusy}
+            onchange={toggleScreenTimeTracking}
+          />
+          Track screen time
+        </label>
+      </div>
+    {/if}
+
+    {#if osResolved && !isWindows}
+      <p class="hint warning">
+        Not captured on this platform yet &mdash; Windows is the only one recording so far. The
+        setting is here, but nothing lands until support for this platform ships.
+      </p>
+    {/if}
+
+    {#if deviceNameLoaded}
+      <form onsubmit={saveDeviceNameSetting}>
+        <label class="grow">
+          Device name
+          <input type="text" bind:value={deviceName} placeholder="e.g. Work laptop" />
+        </label>
+        <button type="submit">Save</button>
+        {#if deviceNameSaved}
+          <span class="hint saved">Saved</span>
+        {/if}
+      </form>
+      <p class="hint">
+        Stamped onto new screen time rows so the same app on two machines stays distinguishable if
+        you ever import one device's data into another. Defaults to this computer's name.
+      </p>
+    {/if}
+  </section>
 
   <section class="card">
     <h2>Startup</h2>

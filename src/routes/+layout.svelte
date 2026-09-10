@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import "./app.css";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { check } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
-  import { isOnboardingCompleted } from "$lib/db";
+  import { isOnboardingCompleted, listenForScreenTimeSessionBatches } from "$lib/db";
 
   let { children } = $props();
 
@@ -21,6 +21,7 @@
   // getWindowVisibleDisplayFrame-based listener via __setKeyboardInset,
   // with visualViewport kept as a harmless extra signal in case it ever
   // does fire (e.g. on non-edge-to-edge builds).
+  let unlistenScreenTime: UnlistenFn | null = null;
   let keyboardInset = $state(0);
   let nativeKeyboardInset = 0;
   let mainEl: HTMLElement | undefined = $state();
@@ -86,6 +87,34 @@
     } catch (e) {
       console.error("update check failed", e);
     }
+  });
+
+  /** Registered here, not in the home route's own +page.svelte, because
+   * this layout is the thing that actually stays mounted across client-side
+   * tab navigation ("/" -> "/entries" -> "/settings" -> ...) within the main
+   * window -- +page.svelte for "/" unmounts (and tears down its listeners)
+   * the instant the user navigates to another tab, same as any other route.
+   * Screen-time batches Rust flushes while the user is sitting on, say, the
+   * Entries tab checking for new data were being silently and permanently
+   * dropped as a result: Tauri's emit() returns Ok even when nothing is
+   * listening (confirmed against tauri 2.11.5's source -- emit_js_filter
+   * just iterates whatever handlers exist for that webview/event pair and
+   * is a no-op if there are none), so PENDING_FLUSH was drained in Rust with
+   * no error anywhere and no way to re-request what was lost. Gated on
+   * !isSpecialWindow so the separate overlay/checkin *windows* (desktop) --
+   * which each run this same root layout in their own webview -- don't also
+   * register it and double-save every batch; on Android, where overlay/
+   * checkin are reached by client-side navigation within this one window
+   * instead (see the Android-only onMount below), the layout never
+   * unmounts for that navigation either, so this listener stays live
+   * through it without needing a separate carve-out. */
+  onMount(async () => {
+    if (isSpecialWindow) return;
+    unlistenScreenTime = await listenForScreenTimeSessionBatches();
+  });
+
+  onDestroy(() => {
+    unlistenScreenTime?.();
   });
 
   /** Android has exactly one Activity/window -- there's no OS-level
