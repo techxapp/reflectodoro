@@ -13,6 +13,7 @@
     updateReflectionText,
     getScreenTimeForDate,
     getScreenTimeTrackingEnabled,
+    getScreenTimeAppThresholdMinutes,
     getCurrentScreenTimeSession,
     getDeviceName,
     type ReflectionRow,
@@ -41,6 +42,7 @@
   let screenTime = $state<ScreenTimeEntry[]>([]);
   let screenTimeLoaded = $state(false);
   let screenTimeTrackingOn = $state(true);
+  let screenTimeThresholdMinutes = $state(5);
   // Windows is the only platform capturing focus so far -- without this the
   // empty state on the others reads as "you did nothing today" rather than
   // "nothing is recording yet".
@@ -153,13 +155,14 @@
     const stamp = selectedStamp;
     const forToday = stamp === localDateStamp(new Date());
     const generation = ++screenTimeGeneration;
-    const [enabled, entries, deviceName, current] = await Promise.all([
+    const [enabled, entries, deviceName, current, thresholdMinutes] = await Promise.all([
       getScreenTimeTrackingEnabled(),
       getScreenTimeForDate(stamp),
       getDeviceName(),
       // Only today can have an in-progress session to blend in; asking on any
       // other day would attribute the currently-focused app to that day.
       forToday ? getCurrentScreenTimeSession() : Promise.resolve(null),
+      getScreenTimeAppThresholdMinutes(),
     ]);
     if (generation !== screenTimeGeneration) return;
 
@@ -185,14 +188,23 @@
 
     screenTimeTrackingOn = enabled;
     screenTime = blended;
+    screenTimeThresholdMinutes = thresholdMinutes;
     screenTimeLoaded = true;
   }
 
+  // Apps with only a few seconds/minutes of focus (an alt-tab, a notification
+  // popup) otherwise drown out where the day actually went -- see
+  // getScreenTimeAppThresholdMinutes in db.ts. The total below still sums
+  // every entry, filtered or not, so it keeps reading as "the whole day",
+  // not just the apps visible under the threshold.
+  const visibleScreenTime = $derived(
+    screenTime.filter((e) => e.ms >= screenTimeThresholdMinutes * 60000),
+  );
   const screenTimeTotalMs = $derived(screenTime.reduce((sum, e) => sum + e.ms, 0));
-  const screenTimeMaxMs = $derived(screenTime.reduce((max, e) => Math.max(max, e.ms), 0));
+  const screenTimeMaxMs = $derived(visibleScreenTime.reduce((max, e) => Math.max(max, e.ms), 0));
   /** Only worth showing a device label once rows from more than one device
    * actually exist -- i.e. after a cross-device import. */
-  const showDeviceNames = $derived(new Set(screenTime.map((e) => e.deviceName)).size > 1);
+  const showDeviceNames = $derived(new Set(visibleScreenTime.map((e) => e.deviceName)).size > 1);
 
   function formatDuration(ms: number): string {
     const totalMinutes = Math.floor(ms / 60000);
@@ -403,7 +415,18 @@
                 {#if cluster.rows.length === 1}
                   {@render editButton(cluster.rows[0])}
                 {:else}
-                  <span class="badge">covers {cluster.rows.length} pomodoros</span>
+                  <span
+                    class="badge"
+                    role="button"
+                    tabindex="0"
+                    onclick={() => toggleExpanded(clusterKey)}
+                    onkeydown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        toggleExpanded(clusterKey);
+                      }
+                    }}
+                  >covers {cluster.rows.length} pomodoros</span>
                   <button class="chevron" onclick={() => toggleExpanded(clusterKey)}>
                     {expandedClusters.has(clusterKey) ? "Collapse" : "Expand"}
                   </button>
@@ -670,6 +693,7 @@
     color: var(--accent);
     padding: 2px 8px;
     border-radius: 999px;
+    cursor: pointer;
   }
 
   .chevron {
