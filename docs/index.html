@@ -1533,6 +1533,32 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
+              <p class="timeline-date">Thursday, Sep 10, 2026</p>
+              <ul class="timeline-items">
+                <li>Added screen time tracking on Windows, showing which apps you spent your day in, with friendly app names</li>
+                <li>Polished the Entries page layout</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Wednesday, Sep 9, 2026</p>
+              <ul class="timeline-items">
+                <li>Fixed the macOS break screen sometimes not appearing at all due to a window/Space display conflict, and added diagnostic logging to track down similar window-display issues</li>
+                <li>Fixed the main window's timer freezing after a break or check-in ended on Windows</li>
+                <li>Fixed log files being silently deleted on rotation instead of archived, and added a way to export logs from the About page</li>
+                <li>Refactored the Settings page UI</li>
+                <li>Added an FAQ entry on why Reflectodoro is free, and an &ldquo;all releases&rdquo; link on the download page</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Tuesday, Sep 8, 2026</p>
+              <ul class="timeline-items">
+                <li>Added full macOS break-screen enforcement: Cmd+Tab blocking, following you across every Space, and an opt-in menu bar/Dock hiding option</li>
+                <li>Fixed the app's tray/dock icon not reopening the window on macOS</li>
+                <li>Fixed reflections on the Entries page being grouped by save time instead of the day they were actually about</li>
+                <li>Fixed the emergency-exit challenge showing a stale value when settings synced in late</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
               <p class="timeline-date">Monday, Sep 7, 2026</p>
               <ul class="timeline-items">
                 <li>Added an FAQ section to the landing page</li>
@@ -1563,36 +1589,16 @@
                 <li>Polished the landing page: touch-friendly benefit cards, OS-aware download buttons, and social preview images</li>
               </ul>
             </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Thursday, Sep 3, 2026</p>
-              <ul class="timeline-items">
-                <li>Added a &ldquo;Why it helps&rdquo; benefits section and a Discord community link to the landing page</li>
-                <li>Fixed the main window not reopening from the tray after being closed on Windows</li>
-                <li>Renamed &ldquo;break overlay&rdquo; to &ldquo;break screen&rdquo; throughout the Settings UI and README</li>
-              </ul>
-            </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Wednesday, Sep 2, 2026</p>
-              <ul class="timeline-items">
-                <li>Moved the media pause-on-break toggle to the main window and pre-filled the break screen's reflection field with your last entry</li>
-                <li>Excluded visually ambiguous characters from the emergency-exit challenge</li>
-                <li>Updated the Android download link, dropped early-release labels on the docs site, and refined the Android auto-start guidance</li>
-              </ul>
-            </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Tuesday, Sep 1, 2026</p>
-              <ul class="timeline-items">
-                <li>Added a &ldquo;Not to do&rdquo; list alongside Most Important Tasks, and made both Most Important Tasks and past reflection entries editable (with per-slot expand/collapse)</li>
-                <li>Fixed a white-screen overlay after Windows monitor sleep/wake and an early-break issue on Android</li>
-                <li>Fixed Linux AppImage packaging silently dropping Wayland libraries</li>
-                <li>Signed Android release builds and fixed the Android CI build pipeline</li>
-              </ul>
-            </div>
             <p class="timeline-tier reveal">Previous 3 weeks</p>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Aug 31 &ndash; Sep 6, 2026</p>
               <ul class="timeline-items">
-                <li>Fixed several Linux build issues and shrank the Android release APK size</li>
+                <li>Signed Android release builds, fixed the Android CI build pipeline, and shrank the release APK size</li>
+                <li>Fixed several Linux packaging issues, including AppImage builds silently dropping Wayland libraries</li>
+                <li>Added a &ldquo;Not to do&rdquo; list alongside Most Important Tasks, and made both Most Important Tasks and past reflection entries editable</li>
+                <li>Moved the media pause-on-break toggle to the main window, pre-filled the break screen's reflection field with your last entry, and excluded visually ambiguous characters from the emergency-exit challenge</li>
+                <li>Fixed a white-screen overlay after Windows monitor sleep/wake, an early-break issue on Android, and the main window not reopening from the tray on Windows</li>
+                <li>Added a &ldquo;Why it helps&rdquo; benefits section and a Discord community link to the landing page, and renamed &ldquo;break overlay&rdquo; to &ldquo;break screen&rdquo; throughout the Settings UI</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">
