@@ -239,6 +239,7 @@
 </script>
 
 <div class="page">
+  <div class="left-col">
   <section class="card calendar">
     <div class="cal-header">
       <button onclick={() => shiftMonth(-1)} aria-label="Previous month">&larr;</button>
@@ -309,6 +310,7 @@
       </ul>
     {/if}
   </section>
+  </div>
 
   <section class="card entries">
     <div class="day-nav">
@@ -444,23 +446,14 @@
     margin: 0 auto;
   }
 
-  /* Explicit placement so the left column stacks calendar-then-screen-time
-     while the reflections list spans both rows beside them (it would
-     otherwise collapse to the calendar's height). */
-  .card.calendar {
-    grid-column: 1;
-    grid-row: 1;
-  }
-
-  .card.screen-time {
-    grid-column: 1;
-    grid-row: 2;
-    align-self: start;
-  }
-
-  .card.entries {
-    grid-column: 2;
-    grid-row: 1 / span 2;
+  /* Left column stacks calendar-then-screen-time as plain flex children, so
+     each card is only ever as tall as its own content -- no row-spanning
+     grid track to inflate them (that used to leave a large gap between the
+     calendar and screen-time cards whenever the reflections list was long). */
+  .left-col {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
   }
 
   @media (max-width: 600px) {
@@ -470,13 +463,8 @@
       gap: 16px;
     }
 
-    /* Single column: fall back to plain DOM order, which is already
-       calendar -> screen time -> reflections. */
-    .card.calendar,
-    .card.screen-time,
-    .card.entries {
-      grid-column: auto;
-      grid-row: auto;
+    .left-col {
+      gap: 16px;
     }
   }
 
