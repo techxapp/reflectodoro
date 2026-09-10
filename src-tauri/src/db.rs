@@ -241,5 +241,20 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 15,
+            // Entries tab hides apps under this many minutes of focus time for
+            // a given day (see getScreenTimeAppThresholdMinutes in db.ts) --
+            // frontend-only filter, nothing in Rust reads this key. OR IGNORE
+            // like migrations 5/13: db.ts's numberOr already falls back to the
+            // same default (5) when the row is missing, so this is a
+            // convenience seed, not load-bearing -- a pre-existing row from a
+            // dev db or a newer export must not abort the migration.
+            description: "default screen_time_app_threshold_minutes setting to 5",
+            sql: r#"
+                INSERT OR IGNORE INTO app_setting (key, value) VALUES ('screen_time_app_threshold_minutes', '5');
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

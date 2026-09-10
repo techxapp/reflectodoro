@@ -28,6 +28,8 @@
     saveMacosHideMenuBarDockEnabled,
     getScreenTimeTrackingEnabled,
     saveScreenTimeTrackingEnabled,
+    getScreenTimeAppThresholdMinutes,
+    saveScreenTimeAppThresholdMinutes,
     getDeviceName,
     saveDeviceName,
     type BreakitSettings,
@@ -80,6 +82,10 @@
   let screenTimeTrackingEnabled = $state(true);
   let screenTimeTrackingLoaded = $state(false);
   let screenTimeTrackingBusy = $state(false);
+
+  let screenTimeAppThresholdMinutes = $state(5);
+  let screenTimeAppThresholdLoaded = $state(false);
+  let screenTimeAppThresholdSaved = $state(false);
 
   let deviceName = $state("");
   let deviceNameLoaded = $state(false);
@@ -150,6 +156,11 @@
   onMount(async () => {
     screenTimeTrackingEnabled = await getScreenTimeTrackingEnabled();
     screenTimeTrackingLoaded = true;
+  });
+
+  onMount(async () => {
+    screenTimeAppThresholdMinutes = await getScreenTimeAppThresholdMinutes();
+    screenTimeAppThresholdLoaded = true;
   });
 
   onMount(async () => {
@@ -314,6 +325,17 @@
     } finally {
       screenTimeTrackingBusy = false;
     }
+  }
+
+  // Upper bound of 1440 (24h) just keeps the field sane -- unlike the
+  // auto-close timeouts above, nothing downstream of this value has a
+  // functional ceiling to defend (it only filters what's rendered).
+  async function saveScreenTimeAppThreshold(e: Event) {
+    e.preventDefault();
+    screenTimeAppThresholdMinutes = Math.min(1440, Math.max(0, screenTimeAppThresholdMinutes));
+    await saveScreenTimeAppThresholdMinutes(screenTimeAppThresholdMinutes);
+    screenTimeAppThresholdSaved = true;
+    setTimeout(() => (screenTimeAppThresholdSaved = false), 2000);
   }
 
   async function saveDeviceNameSetting(e: Event) {
@@ -684,6 +706,23 @@
       <p class="hint warning">
         Not captured on this platform yet &mdash; Windows is the only one recording so far. The
         setting is here, but nothing lands until support for this platform ships.
+      </p>
+    {/if}
+
+    {#if screenTimeAppThresholdLoaded}
+      <form onsubmit={saveScreenTimeAppThreshold}>
+        <label>
+          Hide apps under (minutes)
+          <input type="number" min="0" max="1440" bind:value={screenTimeAppThresholdMinutes} />
+        </label>
+        <button type="submit">Save</button>
+        {#if screenTimeAppThresholdSaved}
+          <span class="hint saved">Saved</span>
+        {/if}
+      </form>
+      <p class="hint">
+        Apps with less focus time than this on a given day are left out of the Entries tab's
+        breakdown for that day.
       </p>
     {/if}
 

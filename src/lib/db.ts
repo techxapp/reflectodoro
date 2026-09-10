@@ -766,6 +766,36 @@ export async function loadAndSyncScreenTimeTrackingSetting(): Promise<boolean> {
   return enabled;
 }
 
+// --- Screen time app threshold (Entries tab filter) ---------------------
+//
+// Apps with less than this many minutes of focus time on a given day are
+// hidden from the Entries tab's per-app breakdown -- a day's tail is usually
+// a long list of apps that briefly had focus for a few seconds (an alt-tab,
+// a notification popup), which drowns out where the day actually went.
+// Frontend-only filter, same as checkin_auto_close_minutes above: nothing in
+// Rust reads this, so there's no backend value to sync.
+
+const SCREEN_TIME_APP_THRESHOLD_KEY = "screen_time_app_threshold_minutes";
+const DEFAULT_SCREEN_TIME_APP_THRESHOLD_MINUTES = 5;
+
+export async function getScreenTimeAppThresholdMinutes(): Promise<number> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [SCREEN_TIME_APP_THRESHOLD_KEY],
+  );
+  return numberOr(rows[0]?.value, DEFAULT_SCREEN_TIME_APP_THRESHOLD_MINUTES);
+}
+
+export async function saveScreenTimeAppThresholdMinutes(minutes: number): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [SCREEN_TIME_APP_THRESHOLD_KEY, String(minutes)],
+  );
+}
+
 // --- Device name (stamped onto every screen-time row) -------------------
 //
 // This app is single-device by design, but Settings -> Data export/import is
@@ -1303,6 +1333,7 @@ export function parseAndValidateExport(raw: string): ExportPayload {
     "breakit_length",
     "overlay_auto_close_minutes",
     "checkin_auto_close_minutes",
+    "screen_time_app_threshold_minutes",
   ]);
   for (const row of app_setting) {
     if (NUMERIC_SETTING_KEYS.has(row.key) && !Number.isFinite(Number(row.value))) {

@@ -124,6 +124,8 @@ Nothing here writes SQLite from Rust: batches leave as an event and the **main w
 
 **The breakdown lives on the existing Entries tab** (`src/routes/entries/+page.svelte`), not a new route: a `.card.screen-time` in the left column below the calendar on desktop (explicit `grid-column`/`grid-row` placement, reset to `auto` under the 600px breakpoint so mobile falls back to DOM order -- calendar, screen time, reflections). It reuses that page's existing `selected`/`selectedStamp` state, so the calendar drives both lists. `getScreenTimeForDate` aggregates per-app totals in SQL (grouped by `app_id, platform, device_name`), filed by the local date the session *started* on -- a session crossing midnight counts entirely toward the day it began. Today additionally blends in `get_current_session_snapshot`, refreshed when the window regains focus rather than on a timer.
 
+**Per-app threshold filter**: apps with less than `app_setting.screen_time_app_threshold_minutes` (default 5, configurable in Settings alongside the tracking toggle) of focus time on the selected day are left out of the Entries tab's list (`visibleScreenTime` in `entries/+page.svelte`) -- a day's tail is usually a long run of apps that briefly had focus for a few seconds. The day's total (`screenTimeTotalMs`) still sums every entry regardless of the filter, so it keeps reading as the whole day rather than just the visible apps; only the per-app list and its bar-scaling max are filtered. Frontend-only (`getScreenTimeAppThresholdMinutes`/`saveScreenTimeAppThresholdMinutes` in `db.ts`), same as `checkin_auto_close_minutes` -- nothing in Rust reads this key, so there's no backend value to sync.
+
 **Only the app's name is ever recorded** -- no window titles, no URLs, nothing typed. Same "never log user content" property the rest of the app has (see "Debugging from production logs").
 
 ## Data model
@@ -153,7 +155,7 @@ screen_time_session           -- foreground-app focus tracking (see "Screen time
 
 app_setting
   key TEXT PK
-  value TEXT                  -- breakit_length, breakit_include_special, last_toggle_time (macOS media-toggle guard, see below; row absent until first toggle), macos_hide_menu_bar_dock_enabled (see "The overlay and its unlock formula"; defaults to 'false', unlike most other app_setting toggles), screen_time_tracking_enabled, device_name (both see "Screen time tracking") (work/break durations are fixed constants, not stored/configurable yet)
+  value TEXT                  -- breakit_length, breakit_include_special, last_toggle_time (macOS media-toggle guard, see below; row absent until first toggle), macos_hide_menu_bar_dock_enabled (see "The overlay and its unlock formula"; defaults to 'false', unlike most other app_setting toggles), screen_time_tracking_enabled, device_name, screen_time_app_threshold_minutes (all three see "Screen time tracking") (work/break durations are fixed constants, not stored/configurable yet)
 ```
 
 Migrations live in `src-tauri/src/db.rs` (`tauri-plugin-sql` migration list). Applied versions are tracked per-database in `_sqlx_migrations` and never re-run — so editing an already-shipped migration silently skips on any db that already applied it. Before the first tagged release, squashing/rewriting migrations freely is fine (nothing but local dev dbs has run them). From the first tagged release onward, always add a new versioned migration for schema/default changes instead.

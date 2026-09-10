@@ -298,10 +298,15 @@
       <p class="hint">Screen time isn't captured on this platform yet.</p>
     {:else if screenTime.length === 0}
       <p class="hint">Nothing recorded for this day.</p>
+    {:else if visibleScreenTime.length === 0}
+      <p class="hint">
+        {formatDuration(screenTimeTotalMs)} total, but nothing over {screenTimeThresholdMinutes}
+        min per app.
+      </p>
     {:else}
       <p class="st-total">{formatDuration(screenTimeTotalMs)} total</p>
       <ul class="st-list">
-        {#each screenTime as entry (entry.appId + "|" + entry.deviceName)}
+        {#each visibleScreenTime as entry (entry.appId + "|" + entry.deviceName)}
           <li>
             <div class="st-row">
               <span class="st-app" title={entry.appId}>
