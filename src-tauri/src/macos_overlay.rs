@@ -165,20 +165,50 @@ fn enable_presentation_lockdown(hide_menu_bar_and_dock: bool) {
             | NSApplicationPresentationOptions::HideDock;
     }
 
-    // `-setPresentationOptions:` raises an NSException on an invalid flag
-    // combination (Apple's own doc comment on the method). Neither
-    // combination set above conflicts with itself or anything else set here,
-    // so this shouldn't be reachable -- but catching it here still matters
-    // for dev builds (panic = "unwind"): it turns a would-be process abort
-    // into a logged, skipped kiosk-mode-for-this-break instead. It does NOT
-    // help in the shipped release build, which sets panic = "abort"
-    // (Cargo.toml's [profile.release]) -- objc2::exception::catch's own doc
-    // comment states it cannot catch anything in that configuration, so an
-    // exception there would still abort the whole process. See
-    // macos_overlay.rs's module doc for why the flag choice itself is the
-    // real mitigation.
+    let app = NSApplication::sharedApplication(mtm);
+
+    // `-setPresentationOptions:` raises an NSException if the app isn't the
+    // *active* application at the moment it's called -- confirmed live: a
+    // real crash report showed the process aborting on every single break,
+    // right after `configure_window`'s log line and before this function's
+    // own success log ever printed, with `DisableProcessSwitching` alone (no
+    // hide-menu-bar/dock flags involved, so this isn't a flag-combination
+    // conflict). Nothing upstream of here actually activates the app --
+    // `win.show()`/`win.set_focus()` (overlay.rs) order the overlay window
+    // to the front but don't reliably make the *application* active, e.g.
+    // when a different app currently has focus. Activating first, and
+    // skipping the call entirely if activation didn't take, trades a missed
+    // kiosk-mode-for-this-break for not crashing the whole app.
+    if !app.isActive() {
+        log::warn!(
+            "macos_overlay::enable_presentation_lockdown: app not active yet, activating before setPresentationOptions"
+        );
+        // Deliberately the older `activateIgnoringOtherApps:` rather than
+        // the newer `activate()` (macOS 14+ only): this app's minimum
+        // supported macOS version is older than that, and calling a
+        // selector AppKit doesn't implement raises its own
+        // "unrecognized selector" NSException -- exactly the
+        // process-aborting failure mode this function exists to avoid.
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+    }
+    if !app.isActive() {
+        log::error!(
+            "macos_overlay::enable_presentation_lockdown: app still not active after activation attempt, skipping setPresentationOptions this break to avoid an unrecoverable NSInvalidArgumentException"
+        );
+        return;
+    }
+
+    // Belt-and-suspenders: even with the active-app precondition satisfied
+    // above, still wrap the call itself. This only actually helps in dev
+    // builds (panic = "unwind") -- it does NOT help in the shipped release
+    // build, which sets panic = "abort" (Cargo.toml's [profile.release]);
+    // objc2::exception::catch's own doc comment states it cannot catch
+    // anything in that configuration, so an exception here would still
+    // abort the whole process. The activation check above is the real
+    // mitigation now; this stays as defense-in-depth for whatever we
+    // haven't thought of.
     let result = objc2::exception::catch(|| {
-        let app = NSApplication::sharedApplication(mtm);
         app.setPresentationOptions(options);
         log::info!(
             "macos_overlay::enable_presentation_lockdown: set presentationOptions={:?} (readback: {:?})",
