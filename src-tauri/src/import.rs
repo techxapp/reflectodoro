@@ -17,14 +17,26 @@ use tauri::AppHandle;
 
 use crate::db;
 
-#[derive(Deserialize)]
+// Serialize (as well as Deserialize) on the five row types below: p2p_sync.rs
+// reuses these exact shapes to build its own delta payload (never including
+// ImportSettingRow/app_setting -- P2P sync deliberately never touches
+// settings, see CLAUDE.md's P2P LAN sync section), so both the file-based
+// import and the LAN sync path share one wire format for these tables.
+
+#[derive(Deserialize, Serialize, Clone)]
 pub struct ImportReflectionRow {
     pub created_at: String,
     pub slot_start_at: String,
     pub text: String,
+    /// Optional so older export files (written before this column existed)
+    /// still deserialize -- `import_reflections` falls back to `created_at`
+    /// per row when absent, same as migration 19's backfill for pre-existing
+    /// rows. P2P sync (p2p_sync.rs) always sends a real value.
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct ImportWellnessCheckRow {
     pub slot_start_at: String,
     pub relaxed_eyes: i64,
@@ -34,14 +46,14 @@ pub struct ImportWellnessCheckRow {
     pub created_at: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct ImportTaskListRow {
     pub date: String,
     pub content: String,
     pub updated_at: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct ImportNotToDoRow {
     pub date: String,
     pub content: String,
@@ -54,7 +66,7 @@ pub struct ImportSettingRow {
     pub value: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct ImportScreenTimeSessionRow {
     pub app_id: String,
     pub display_name: String,
@@ -210,7 +222,7 @@ fn merge_reflection_lines(existing: &[String], incoming: &[String]) -> Vec<Strin
 /// `slot_start_at` directly -- see `import_wellness_checks`), so unlike the
 /// old version of this function there's no id map to build or FK to repoint
 /// before deleting a collapsed duplicate.
-async fn import_reflections(
+pub(crate) async fn import_reflections(
     tx: &mut Transaction<'_, Sqlite>,
     rows: &[ImportReflectionRow],
     mode: ImportMode,
@@ -265,14 +277,26 @@ async fn import_reflections(
 
         let final_text = merge_reflection_lines(&existing_baseline, &incoming_lines).join("\n");
 
+        // The delta-sync cursor (p2p_sync.rs): the latest of every incoming
+        // row's updated_at (falling back to its created_at when a legacy
+        // export omits it) for this slot -- a plain string max is safe, same
+        // ISO/UTC format as everywhere else in this app.
+        let final_updated_at = group
+            .iter()
+            .map(|r| r.updated_at.as_deref().unwrap_or(r.created_at.as_str()))
+            .max()
+            .unwrap_or_default()
+            .to_string();
+
         if existing_rows.len() + group.len() > 1 {
             merged_slot_count += 1;
         }
 
         if let Some((first_id, _)) = existing_rows.first() {
             let survivor_id = *first_id;
-            sqlx::query("UPDATE reflection SET text = ? WHERE id = ?")
+            sqlx::query("UPDATE reflection SET text = ?, updated_at = ? WHERE id = ?")
                 .bind(&final_text)
+                .bind(&final_updated_at)
                 .bind(survivor_id)
                 .execute(&mut **tx)
                 .await
@@ -303,10 +327,11 @@ async fn import_reflections(
                 .min()
                 .unwrap_or_default()
                 .to_string();
-            sqlx::query("INSERT INTO reflection (created_at, slot_start_at, text) VALUES (?, ?, ?)")
+            sqlx::query("INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES (?, ?, ?, ?)")
                 .bind(&created_at)
                 .bind(&slot)
                 .bind(&final_text)
+                .bind(&final_updated_at)
                 .execute(&mut **tx)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -334,7 +359,7 @@ async fn import_reflections(
 /// amortized tauri-plugin-sql's per-call IPC overhead, which doesn't exist
 /// here (this runs entirely inside one Rust process/connection). Returns how
 /// many rows were skipped as duplicates.
-async fn import_screen_time_sessions(
+pub(crate) async fn import_screen_time_sessions(
     tx: &mut Transaction<'_, Sqlite>,
     rows: &[ImportScreenTimeSessionRow],
 ) -> Result<usize, String> {
@@ -390,7 +415,7 @@ async fn import_screen_time_sessions(
 /// `wellness_check.reflection_id` specifically so this dedupe wouldn't need
 /// to remap anything through an id map. Returns how many incoming rows were
 /// skipped (lost the collapse to something else for their slot).
-async fn import_wellness_checks(
+pub(crate) async fn import_wellness_checks(
     tx: &mut Transaction<'_, Sqlite>,
     rows: &[ImportWellnessCheckRow],
     mode: ImportMode,
@@ -512,7 +537,7 @@ async fn import_wellness_checks(
 /// call sites pass (never external/user input), so interpolating it
 /// directly into the SQL string is safe here -- sqlx has no way to bind an
 /// identifier as a query parameter.
-async fn merge_import_day_rows(
+pub(crate) async fn merge_import_day_rows(
     tx: &mut Transaction<'_, Sqlite>,
     table: &str,
     rows: &[(&str, &str, &str)],
@@ -726,7 +751,8 @@ mod tests {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at TEXT NOT NULL,
                 slot_start_at TEXT NOT NULL,
-                text TEXT NOT NULL
+                text TEXT NOT NULL,
+                updated_at TEXT
             )",
         )
         .execute(&pool)
@@ -808,6 +834,7 @@ mod tests {
             created_at: "2026-01-01T00:10:00.000Z".to_string(),
             slot_start_at: "2026-01-01T00:00:00.000Z".to_string(),
             text: "Went for a walk".to_string(),
+            updated_at: None,
         }];
 
         let mut tx = pool.begin().await.unwrap();
@@ -838,6 +865,7 @@ mod tests {
             created_at: "2026-02-01T00:00:00.000Z".to_string(),
             slot_start_at: "2026-02-01T00:00:00.000Z".to_string(),
             text: "Fresh slot".to_string(),
+            updated_at: None,
         }];
 
         let mut tx = pool.begin().await.unwrap();
@@ -865,6 +893,7 @@ mod tests {
             created_at: "2026-03-01T00:00:00.000Z".to_string(),
             slot_start_at: "2026-03-01T00:00:00.000Z".to_string(),
             text: "Skip".to_string(),
+            updated_at: None,
         }];
 
         let mut tx = pool.begin().await.unwrap();
@@ -897,11 +926,13 @@ mod tests {
                 created_at: "2026-01-01T00:10:00.000Z".to_string(),
                 slot_start_at: "2026-01-01T00:00:00.000Z".to_string(),
                 text: "Skip".to_string(),
+                updated_at: None,
             },
             ImportReflectionRow {
                 created_at: "2026-01-01T00:10:00.000Z".to_string(),
                 slot_start_at: "2026-01-01T00:00:00.000Z".to_string(),
                 text: "   \n  ".to_string(),
+                updated_at: None,
             },
         ];
 

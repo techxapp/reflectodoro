@@ -153,6 +153,36 @@ impl<R: Runtime> AndroidBridge<R> {
     pub fn report_scheduler_heartbeat(&self) -> Result<Value, PluginInvokeError> {
         self.0.run_mobile_plugin("reportSchedulerHeartbeat", ())
     }
+
+    /// Advertises this device on the LAN for P2P sync (p2p_sync.rs) via
+    /// `NsdManager` -- Android has no portable Rust mDNS crate (see
+    /// Cargo.toml), so unlike desktop's `mdns-sd` this has to go through
+    /// Kotlin. `device_id`/`name`/`platform` become the service's TXT
+    /// record, `port` is p2p_sync::PORT (the same Rust TCP listener desktop
+    /// peers connect to -- discovery is native, the wire protocol isn't).
+    pub fn register_p2p_service(&self, device_id: &str, name: &str, platform: &str, port: u16) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin(
+            "registerP2pService",
+            serde_json::json!({ "deviceId": device_id, "name": name, "platform": platform, "port": port }),
+        )
+    }
+
+    /// Stops advertising -- not currently called anywhere (the service stays
+    /// registered for the process lifetime, mirroring desktop's mdns-sd
+    /// registration), kept for symmetry/future use (e.g. a "pause LAN
+    /// discovery" toggle).
+    pub fn unregister_p2p_service(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("unregisterP2pService", ())
+    }
+
+    /// Runs an NSD discovery burst for `timeout_ms`, resolving every
+    /// `_reflectodoro._tcp` instance found, and returns a JSON array of
+    /// `{deviceId, name, platform, host, port}` -- the Android equivalent of
+    /// desktop's short `mdns-sd` browse window in p2p_sync::browse_lan.
+    pub fn discover_p2p_services(&self, timeout_ms: u64) -> Result<Value, PluginInvokeError> {
+        self.0
+            .run_mobile_plugin("discoverP2pServices", serde_json::json!({ "timeoutMs": timeout_ms }))
+    }
 }
 
 pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {

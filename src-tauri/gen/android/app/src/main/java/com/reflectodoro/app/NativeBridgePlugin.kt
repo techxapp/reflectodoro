@@ -3,18 +3,25 @@ package com.reflectodoro.app
 import android.app.Activity
 import android.app.AlarmManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.net.Uri
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Channel
 import app.tauri.plugin.Invoke
+import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
@@ -42,6 +49,19 @@ class PersistPomodoroEnabledArgs {
     var enabled: Boolean = true
 }
 
+@InvokeArg
+class RegisterP2pServiceArgs {
+    lateinit var deviceId: String
+    lateinit var name: String
+    lateinit var platform: String
+    var port: Int = 0
+}
+
+@InvokeArg
+class DiscoverP2pServicesArgs {
+    var timeoutMs: Long = 3000
+}
+
 @TauriPlugin
 class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
     // Held only between pauseAudioFocus and the matching resumeAudioFocus
@@ -55,6 +75,23 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
     // submissions and breakit attempts back into Rust. See
     // NativeOverlayManager's OverlayJsBridge.
     private var overlayChannel: Channel? = null
+
+    // LAN discovery for P2P device pairing/sync (p2p_sync.rs) -- Android has
+    // no portable Rust mDNS crate, so this goes through NsdManager instead
+    // of the pure-Rust mdns-sd path desktop uses. Held only between
+    // registerP2pService and unregisterP2pService, mirroring
+    // audioFocusRequest's lifetime pattern above.
+    private var nsdRegistrationListener: NsdManager.RegistrationListener? = null
+    private val nsdManager: NsdManager by lazy {
+        activity.getSystemService(Context.NSD_SERVICE) as NsdManager
+    }
+
+    companion object {
+        // Trailing dot matches the format NsdManager expects (mirrors
+        // p2p_sync.rs's SERVICE_TYPE constant on the Rust side -- both must
+        // agree for desktop and Android instances to discover each other).
+        private const val P2P_SERVICE_TYPE = "_reflectodoro._tcp."
+    }
 
     @Command
     fun ping(invoke: Invoke) {
@@ -275,5 +312,170 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
             audioFocusRequest = null
         }
         invoke.resolve(JSObject())
+    }
+
+    /** Advertises this device on the LAN for P2P sync -- called once at
+     * startup from p2p_sync::advertise_self's Android arm, mirroring
+     * desktop's always-on mdns-sd registration. `deviceId`/`name`/`platform`
+     * become the service's TXT record; `port` is the same Rust TCP listener
+     * (p2p_sync::PORT) desktop peers connect to -- only discovery goes
+     * through Kotlin, the wire protocol itself doesn't. Registration
+     * failures (e.g. no active network) are swallowed here the same way
+     * desktop's ServiceDaemon::new() failure is: LAN sync becomes
+     * unavailable rather than crashing anything. */
+    @Command
+    fun registerP2pService(invoke: Invoke) {
+        val args = invoke.parseArgs(RegisterP2pServiceArgs::class.java)
+        val serviceInfo = NsdServiceInfo().apply {
+            serviceName = args.deviceId
+            serviceType = P2P_SERVICE_TYPE
+            port = args.port
+            setAttribute("device_id", args.deviceId)
+            setAttribute("name", args.name)
+            setAttribute("platform", args.platform)
+        }
+        // Logged (android.util.Log, not routed through Rust's log:: -- this
+        // fires from an NsdManager callback, not synchronously from the
+        // Invoke that dispatched registerService, so there's no live
+        // `invoke`/command context left to report through) since registration
+        // itself is async: registerService returning without an exception
+        // only means the request was dispatched, not that the OS actually
+        // registered it -- a silently-discarded callback result is exactly
+        // the class of bug CLAUDE.md's "Debugging from production logs"
+        // section calls out (log both the attempt and its outcome).
+        val listener = object : NsdManager.RegistrationListener {
+            override fun onServiceRegistered(info: NsdServiceInfo) {
+                Log.i("Reflectodoro/P2pSync", "NSD service registered: ${info.serviceName}")
+            }
+            override fun onRegistrationFailed(info: NsdServiceInfo, errorCode: Int) {
+                Log.e("Reflectodoro/P2pSync", "NSD registration failed for ${info.serviceName}, errorCode=$errorCode")
+            }
+            override fun onServiceUnregistered(info: NsdServiceInfo) {
+                Log.i("Reflectodoro/P2pSync", "NSD service unregistered: ${info.serviceName}")
+            }
+            override fun onUnregistrationFailed(info: NsdServiceInfo, errorCode: Int) {
+                Log.e("Reflectodoro/P2pSync", "NSD unregistration failed for ${info.serviceName}, errorCode=$errorCode")
+            }
+        }
+        try {
+            nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, listener)
+            nsdRegistrationListener = listener
+        } catch (e: Exception) {
+            // No network / NSD unavailable on this device -- same "log and
+            // carry on" tolerance as every other best-effort setup path.
+        }
+        invoke.resolve(JSObject())
+    }
+
+    /** Not currently called anywhere (this device's advertisement stays up
+     * for the process lifetime, same as desktop) -- kept for symmetry with
+     * registerP2pService/desktop's unused-but-available stop_browse path. */
+    @Command
+    fun unregisterP2pService(invoke: Invoke) {
+        nsdRegistrationListener?.let {
+            try {
+                nsdManager.unregisterService(it)
+            } catch (e: Exception) {
+                // Already unregistered/never succeeded -- nothing to clean up.
+            }
+            nsdRegistrationListener = null
+        }
+        invoke.resolve(JSObject())
+    }
+
+    /** Runs an NSD discovery burst for `timeoutMs`, resolving every
+     * `_reflectodoro._tcp` instance found (device_id/name/platform from its
+     * TXT record, host/port from resolution), and resolves with
+     * `{"devices": [...]}` -- the Android equivalent of desktop's short
+     * mdns-sd browse window (p2p_sync::browse_lan). Wrapped in an object
+     * rather than a bare array since Invoke.resolve() expects a JSObject;
+     * see android_bridge.rs's discover_p2p_services for the Rust side that
+     * unwraps this. */
+    @Command
+    fun discoverP2pServices(invoke: Invoke) {
+        val args = invoke.parseArgs(DiscoverP2pServicesArgs::class.java)
+        val results = java.util.Collections.synchronizedList(mutableListOf<JSObject>())
+
+        // NsdManager only allows one resolveService() in flight at a time
+        // (a second concurrent call fails with FAILURE_ALREADY_ACTIVE) --
+        // confirmed live on a real device: onServiceFound fires more than
+        // once for the very same instance (this device's own
+        // self-advertisement, and a peer on another interface), and firing
+        // resolveService for each concurrently produced exactly that
+        // failure before eventually succeeding on retry. Serialize through
+        // a small pending queue instead, and skip re-queuing a service name
+        // already resolved or in flight this discovery burst.
+        val resolveQueue = java.util.ArrayDeque<NsdServiceInfo>()
+        val seenServiceNames = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+        var resolving = false
+
+        fun resolveNext() {
+            synchronized(resolveQueue) {
+                if (resolving || resolveQueue.isEmpty()) return
+                resolving = true
+            }
+            val next = synchronized(resolveQueue) { resolveQueue.poll() } ?: run {
+                resolving = false
+                return
+            }
+            nsdManager.resolveService(next, object : NsdManager.ResolveListener {
+                override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+                    Log.e("Reflectodoro/P2pSync", "NSD resolve failed for ${info.serviceName}, errorCode=$errorCode")
+                    resolving = false
+                    resolveNext()
+                }
+                override fun onServiceResolved(info: NsdServiceInfo) {
+                    val attrs = info.attributes
+                    fun attr(key: String): String =
+                        attrs[key]?.let { String(it, Charsets.UTF_8) } ?: ""
+                    val entry = JSObject()
+                    entry.put("deviceId", attr("device_id"))
+                    entry.put("name", attr("name"))
+                    entry.put("platform", attr("platform"))
+                    entry.put("host", info.host?.hostAddress ?: "")
+                    entry.put("port", info.port)
+                    results.add(entry)
+                    Log.i("Reflectodoro/P2pSync", "NSD resolved: ${attr("name")} (${attr("device_id")}) at ${info.host?.hostAddress}:${info.port}")
+                    resolving = false
+                    resolveNext()
+                }
+            })
+        }
+
+        val discoveryListener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) {
+                Log.i("Reflectodoro/P2pSync", "NSD discovery started for $serviceType")
+            }
+            override fun onServiceFound(service: NsdServiceInfo) {
+                if (!seenServiceNames.add(service.serviceName)) return
+                synchronized(resolveQueue) { resolveQueue.add(service) }
+                resolveNext()
+            }
+            override fun onServiceLost(service: NsdServiceInfo) {}
+            override fun onDiscoveryStopped(serviceType: String) {}
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.e("Reflectodoro/P2pSync", "NSD discovery failed to start for $serviceType, errorCode=$errorCode")
+            }
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+        }
+
+        try {
+            nsdManager.discoverServices(P2P_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
+        } catch (e: Exception) {
+            Log.e("Reflectodoro/P2pSync", "NSD discoverServices threw", e)
+            invoke.resolve(JSObject().put("devices", JSArray()))
+            return
+        }
+
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                nsdManager.stopServiceDiscovery(discoveryListener)
+            } catch (e: Exception) {
+                // Already stopped, or never fully started -- fine either way.
+            }
+            val ret = JSObject()
+            ret.put("devices", JSArray(results.toList()))
+            invoke.resolve(ret)
+        }, args.timeoutMs)
     }
 }

@@ -33,6 +33,14 @@
          not granted; see triggerBreakScreen in NativeBridgePlugin.kt. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- P2P LAN device pairing/sync (p2p_sync.rs): NsdManager needs
+         ACCESS_WIFI_STATE to advertise/discover on mDNS at all, and
+         CHANGE_WIFI_MULTICAST_STATE for the multicast lock mDNS traffic
+         requires under Android's Wi-Fi power-saving behavior. See
+         NativeBridgePlugin.kt's registerP2pService/discoverP2pServices. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 

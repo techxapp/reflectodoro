@@ -184,8 +184,8 @@ export async function saveReflection(coveredSlots: string[], text: string): Prom
   const createdAt = new Date().toISOString();
   for (const slot of coveredSlots) {
     await db.execute(
-      `INSERT INTO reflection (created_at, slot_start_at, text) VALUES ($1, $2, $3)`,
-      [createdAt, slot, text],
+      `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
+      [createdAt, slot, text, createdAt],
     );
   }
 }
@@ -354,10 +354,17 @@ export function clusterReflectionRows(rows: ReflectionRow[]): ReflectionCluster[
  * that were saved together in the same saveReflection call -- keyed by id,
  * not created_at, so editing one slot never touches the others (and, per
  * clusterReflectionRows above, immediately splits it out of its display
- * cluster if the new text no longer matches). */
+ * cluster if the new text no longer matches). Also bumps updated_at -- the
+ * P2P sync delta cursor for this table (p2p_sync.rs); without it, an edit
+ * made after the original insert would never be picked up by a sync that
+ * only looks at rows changed since a device's last_sync_at. */
 export async function updateReflectionText(id: number, text: string): Promise<void> {
   const db = await getDb();
-  await db.execute(`UPDATE reflection SET text = $1 WHERE id = $2`, [text, id]);
+  await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE id = $3`, [
+    text,
+    new Date().toISOString(),
+    id,
+  ]);
 }
 
 // --- Bulk edit by time range (Entries page) ----------------------------
@@ -457,11 +464,17 @@ export async function bulkUpsertReflections(
       [slot],
     );
     if (existing.length > 0) {
-      await db.execute(`UPDATE reflection SET text = $1 WHERE slot_start_at = $2`, [trimmed, slot]);
+      // updated_at bump: see updateReflectionText's doc comment -- same P2P
+      // sync delta-cursor reasoning applies to this upsert's update branch.
+      await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE slot_start_at = $3`, [
+        trimmed,
+        createdAt,
+        slot,
+      ]);
     } else {
       await db.execute(
-        `INSERT INTO reflection (created_at, slot_start_at, text) VALUES ($1, $2, $3)`,
-        [createdAt, slot, trimmed],
+        `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
+        [createdAt, slot, trimmed, createdAt],
       );
     }
   }
@@ -1582,4 +1595,102 @@ export async function importData(
   await loadAndSyncMediaToggleGuard();
 
   return result;
+}
+
+// --- P2P LAN device pairing/sync (Settings > Data > Paired devices) -----
+//
+// Thin invoke() wrappers around p2p_sync.rs -- all the actual pairing/sync
+// logic (SPAKE2 handshake, Noise-encrypted transport, delta queries, merge)
+// lives in Rust; this module just gives the Settings UI typed calls. See
+// CLAUDE.md's "P2P LAN sync" section for the full design.
+
+export interface DiscoveredDevice {
+  deviceId: string;
+  name: string;
+  platform: string;
+}
+
+export interface PairedDeviceInfo {
+  deviceId: string;
+  name: string;
+  platform: string;
+  pairedAt: string;
+  lastSyncAt: string | null;
+  /** A fresh LAN-presence snapshot from the moment this was fetched, not a
+   * stored flag -- re-fetch (getPairedDevices/browseOnlinePairedDevices)
+   * rather than trusting a stale value. */
+  online: boolean;
+}
+
+export interface SyncResult {
+  /** Rows this device sent to the peer -- a single total across all five
+   * synced tables, not broken down. The fields below are the other
+   * direction (received from the peer and applied here); without this, a
+   * sync that only moved data outward reported "0 rows" even though it
+   * worked, since the count only ever reflected what came back. */
+  sentCount: number;
+  reflectionCount: number;
+  taskListCount: number;
+  notToDoListCount: number;
+  wellnessCheckCount: number;
+  screenTimeSessionCount: number;
+  mergedSlotCount: number;
+  screenTimeDuplicateCount: number;
+  wellnessCheckDuplicateCount: number;
+}
+
+/** Opens a ~60s pairing window on this device and returns the PIN to show
+ * the user -- they read it aloud/type it into the *other* device's "Enter
+ * PIN" step (confirmPairing). Starting a new session replaces any still-open
+ * previous one. */
+export async function startPairing(): Promise<string> {
+  return invoke<string>("start_pairing");
+}
+
+/** Closes an open pairing window early (e.g. the user backed out of the
+ * dialog before a PIN was entered anywhere). */
+export async function cancelPairing(): Promise<void> {
+  await invoke("cancel_pairing");
+}
+
+/** Devices currently advertising on the LAN that aren't already paired with
+ * this one -- what the "Pair a new device" flow's device picker lists. */
+export async function browsePairingCandidates(): Promise<DiscoveredDevice[]> {
+  return invoke<DiscoveredDevice[]>("browse_pairing_candidates");
+}
+
+/** Dials `deviceId` (from browsePairingCandidates) and runs the joiner side
+ * of the pairing handshake using the PIN shown on that device's own "Pair a
+ * new device" screen. Throws with a user-facing message on a wrong PIN or an
+ * unreachable/no-longer-pairing peer. */
+export async function confirmPairing(deviceId: string, pin: string): Promise<PairedDeviceInfo> {
+  return invoke<PairedDeviceInfo>("confirm_pairing", { deviceId, pin });
+}
+
+/** Every paired device, each with a fresh online/offline snapshot -- backs
+ * the Settings "Paired devices" list. */
+export async function getPairedDevices(): Promise<PairedDeviceInfo[]> {
+  return invoke<PairedDeviceInfo[]>("get_paired_devices");
+}
+
+/** Just the currently-online subset -- what the "Import from device"
+ * dropdown populates itself from. */
+export async function browseOnlinePairedDevices(): Promise<PairedDeviceInfo[]> {
+  return invoke<PairedDeviceInfo[]>("browse_online_paired_devices");
+}
+
+/** Removes a paired device (and its shared key) from this device. Does not
+ * affect the other device's own paired_device row -- forgetting is
+ * one-sided; re-pairing requires running the PIN flow again on both sides. */
+export async function forgetPairedDevice(deviceId: string): Promise<void> {
+  await invoke("forget_paired_device", { deviceId });
+}
+
+/** Runs a bidirectional delta sync with an already-paired, currently-online
+ * device: sends this device's changes since the pair's last successful sync
+ * and applies whatever the other device sends back, via the same merge
+ * logic as a manual file import ("merge" mode -- never "replace"). Settings
+ * (app_setting) are never part of the payload in either direction. */
+export async function syncWithDevice(deviceId: string): Promise<SyncResult> {
+  return invoke<SyncResult>("sync_with_device", { deviceId });
 }

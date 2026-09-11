@@ -177,12 +177,16 @@ pub async fn refresh_missed_slot_count(app: &AppHandle) {
 async fn save_reflection(pool: &SqlitePool, covered_slots: &[String], text: &str) {
     let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     for slot in covered_slots {
+        // updated_at = created_at on a fresh insert -- the P2P sync delta
+        // cursor (p2p_sync.rs) needs a non-null value from the start, same
+        // reasoning as db.ts's saveReflection.
         let _ = sqlx::query(
-            "INSERT INTO reflection (created_at, slot_start_at, text) VALUES (?, ?, ?)",
+            "INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES (?, ?, ?, ?)",
         )
         .bind(&created_at)
         .bind(slot)
         .bind(text)
+        .bind(&created_at)
         .execute(pool)
         .await;
     }

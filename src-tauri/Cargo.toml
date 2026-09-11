@@ -42,9 +42,20 @@ zip = { version = "4", default-features = false, features = ["deflate-flate2-zli
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
-tokio = { version = "1", features = ["time"] }
+# "net" backs p2p_sync.rs's direct TCP pairing/sync connections (raw
+# tokio::net::{TcpListener,TcpStream}, not a Tauri plugin -- see that file).
+tokio = { version = "1", features = ["time", "net"] }
 anyhow = "1"
 rand = "0.8"
+# p2p_sync.rs: turns the one-time pairing PIN into a strong shared key via a
+# password-authenticated key exchange, so a passive LAN eavesdropper on the
+# pairing handshake can't offline-brute-force the (short, human-typed) PIN --
+# see p2p_sync.rs's module doc comment for the full threat model.
+spake2 = "0.4"
+# p2p_sync.rs: Noise Protocol Framework, encrypts/authenticates every sync
+# session (not just pairing) using the shared key a device stored for that
+# peer at pairing time.
+snow = "0.9"
 # A second, direct connection to the same pomodoro.db tauri-plugin-sql
 # already manages, opened via db::open_direct_pool -- needed wherever a
 # write must be genuinely atomic (import.rs's transactional import/merge) or
@@ -64,6 +75,13 @@ tauri-plugin-process = "2"
 # entry racing a still-running instance -- focuses the existing window
 # instead of spawning a second Tauri/WebView runtime.
 tauri-plugin-single-instance = "2"
+# p2p_sync.rs: LAN service advertise/browse. Desktop only -- Android has no
+# portable Rust mDNS and instead goes through NsdManager via
+# android_bridge.rs/NativeBridgePlugin.kt, same split as every other
+# Android-only capability here. The TCP pairing/sync connection itself
+# (tokio::net) and the pairing/transport crypto (spake2/snow, base
+# [dependencies] above) are NOT platform-gated -- only discovery is.
+mdns-sd = "0.11"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

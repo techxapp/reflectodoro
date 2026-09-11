@@ -11,6 +11,7 @@ mod macos_overlay;
 mod media;
 mod native_overlay;
 mod overlay;
+mod p2p_sync;
 mod screen_time;
 mod state;
 
@@ -528,6 +529,7 @@ pub fn run() {
 
     builder = builder
         .manage(AppState::new(dev_mode))
+        .manage(p2p_sync::P2pState::new())
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_sql::Builder::default()
@@ -637,6 +639,14 @@ pub fn run() {
             import::import_data,
             log_export::export_last_log_file,
             log_export::export_log_archive,
+            p2p_sync::start_pairing,
+            p2p_sync::cancel_pairing,
+            p2p_sync::browse_pairing_candidates,
+            p2p_sync::confirm_pairing,
+            p2p_sync::get_paired_devices,
+            p2p_sync::browse_online_paired_devices,
+            p2p_sync::forget_paired_device,
+            p2p_sync::sync_with_device,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -708,6 +718,18 @@ pub fn run() {
             screen_time::start_tracking(&handle);
             let screen_time_handle = handle.clone();
             tauri::async_runtime::spawn(screen_time::run_flush_loop(screen_time_handle));
+
+            // P2P LAN device pairing/sync (Settings -> "Paired devices" /
+            // "Import from device"): one always-on TCP listener (accepts
+            // both pairing and sync connections, see p2p_sync.rs) plus LAN
+            // advertisement so other paired/pairing devices can find this
+            // one. Both are best-effort background setup, like the pieces
+            // above -- a failure here (e.g. the port is already in use, or
+            // this device has no usable network interface) logs and leaves
+            // the rest of the app unaffected.
+            let p2p_listener_handle = handle.clone();
+            tauri::async_runtime::spawn(p2p_sync::run_listener(p2p_listener_handle));
+            p2p_sync::advertise_self(&handle);
 
             Ok(())
         })

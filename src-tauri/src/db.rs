@@ -362,6 +362,48 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 18,
+            // Backs P2P LAN device pairing/sync (p2p_sync.rs). device_id is
+            // the peer's stable self-identity (see
+            // p2p_sync::get_or_create_device_id) -- not a local autoincrement
+            // id, since it must stay the same across reconnects/IP changes
+            // and be exchanged during pairing. shared_key is the hex-encoded
+            // symmetric key the SPAKE2 pairing handshake derived -- never the
+            // PIN itself (see p2p_sync.rs's module doc comment for why).
+            // last_sync_at is the delta-sync cursor for this specific peer;
+            // NULL means "never synced, send everything".
+            description: "create paired_device table",
+            sql: r#"
+                CREATE TABLE paired_device (
+                    device_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    shared_key TEXT NOT NULL,
+                    paired_at TEXT NOT NULL,
+                    last_sync_at TEXT
+                );
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 19,
+            // Delta-sync cursor for reflection (p2p_sync.rs): unlike
+            // daily_task_list/not_to_do_list (already have updated_at) or
+            // screen_time_session/wellness_check (append-only, created_at/
+            // started_at already work as a cursor), reflection.text can be
+            // edited in place after insert (updateReflectionText,
+            // bulkUpsertReflections in db.ts) with nothing recording *when*.
+            // Without this, a delta sync keyed on created_at would miss a
+            // post-insert edit entirely. Backfilled from created_at so every
+            // existing row already has a usable value.
+            description: "add updated_at to reflection",
+            sql: r#"
+                ALTER TABLE reflection ADD COLUMN updated_at TEXT;
+                UPDATE reflection SET updated_at = created_at WHERE updated_at IS NULL;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

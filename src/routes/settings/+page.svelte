@@ -32,8 +32,18 @@
     saveScreenTimeAppThresholdMinutes,
     getDeviceName,
     saveDeviceName,
+    startPairing,
+    cancelPairing,
+    browsePairingCandidates,
+    confirmPairing,
+    getPairedDevices,
+    browseOnlinePairedDevices,
+    forgetPairedDevice,
+    syncWithDevice,
     type BreakitSettings,
     type ImportMode,
+    type DiscoveredDevice,
+    type PairedDeviceInfo,
   } from "$lib/db";
 
   let length = $state(15);
@@ -109,6 +119,155 @@
   let importBusy = $state(false);
   let importStatus = $state<"idle" | "success" | "error">("idle");
   let importMessage = $state("");
+
+  // --- P2P LAN device pairing/sync ---------------------------------------
+
+  let pairedDevices = $state<PairedDeviceInfo[]>([]);
+  let pairedDevicesLoaded = $state(false);
+  let pairedDevicesBusy = $state(false);
+
+  let pairingOpen = $state(false);
+  let hostPin = $state<string | null>(null);
+  let hostPinBusy = $state(false);
+
+  let pairingCandidates = $state<DiscoveredDevice[]>([]);
+  let candidatesBusy = $state(false);
+  let selectedCandidateId = $state("");
+  let joinPin = $state("");
+  let joinBusy = $state(false);
+  let joinError = $state("");
+
+  let syncDeviceId = $state("");
+  let syncBusy = $state(false);
+  let syncStatus = $state<"idle" | "success" | "error">("idle");
+  let syncMessage = $state("");
+
+  async function loadPairedDevices() {
+    pairedDevicesBusy = true;
+    try {
+      pairedDevices = await getPairedDevices();
+    } catch {
+      // Best-effort: LAN discovery being unavailable (no network interface,
+      // mDNS daemon failed to start on this device) shouldn't blank out the
+      // paired-device list itself, just leave the previous snapshot in place.
+    } finally {
+      pairedDevicesBusy = false;
+      pairedDevicesLoaded = true;
+    }
+  }
+
+  onMount(loadPairedDevices);
+
+  async function togglePairingPanel() {
+    pairingOpen = !pairingOpen;
+    if (!pairingOpen) {
+      if (hostPin) await cancelPairing().catch(() => {});
+      hostPin = null;
+      pairingCandidates = [];
+      selectedCandidateId = "";
+      joinPin = "";
+      joinError = "";
+    } else {
+      await refreshPairingCandidates();
+    }
+  }
+
+  async function showPairingPin() {
+    hostPinBusy = true;
+    try {
+      hostPin = await startPairing();
+    } catch (e) {
+      joinError = e instanceof Error ? e.message : String(e);
+    } finally {
+      hostPinBusy = false;
+    }
+  }
+
+  async function refreshPairingCandidates() {
+    candidatesBusy = true;
+    try {
+      pairingCandidates = await browsePairingCandidates();
+    } catch {
+      pairingCandidates = [];
+    } finally {
+      candidatesBusy = false;
+    }
+  }
+
+  async function submitJoinPairing(e: Event) {
+    e.preventDefault();
+    if (!selectedCandidateId || !joinPin.trim()) return;
+    joinBusy = true;
+    joinError = "";
+    try {
+      await confirmPairing(selectedCandidateId, joinPin.trim());
+      selectedCandidateId = "";
+      joinPin = "";
+      pairingOpen = false;
+      hostPin = null;
+      await loadPairedDevices();
+    } catch (e) {
+      joinError = e instanceof Error ? e.message : String(e);
+    } finally {
+      joinBusy = false;
+    }
+  }
+
+  async function removePairedDevice(device: PairedDeviceInfo) {
+    if (!confirm(`Forget "${device.name}"? You'll need to pair again (a new PIN exchange) to sync with it.`)) return;
+    await forgetPairedDevice(device.deviceId);
+    if (syncDeviceId === device.deviceId) syncDeviceId = "";
+    await loadPairedDevices();
+  }
+
+  async function refreshOnlineDevices() {
+    pairedDevicesBusy = true;
+    try {
+      const online = await browseOnlinePairedDevices();
+      const onlineIds = new Set(online.map((d) => d.deviceId));
+      pairedDevices = pairedDevices.map((d) => ({ ...d, online: onlineIds.has(d.deviceId) }));
+    } catch {
+      // leave the existing snapshot as-is
+    } finally {
+      pairedDevicesBusy = false;
+    }
+  }
+
+  function formatLastSync(iso: string | null): string {
+    if (!iso) return "Never";
+    return new Date(iso).toLocaleString();
+  }
+
+  async function runDeviceSync() {
+    if (!syncDeviceId) return;
+    syncBusy = true;
+    syncStatus = "idle";
+    try {
+      const result = await syncWithDevice(syncDeviceId);
+      const receivedTotal =
+        result.reflectionCount +
+        result.taskListCount +
+        result.notToDoListCount +
+        result.wellnessCheckCount +
+        result.screenTimeSessionCount;
+      const mergedClause =
+        result.mergedSlotCount > 0
+          ? ` ${result.mergedSlotCount} reflection slot${result.mergedSlotCount === 1 ? "" : "s"} merged with existing entries.`
+          : "";
+      // Reports both directions explicitly -- a sync that only moved data
+      // outward (this device had a new change, the peer had nothing new to
+      // send back) has receivedTotal = 0, which used to read as "nothing
+      // happened" even though the change was sent and applied on the peer.
+      syncMessage = `Sent ${result.sentCount} row${result.sentCount === 1 ? "" : "s"}, received ${receivedTotal} row${receivedTotal === 1 ? "" : "s"} with the selected device.${mergedClause}`;
+      syncStatus = "success";
+      await loadPairedDevices();
+    } catch (e) {
+      syncMessage = e instanceof Error ? e.message : String(e);
+      syncStatus = "error";
+    } finally {
+      syncBusy = false;
+    }
+  }
 
   async function loadBreakitSettings() {
     const settings: BreakitSettings = await getBreakitSettings();
@@ -827,6 +986,114 @@
       <p class="hint error">{importMessage}</p>
     {/if}
   </section>
+
+  <section class="card">
+    <h2>Paired devices</h2>
+    <p class="hint">
+      Sync reflections, task lists, wellness check-ins, and screen time directly with another
+      device on the same wifi network &mdash; no account, no cloud. Settings are never included.
+    </p>
+
+    {#if pairedDevicesLoaded && pairedDevices.length > 0}
+      <ul class="paired-device-list">
+        {#each pairedDevices as device (device.deviceId)}
+          <li>
+            <span class="paired-device-status" class:online={device.online} title={device.online ? "Online" : "Offline"}
+            ></span>
+            <span class="paired-device-name">{device.name || device.deviceId} <span class="hint">({device.platform})</span></span>
+            <span class="hint">Last synced: {formatLastSync(device.lastSyncAt)}</span>
+            <button type="button" class="danger" onclick={() => removePairedDevice(device)}>Forget</button>
+          </li>
+        {/each}
+      </ul>
+    {:else if pairedDevicesLoaded}
+      <p class="hint">No paired devices yet.</p>
+    {/if}
+
+    <div class="data-row">
+      <button type="button" onclick={refreshOnlineDevices} disabled={pairedDevicesBusy}>Refresh</button>
+      <button type="button" onclick={togglePairingPanel}>
+        {pairingOpen ? "Cancel pairing" : "Pair a new device…"}
+      </button>
+    </div>
+
+    {#if pairingOpen}
+      <div class="pairing-panel">
+        <div class="pairing-column">
+          <h3>Show a PIN on this device</h3>
+          <p class="hint">
+            Read this PIN to whoever is pairing from the other device and have them enter it there.
+          </p>
+          {#if hostPin}
+            <p class="pairing-pin">{hostPin}</p>
+            <p class="hint">Waiting for the other device to enter this PIN&hellip; (expires in about a minute)</p>
+          {:else}
+            <button type="button" onclick={showPairingPin} disabled={hostPinBusy}>Show PIN</button>
+          {/if}
+        </div>
+
+        <div class="pairing-column">
+          <h3>Enter a PIN from another device</h3>
+          <p class="hint">Pick the device that's showing a PIN, then type it in here.</p>
+          <div class="data-row">
+            <button type="button" onclick={refreshPairingCandidates} disabled={candidatesBusy}>
+              {candidatesBusy ? "Searching…" : "Search again"}
+            </button>
+          </div>
+          {#if pairingCandidates.length === 0}
+            <p class="hint">{candidatesBusy ? "Searching the local network…" : "No unpaired devices found nearby."}</p>
+          {:else}
+            <form onsubmit={submitJoinPairing}>
+              <label class="grow">
+                Device
+                <select bind:value={selectedCandidateId}>
+                  <option value="" disabled>Select a device&hellip;</option>
+                  {#each pairingCandidates as candidate (candidate.deviceId)}
+                    <option value={candidate.deviceId}>{candidate.name || candidate.deviceId} ({candidate.platform})</option>
+                  {/each}
+                </select>
+              </label>
+              <label>
+                PIN
+                <input type="text" inputmode="numeric" maxlength="6" bind:value={joinPin} placeholder="123456" />
+              </label>
+              <button type="submit" disabled={joinBusy || !selectedCandidateId || !joinPin.trim()}>
+                {joinBusy ? "Pairing…" : "Pair"}
+              </button>
+            </form>
+          {/if}
+          {#if joinError}
+            <p class="hint error">{joinError}</p>
+          {/if}
+        </div>
+      </div>
+    {/if}
+
+    <h3>Import from device</h3>
+    <p class="hint">
+      Pull the selected device's changes and send yours back in one step &mdash; only devices
+      currently online show up below.
+    </p>
+    <div class="data-row">
+      <label class="grow">
+        Device
+        <select bind:value={syncDeviceId}>
+          <option value="">Select a device&hellip;</option>
+          {#each pairedDevices.filter((d) => d.online) as device (device.deviceId)}
+            <option value={device.deviceId}>{device.name || device.deviceId} ({device.platform})</option>
+          {/each}
+        </select>
+      </label>
+      <button type="button" onclick={runDeviceSync} disabled={syncBusy || !syncDeviceId}>
+        {syncBusy ? "Syncing…" : "Sync"}
+      </button>
+    </div>
+    {#if syncStatus === "success"}
+      <p class="hint saved">{syncMessage}</p>
+    {:else if syncStatus === "error"}
+      <p class="hint error">{syncMessage}</p>
+    {/if}
+  </section>
 </div>
 
 <style>
@@ -1017,5 +1284,82 @@
 
   button.danger {
     background: #d9534f;
+  }
+
+  h3 {
+    margin: 20px 0 8px;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  select {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: inherit;
+    padding: 8px 10px;
+    font-size: 14px;
+    width: 100%;
+  }
+
+  .paired-device-list {
+    list-style: none;
+    margin: 12px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .paired-device-list li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .paired-device-status {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+
+  .paired-device-status.online {
+    background: #3a9d5d;
+  }
+
+  .paired-device-name {
+    font-size: 14px;
+    flex: 1;
+    min-width: 120px;
+  }
+
+  .pairing-panel {
+    margin-top: 16px;
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+
+  .pairing-column {
+    flex: 1;
+    min-width: 220px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+
+  .pairing-column h3 {
+    margin-top: 0;
+  }
+
+  .pairing-pin {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 4px;
+    margin: 8px 0;
   }
 </style>
