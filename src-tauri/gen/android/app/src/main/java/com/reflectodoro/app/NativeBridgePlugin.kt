@@ -100,6 +100,28 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(ret)
     }
 
+    /** Android's equivalent of commands::get_hostname's Windows/Linux paths
+     * (COMPUTERNAME / /proc/sys/kernel/hostname) -- there's no traditional
+     * hostname on Android, but Settings.Global.DEVICE_NAME is the same
+     * user-assigned name shown in the system Bluetooth/Wi-Fi UI (e.g.
+     * "Priya's Phone"), which is the closest equivalent and, being
+     * user-chosen, more useful than a raw model string. Falls back to
+     * Build.MODEL (e.g. "YAL-AL00") when that setting is unset -- reading
+     * Settings.Global needs no special permission, only writing does. Called
+     * from commands::get_hostname's Android arm; see ensureDeviceName in
+     * db.ts for why a real value here matters (it's what P2P sync shows for
+     * this device on a peer's "Paired devices" list, see p2p_sync.rs). */
+    @Command
+    fun getDeviceName(invoke: Invoke) {
+        val name = Settings.Global.getString(activity.contentResolver, Settings.Global.DEVICE_NAME)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: Build.MODEL
+        val ret = JSObject()
+        ret.put("value", name)
+        invoke.resolve(ret)
+    }
+
     /** Called from every iteration of Rust's run_scheduler loop (which is
      * capped to run at least every ANDROID_POLL_INTERVAL, 20s, regardless of
      * phase -- see lib.rs). Lets MainActivity.isSchedulerAlive() tell "the

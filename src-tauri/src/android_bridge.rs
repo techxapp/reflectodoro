@@ -23,6 +23,13 @@ impl<R: Runtime> AndroidBridge<R> {
         self.0.run_mobile_plugin("ping", ())
     }
 
+    /// `Settings.Global.DEVICE_NAME` (falling back to `Build.MODEL`) --
+    /// Android's equivalent of `commands::get_hostname`'s Windows/Linux
+    /// paths, called from that command's Android arm.
+    pub fn get_device_name(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("getDeviceName", ())
+    }
+
     /// Starts (or refreshes) `BreakSchedulerService`, which just raises
     /// this process's priority and arms the `AlarmManager` backup -- it
     /// never independently decides phase transitions; `run_scheduler` in

@@ -47,15 +47,21 @@
 //!   apply the payload they receive via `import.rs`'s existing merge
 //!   functions, always in `ImportMode::Merge`.
 //!
-//! ## Not yet verified on real hardware
+//! ## Verified live on one real device pair
 //!
-//! This module was written and `cargo check`-verified against the host
-//! toolchain, but the actual two-device LAN handshake (mDNS resolution
-//! across real network interfaces, NAT/firewall behavior, the Android NSD
-//! bridge in particular) has not been exercised on physical devices -- same
-//! category of gap CLAUDE.md already flags for other cross-device Android
-//! behavior ("worth verifying on-device"). Treat this as a first pass that
-//! needs a real two-machine pairing+sync test before shipping.
+//! Pairing and bidirectional sync both completed successfully between a
+//! Windows desktop and an Android phone on the same wifi network. That
+//! testing is also what surfaced (and got fixes for) several bugs no unit
+//! test would have caught: `run_listener` binding only IPv4 while a peer's
+//! mDNS resolution could come back with a public IPv6 address instead
+//! (fixed by binding both families); two separate cold-start races where
+//! `advertise_self` read `device_id`/`device_name` before the database or
+//! the frontend's `ensureDeviceName()` had populated them (see
+//! `get_or_create_device_id_after_db_ready` and `resync_advertised_name`);
+//! and `SyncResult` only ever reporting rows *received*, so a sync that
+//! only moved data outward read as "0 rows" even though it worked. Not yet
+//! verified: macOS/Linux as either side of a pair, or more than two
+//! devices.
 
 use std::net::SocketAddr;
 use std::sync::Mutex;
@@ -378,6 +384,19 @@ async fn recv_encrypted_json<T: DeserializeOwned, S: AsyncReadExt + Unpin>(
 
 // --- LAN discovery (desktop: mdns-sd; Android: NsdManager via the bridge) --
 
+/// Spawns advertising (or re-advertising) as a background task. Called from
+/// `.setup()` at startup, and again via `resync_advertised_name` whenever
+/// the frontend learns a real `device_name` -- either late, on cold start
+/// (`ensureDeviceName` in db.ts runs async after the webview boots, which
+/// can easily lose the race against this synchronous-from-setup() call --
+/// same class of cold-start race as `get_or_create_device_id_after_db_ready`
+/// above, confirmed live: a fresh Android install advertised with a blank
+/// name because `get_device_name` read `app_setting.device_name` before
+/// `ensureDeviceName` had written anything to it), or later, whenever the
+/// user renames this device in Settings. Both platform variants
+/// unregister any previous registration before registering fresh, making
+/// repeat calls idempotent rather than erroring or leaving stale
+/// duplicate entries.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn advertise_self(app: &AppHandle) {
     let app = app.clone();
@@ -398,6 +417,12 @@ pub fn advertise_self(app: &AppHandle) {
         };
 
         let host_name = format!("{device_id}.local.");
+        // Fullname is deterministic (device_id never changes), so this can
+        // be reconstructed rather than needing to track the prior
+        // ServiceInfo -- errors here (nothing registered yet, the common
+        // first-call case) are expected and harmless.
+        let _ = mdns.unregister(&format!("{device_id}.{SERVICE_TYPE}"));
+
         let props: Vec<(&str, &str)> = vec![("device_id", device_id.as_str()), ("name", name.as_str()), ("platform", platform.as_str())];
         let info = match ServiceInfo::new(SERVICE_TYPE, &device_id, &host_name, "", PORT, &props[..]) {
             Ok(i) => i.enable_addr_auto(),
@@ -426,11 +451,27 @@ pub fn advertise_self(app: &AppHandle) {
         };
         let name = get_device_name(&app).await;
         let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+        // Harmless no-op on the common first-call case (nothing registered
+        // yet) -- see this function's doc comment on the desktop variant.
+        if let Err(e) = bridge.unregister_p2p_service() {
+            log::warn!("p2p_sync: NSD unregister-before-reregister failed (fine on first call): {e:?}");
+        }
         match bridge.register_p2p_service(&device_id, &name, &platform_str(), PORT) {
             Ok(_) => log::info!("p2p_sync: NSD registration dispatched for {device_id} ({name})"),
             Err(e) => log::error!("p2p_sync: NSD registration failed: {e:?}"),
         }
     });
+}
+
+/// Called from the frontend once it knows the real `device_name` -- after
+/// `ensureDeviceName()` resolves on boot, and after Settings saves a
+/// user-edited device name -- so a peer's "Paired devices" list doesn't keep
+/// showing a stale or blank name until this device's next restart. See
+/// `advertise_self`'s doc comment for why the first advertisement so
+/// commonly races an as-yet-unknown name.
+#[tauri::command]
+pub fn resync_advertised_name(app: AppHandle) {
+    advertise_self(&app);
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

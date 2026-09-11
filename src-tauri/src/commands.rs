@@ -399,6 +399,7 @@ pub struct CurrentSessionSnapshot {
 /// Returns "" where that isn't available -- an empty device name is a
 /// perfectly fine state (the Entries breakdown just doesn't show a device
 /// label), and the Settings field lets the user type one in.
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub fn get_hostname() -> String {
     #[cfg(windows)]
@@ -414,6 +415,26 @@ pub fn get_hostname() -> String {
     #[cfg(not(any(windows, target_os = "linux")))]
     {
         std::env::var("HOSTNAME").unwrap_or_default()
+    }
+}
+
+/// Android has no traditional hostname -- `Settings.Global.DEVICE_NAME`
+/// (falling back to `Build.MODEL`) is the closest equivalent, read via
+/// `NativeBridgePlugin.kt::getDeviceName`. Previously always returned ""
+/// here (no Android arm existed at all), which meant device_name stayed
+/// empty forever on Android -- see p2p_sync.rs's "P2P LAN sync" section in
+/// CLAUDE.md for where a blank device_name actually showed up (the paired
+/// devices list falling back to a raw device_id).
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn get_hostname(app: AppHandle) -> String {
+    let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+    match bridge.get_device_name() {
+        Ok(v) => v.get("value").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+        Err(e) => {
+            log::error!("get_hostname (Android) failed: {e:?}");
+            String::new()
+        }
     }
 }
 

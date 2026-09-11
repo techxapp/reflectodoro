@@ -214,7 +214,8 @@
   }
 
   async function removePairedDevice(device: PairedDeviceInfo) {
-    if (!confirm(`Forget "${device.name}"? You'll need to pair again (a new PIN exchange) to sync with it.`)) return;
+    if (!confirm(`Forget "${deviceLabel(device.name, device.deviceId)}"? You'll need to pair again (a new PIN exchange) to sync with it.`))
+      return;
     await forgetPairedDevice(device.deviceId);
     if (syncDeviceId === device.deviceId) syncDeviceId = "";
     await loadPairedDevices();
@@ -236,6 +237,16 @@
   function formatLastSync(iso: string | null): string {
     if (!iso) return "Never";
     return new Date(iso).toLocaleString();
+  }
+
+  /** Label for a paired/candidate device when it has no device_name set --
+   * most commonly Android, where hostname resolution isn't implemented yet
+   * (get_hostname returns "" there), so device_name is empty by default.
+   * Falling back to the raw 32-character device_id broke this page's
+   * layout; an 8-character prefix is still enough to tell two blank-named
+   * devices apart without it. */
+  function deviceLabel(name: string, deviceId: string): string {
+    return name || deviceId.slice(0, 8);
   }
 
   async function runDeviceSync() {
@@ -1000,7 +1011,7 @@
           <li>
             <span class="paired-device-status" class:online={device.online} title={device.online ? "Online" : "Offline"}
             ></span>
-            <span class="paired-device-name">{device.name || device.deviceId} <span class="hint">({device.platform})</span></span>
+            <span class="paired-device-name">{deviceLabel(device.name, device.deviceId)} <span class="hint">({device.platform})</span></span>
             <span class="hint">Last synced: {formatLastSync(device.lastSyncAt)}</span>
             <button type="button" class="danger" onclick={() => removePairedDevice(device)}>Forget</button>
           </li>
@@ -1049,7 +1060,7 @@
                 <select bind:value={selectedCandidateId}>
                   <option value="" disabled>Select a device&hellip;</option>
                   {#each pairingCandidates as candidate (candidate.deviceId)}
-                    <option value={candidate.deviceId}>{candidate.name || candidate.deviceId} ({candidate.platform})</option>
+                    <option value={candidate.deviceId}>{deviceLabel(candidate.name, candidate.deviceId)} ({candidate.platform})</option>
                   {/each}
                 </select>
               </label>
@@ -1069,7 +1080,7 @@
       </div>
     {/if}
 
-    <h3>Import from device</h3>
+    <h3>Sync devices</h3>
     <p class="hint">
       Pull the selected device's changes and send yours back in one step &mdash; only devices
       currently online show up below.
@@ -1080,7 +1091,7 @@
         <select bind:value={syncDeviceId}>
           <option value="">Select a device&hellip;</option>
           {#each pairedDevices.filter((d) => d.online) as device (device.deviceId)}
-            <option value={device.deviceId}>{device.name || device.deviceId} ({device.platform})</option>
+            <option value={device.deviceId}>{deviceLabel(device.name, device.deviceId)} ({device.platform})</option>
           {/each}
         </select>
       </label>

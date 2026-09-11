@@ -960,6 +960,13 @@ export async function saveDeviceName(name: string): Promise<void> {
     [DEVICE_NAME_KEY, name],
   );
   cachedDeviceName = name;
+  // Re-registers the P2P LAN advertisement with the new name (see
+  // p2p_sync.rs's resync_advertised_name/advertise_self doc comments) --
+  // covers both call sites through this one function: ensureDeviceName's
+  // cold-start auto-seed (which otherwise loses the race against the app's
+  // very first advertisement, confirmed live) and Settings' manual rename
+  // (which otherwise wouldn't take effect on peers until this app restarts).
+  await invoke("resync_advertised_name").catch(() => {});
 }
 
 /** Seeds the device name from the OS hostname the first time, and only then --

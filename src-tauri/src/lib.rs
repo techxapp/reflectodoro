@@ -647,6 +647,7 @@ pub fn run() {
             p2p_sync::browse_online_paired_devices,
             p2p_sync::forget_paired_device,
             p2p_sync::sync_with_device,
+            p2p_sync::resync_advertised_name,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
