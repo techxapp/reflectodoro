@@ -1,6 +1,35 @@
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 pub const DB_URL: &str = "sqlite:pomodoro.db";
+
+/// Opens a fresh, direct `sqlx` connection to the same `pomodoro.db`
+/// tauri-plugin-sql manages -- that plugin's own connection pool isn't part
+/// of its public API (confirmed against its source: `execute` calls
+/// `pool.execute(query)` per invocation with no connection pinned across
+/// calls, so manual `BEGIN`/`COMMIT` sent as separate plugin `execute()`
+/// calls is not reliably atomic). `native_overlay.rs` (Android-only)
+/// establishes this same "second direct connection" pattern already, but
+/// caches its pool for the process lifetime via a `OnceCell` since it's
+/// called on every reflection/breakit submit from the native overlay. This
+/// helper deliberately does NOT cache -- it backs `import::import_data`,
+/// a rare, user-triggered action (Settings -> Data import), so a fresh
+/// pool opened and dropped per call is simpler and avoids holding a second
+/// long-lived connection open for the whole app lifetime on every platform.
+pub async fn open_direct_pool(app: &AppHandle) -> Result<SqlitePool, String> {
+    let app_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("no app config dir: {e}"))?;
+    std::fs::create_dir_all(&app_dir).map_err(|e| format!("couldn't create app config dir: {e}"))?;
+    let db_path = app_dir.join(DB_URL.trim_start_matches("sqlite:"));
+    let db_path_str = db_path.to_str().ok_or_else(|| "non-utf8 db path".to_string())?;
+    SqlitePoolOptions::new()
+        .connect(&format!("sqlite:{db_path_str}"))
+        .await
+        .map_err(|e| format!("failed to open database connection: {e}"))
+}
 
 pub fn migrations() -> Vec<Migration> {
     vec![
@@ -256,5 +285,195 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 16,
+            // Backs import.rs's merge-mode dedupe: a Settings -> Data merge
+            // import skips a screen_time_session row if one with the same
+            // (app_id, platform, device_name, started_at, ended_at) already
+            // exists (an INSERT ... WHERE NOT EXISTS per row), so re-importing
+            // the same export twice no longer duplicates every session. This
+            // index is what keeps that per-row NOT EXISTS check fast on a
+            // table documented (see CLAUDE.md) as likely to become the
+            // largest by row count.
+            //
+            // Deliberately NOT UNIQUE: a genuine duplicate could already
+            // exist in an existing db from a double-import before this fix
+            // shipped, and a UNIQUE index would abort this migration (and
+            // every migration after it) on any such db. This index only
+            // speeds up the lookup; import.rs's own INSERT ... WHERE NOT
+            // EXISTS is what actually enforces the dedupe, and only during
+            // import -- the normal screen_time.rs capture path is unaffected.
+            description: "add non-unique dedupe index to screen_time_session",
+            sql: r#"
+                CREATE INDEX idx_screen_time_session_dedupe
+                    ON screen_time_session(app_id, platform, device_name, started_at, ended_at);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 17,
+            // Replaces wellness_check.reflection_id with slot_start_at, so
+            // wellness_check keys off the same natural identity every other
+            // table here uses (reflection/daily_task_list/not_to_do_list/
+            // screen_time_session all key off a real-world identity, not a
+            // surrogate FK) -- and so import.rs's merge-mode dedupe can key
+            // on it directly instead of remapping reflection_id through
+            // idMap on every import (see import.rs's import_wellness_checks).
+            //
+            // Not a plain `ALTER TABLE ... DROP COLUMN reflection_id`: SQLite
+            // refuses to drop a column that's part of a FOREIGN KEY
+            // constraint (reflection_id is declared
+            // `REFERENCES reflection(id)`), so this uses SQLite's standard
+            // rebuild-the-table procedure instead -- create the final shape,
+            // copy data across (resolving each row's slot_start_at from its
+            // current reflection_id), drop the old table, rename the new one
+            // into place.
+            //
+            // COALESCE(..., '') guards a theoretical orphaned row (a
+            // reflection_id that no longer resolves to any reflection row):
+            // without it a NULL would violate the new column's NOT NULL and
+            // abort this whole migration -- and every migration after it --
+            // on that db. Explicit `id` values in the INSERT keep the
+            // AUTOINCREMENT sequence continuous after the rename (SQLite
+            // tracks the max rowid ever used regardless of whether it was
+            // assigned explicitly or automatically).
+            description: "replace wellness_check.reflection_id with slot_start_at",
+            sql: r#"
+                CREATE TABLE wellness_check_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    slot_start_at TEXT NOT NULL DEFAULT '',
+                    relaxed_eyes INTEGER NOT NULL DEFAULT 1,
+                    exercise INTEGER NOT NULL DEFAULT 1,
+                    drank_water INTEGER NOT NULL DEFAULT 1,
+                    washroom INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+
+                INSERT INTO wellness_check_new (id, slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at)
+                SELECT wc.id,
+                       COALESCE((SELECT r.slot_start_at FROM reflection r WHERE r.id = wc.reflection_id), ''),
+                       wc.relaxed_eyes, wc.exercise, wc.drank_water, wc.washroom, wc.created_at
+                FROM wellness_check wc;
+
+                DROP TABLE wellness_check;
+                ALTER TABLE wellness_check_new RENAME TO wellness_check;
+
+                CREATE INDEX idx_wellness_check_slot_start_at ON wellness_check(slot_start_at);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::Row;
+
+    fn migration_sql(version: i64) -> String {
+        migrations().into_iter().find(|m| m.version == version).unwrap().sql.to_string()
+    }
+
+    /// Runs migration 17's actual SQL (not a re-implementation of it) against
+    /// an in-memory db seeded with the pre-migration schema and real rows --
+    /// including a deliberately orphaned `reflection_id` -- to confirm the
+    /// rebuild-the-table approach (required because SQLite refuses to
+    /// `DROP COLUMN` a column that's part of a FOREIGN KEY constraint)
+    /// actually backfills `slot_start_at` correctly, drops `reflection_id`,
+    /// and doesn't abort on the orphaned row.
+    #[tokio::test]
+    async fn migration_17_backfills_slot_start_at_and_drops_reflection_id() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        // sqlx enables `foreign_keys` enforcement by default, which would
+        // otherwise refuse the deliberately-orphaned insert below outright --
+        // meaning a real orphan likely can't arise through this app's own
+        // inserts today. Disabled here only to construct that scenario
+        // anyway (an old pre-enforcement release, or manual db editing,
+        // could still produce one) and confirm the migration's defensive
+        // COALESCE actually holds up against it.
+        sqlx::query("PRAGMA foreign_keys = OFF").execute(&pool).await.unwrap();
+
+        // Pre-migration-17 schema (migrations 1 + 2).
+        sqlx::query(
+            "CREATE TABLE reflection (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                slot_start_at TEXT NOT NULL,
+                text TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE wellness_check (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reflection_id INTEGER NOT NULL REFERENCES reflection(id),
+                relaxed_eyes INTEGER NOT NULL DEFAULT 1,
+                exercise INTEGER NOT NULL DEFAULT 1,
+                drank_water INTEGER NOT NULL DEFAULT 1,
+                washroom INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("CREATE INDEX idx_wellness_check_reflection_id ON wellness_check(reflection_id)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "INSERT INTO reflection (id, created_at, slot_start_at, text)
+             VALUES (1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'Did yoga')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Normal row -- resolves via reflection_id.
+        sqlx::query(
+            "INSERT INTO wellness_check (id, reflection_id, created_at)
+             VALUES (10, 1, '2026-01-01T00:05:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Deliberately orphaned -- reflection_id 999 doesn't exist. Must not
+        // abort the migration; must backfill to '' via the COALESCE.
+        sqlx::query(
+            "INSERT INTO wellness_check (id, reflection_id, created_at)
+             VALUES (11, 999, '2026-01-01T00:06:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::raw_sql(&migration_sql(17)).execute(&pool).await.unwrap();
+
+        let columns = sqlx::query("PRAGMA table_info(wellness_check)").fetch_all(&pool).await.unwrap();
+        let column_names: Vec<String> = columns.iter().map(|r| r.get("name")).collect();
+        assert!(!column_names.contains(&"reflection_id".to_string()), "reflection_id must be gone");
+        assert!(column_names.contains(&"slot_start_at".to_string()));
+
+        let normal_slot: String = sqlx::query_scalar("SELECT slot_start_at FROM wellness_check WHERE id = 10")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(normal_slot, "2026-01-01T00:00:00.000Z");
+
+        let orphan_slot: String = sqlx::query_scalar("SELECT slot_start_at FROM wellness_check WHERE id = 11")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(orphan_slot, "", "an orphaned reflection_id must backfill to '' rather than abort the migration");
+
+        // A fresh insert continues the AUTOINCREMENT sequence past the max
+        // explicit id (11) rather than colliding with or reusing it.
+        let result = sqlx::query("INSERT INTO wellness_check (slot_start_at, created_at) VALUES ('x', 'y')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(result.last_insert_rowid() > 11);
+    }
 }

@@ -140,8 +140,17 @@ No `pomodoro_session` table — deliberately. Slot identity/boundaries are fully
 reflection
   id INTEGER PK
   created_at TEXT
-  slot_start_at TEXT          -- start of the *work* slot the reflection is about (:00/:30), NOT the break slot's start (:25/:55); one row per covered slot, usually 1 per reflection, sometimes more when merged
+  slot_start_at TEXT          -- start of the *work* slot the reflection is about (:00/:30), NOT the break slot's start (:25/:55); one row per covered slot, usually 1 per reflection, sometimes more when merged (see "Data export/import" -- merge-mode import collapses any pre-existing duplicate rows for one slot; still no UNIQUE constraint, so a fresh duplicate can still arise outside of import)
   text TEXT
+
+wellness_check                -- the "how are you doing" check-in popup after a break
+  id INTEGER PK
+  slot_start_at TEXT          -- same value/meaning as reflection.slot_start_at, NOT a reflection_id FK (removed in migration 17 -- see "Data export/import" for why); no UNIQUE constraint, same caveat as reflection's own slot_start_at
+  relaxed_eyes INTEGER
+  exercise INTEGER
+  drank_water INTEGER
+  washroom INTEGER
+  created_at TEXT
 
 daily_task_list              -- "Most Important Tasks Today", shared between main window and overlay
   date TEXT PK                -- local date, 'YYYY-MM-DD'
@@ -169,6 +178,20 @@ Migrations live in `src-tauri/src/db.rs` (`tauri-plugin-sql` migration list). Ap
 - macOS: `~/Library/Application Support/com.reflectodoro.app/pomodoro.db`
 - Linux: `~/.config/com.reflectodoro.app/pomodoro.db`
 - Android: app-private storage, not directly browsable without root/debug tooling (`run-as com.reflectodoro.app` via `adb shell`)
+
+### Data export/import
+
+Settings → Data lets the user export the whole DB to JSON and re-import it (`exportAllData`/`parseAndValidateExport`/`importData` in `src/lib/db.ts`). Validation (JSON shape, per-table field types, no-duplicate-PK within the file) stays entirely client-side in `parseAndValidateExport` before anything is written. Execution itself is a single Tauri command, `import_data` (`src-tauri/src/import.rs`), run inside one real `sqlx` transaction on a second, direct connection to `pomodoro.db` (`db::open_direct_pool` — the same "open a second connection because tauri-plugin-sql's own pool isn't part of its public API" pattern `native_overlay.rs` already uses for Android, just not platform-gated here) — `tx.commit()` only at the very end, so a mid-import failure rolls back everything rather than leaving the DB partially written. This replaced an earlier, non-atomic version that sent statements through tauri-plugin-sql's own `execute()`, which doesn't guarantee consecutive calls land on the same underlying SQLite connection.
+
+**"Merge" mode does a real git-style line merge per reflection slot, not a blind append.** For every `slot_start_at` in the imported file, `import.rs` combines the existing DB row(s) for that slot with the imported row(s) for that slot into one surviving row: split both sides' `text` into trimmed, non-blank lines; if the imported side has any line that isn't literally "skip" (case-insensitive), any existing "Skip" placeholder line is dropped (real content having arrived means the placeholder no longer applies); then every incoming line gets appended unless it's already present case-insensitively. Any *other* pre-existing duplicate rows for that slot (there's no `UNIQUE` constraint stopping them) get collapsed into the same survivor too. "Replace" mode wipes the affected tables first, so there's nothing to merge against — every imported reflection row just inserts fresh (still going through the same collapsing logic, which is a no-op with an empty existing-side).
+
+**An imported row that's skip/empty-only is dropped before any of the above** (`is_ignorable_entry` in `import.rs`): if a row's `text`, once split and trimmed, reduces to nothing or to nothing but "skip" lines, it's excluded entirely from slot-grouping — it can't touch an existing row (no "Skip" line gets appended to real content) and can't seed a brand-new row on its own. Applies in both import modes, since there's no reason to persist a placeholder-only row on a fresh insert either.
+
+**`wellness_check` dedupes/collapses on `slot_start_at` too** (`import_wellness_checks` in `import.rs`), keeping exactly one row per slot: whichever of the existing DB row(s) and the imported row(s) for that slot has the earliest `created_at` survives; everything else for that slot — other pre-existing duplicates, every other imported row — is deleted/skipped. A tie favors the existing row over a pointless delete+reinsert. Like the reflection collapse, this only visits slots that actually appear in the imported file; a slot with pre-existing duplicates but nothing incoming for it isn't touched. This is also *why* `wellness_check.reflection_id` was replaced with `slot_start_at` (migration 17) rather than just adding `slot_start_at` alongside it: keying off the same natural identity every other table here uses means this dedupe needs no id-map/FK-remap step at all, unlike the old `reflection_id`-based version.
+
+**`screen_time_session` also dedupes on import** (`import_screen_time_sessions` in `import.rs`): a row whose `(app_id, platform, device_name, started_at, ended_at)` already exists is skipped rather than inserted again — `display_name` is deliberately excluded from that key, since it's a display-only label, not part of a session's identity (see "Screen time tracking" above). Implemented as a plain `INSERT ... WHERE NOT EXISTS` rather than a `UNIQUE` constraint + `INSERT OR IGNORE`, so it doesn't require a backfill migration to dedupe rows a pre-fix double-import may already have written, and doesn't constrain `screen_time.rs`'s normal capture-write path at all — only import goes through this check. `idx_screen_time_session_dedupe` (`db.rs` migration 16, non-unique) is what keeps the `NOT EXISTS` lookup fast on this table, which is documented above as likely to become the largest by row count. Applies in both modes (harmless in "replace" mode, since the table was just wiped).
+
+**`daily_task_list`/`not_to_do_list` get the same git-style line merge as reflections, minus the "skip" rule** (`merge_import_day_rows` in `import.rs`, sharing `append_unique_lines_ci` with `merge_reflection_lines`): in merge mode, a day that already has content gets it combined with the imported day's content line-by-line — existing lines kept in place, any imported line not already present (case-insensitively) appended after them — rather than the import blindly overwriting the day's text. Both tables are keyed by a real `PRIMARY KEY` (`date`), so unlike `reflection`/`wellness_check` there's never a duplicate-row-collapsing step needed here, just a per-day upsert (`INSERT ... ON CONFLICT(date) DO UPDATE`). `app_setting` is the one table left where merge mode is genuinely "imported wins on conflict" — a plain value, not a line-based list, so there's nothing to merge.
 
 ## Kill switches (must always work, tested explicitly)
 

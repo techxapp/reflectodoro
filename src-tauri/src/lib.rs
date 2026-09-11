@@ -5,6 +5,7 @@ mod commands;
 mod db;
 mod grid;
 mod hook;
+mod import;
 mod log_export;
 mod macos_overlay;
 mod media;
@@ -633,6 +634,7 @@ pub fn run() {
             commands::request_draw_overlays_permission,
             commands::can_schedule_exact_alarms,
             commands::request_schedule_exact_alarm_permission,
+            import::import_data,
             log_export::export_last_log_file,
             log_export::export_log_archive,
         ])

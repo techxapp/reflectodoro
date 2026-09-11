@@ -8,7 +8,6 @@
   import {
     canonicalIso,
     getCheckinAutoCloseMinutes,
-    getReflectionIdForSlot,
     getWellnessTextExclusions,
     parseWellnessTextExclusions,
     saveWellnessCheck,
@@ -230,8 +229,7 @@
     saving = true;
     error = "";
     try {
-      const reflectionId = await getReflectionIdForSlot(slot);
-      const createdAt = await saveWellnessCheck(reflectionId, values);
+      const createdAt = await saveWellnessCheck(slot, values);
       // Resets the macOS media-toggle guard for the next break -- see
       // media.rs. Deliberately not called from skip()/auto-close: those
       // don't save a wellness_check row, so they shouldn't reset it either.

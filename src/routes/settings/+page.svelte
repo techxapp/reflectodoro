@@ -435,7 +435,7 @@
             `This will permanently delete all existing ${settingsClause} and replace them with the contents of "${importFileName}". This cannot be undone. Continue?`,
           )
         : confirm(
-            `Import "${importFileName}" and merge it into your existing data? Imported values win on conflict; nothing existing is deleted.`,
+            `Import "${importFileName}" and merge it into your existing data? Overlapping reflections and task lists are combined (nothing is lost); settings use the imported value when they conflict.`,
           );
     if (!confirmed) return;
 
@@ -446,7 +446,19 @@
       const payload = parseAndValidateExport(raw);
       const result = await importData(payload, mode, includeSettingsInTransfer);
       await loadBreakitSettings();
-      importMessage = `Imported ${result.reflectionCount} reflection${result.reflectionCount === 1 ? "" : "s"}, ${result.taskListCount} task list${result.taskListCount === 1 ? "" : "s"}, ${result.notToDoListCount} not-to-do list${result.notToDoListCount === 1 ? "" : "s"}, ${result.settingCount} setting${result.settingCount === 1 ? "" : "s"}, ${result.wellnessCheckCount} wellness check-in${result.wellnessCheckCount === 1 ? "" : "s"}, ${result.screenTimeSessionCount} screen time session${result.screenTimeSessionCount === 1 ? "" : "s"}.`;
+      const mergedClause =
+        result.mergedSlotCount > 0
+          ? ` ${result.mergedSlotCount} reflection slot${result.mergedSlotCount === 1 ? "" : "s"} merged with existing entries.`
+          : "";
+      const duplicateClause =
+        result.screenTimeDuplicateCount > 0
+          ? ` ${result.screenTimeDuplicateCount} duplicate screen time session${result.screenTimeDuplicateCount === 1 ? "" : "s"} skipped.`
+          : "";
+      const wellnessDuplicateClause =
+        result.wellnessCheckDuplicateCount > 0
+          ? ` ${result.wellnessCheckDuplicateCount} duplicate wellness check-in${result.wellnessCheckDuplicateCount === 1 ? "" : "s"} skipped.`
+          : "";
+      importMessage = `Imported ${result.reflectionCount} reflection${result.reflectionCount === 1 ? "" : "s"}, ${result.taskListCount} task list${result.taskListCount === 1 ? "" : "s"}, ${result.notToDoListCount} not-to-do list${result.notToDoListCount === 1 ? "" : "s"}, ${result.settingCount} setting${result.settingCount === 1 ? "" : "s"}, ${result.wellnessCheckCount} wellness check-in${result.wellnessCheckCount === 1 ? "" : "s"}, ${result.screenTimeSessionCount} screen time session${result.screenTimeSessionCount === 1 ? "" : "s"}.${mergedClause}${duplicateClause}${wellnessDuplicateClause}`;
       importStatus = "success";
       importPath = null;
       importFileName = "";
@@ -801,7 +813,7 @@
     {#if importPath}
       <div class="data-row">
         <button type="button" disabled={importBusy} onclick={() => runImport("merge")}>
-          Merge (imported wins)
+          Merge
         </button>
         <button type="button" class="danger" disabled={importBusy} onclick={() => runImport("replace")}>
           Replace all data

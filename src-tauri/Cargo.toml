@@ -45,6 +45,14 @@ chrono = "0.4"
 tokio = { version = "1", features = ["time"] }
 anyhow = "1"
 rand = "0.8"
+# A second, direct connection to the same pomodoro.db tauri-plugin-sql
+# already manages, opened via db::open_direct_pool -- needed wherever a
+# write must be genuinely atomic (import.rs's transactional import/merge) or
+# where nothing else can reach the DB via Tauri IPC at all (native_overlay.rs
+# on Android, whose plain WebView has no Tauri IPC of its own). Unconditional
+# (not just Android) since import.rs runs on every platform; SQLite handles
+# multiple connections to one file fine at this app's write volume.
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
@@ -87,16 +95,6 @@ objc2-foundation = "0.3.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris = "2"
 x11rb = "0.13"
-
-[target.'cfg(target_os = "android")'.dependencies]
-# A second connection to the same pomodoro.db tauri-plugin-sql already
-# manages, opened directly rather than reaching into that plugin's internal
-# (non-public) pool -- needed because the native overlay's plain WebView (see
-# native_overlay.rs) has no Tauri IPC of its own, so its reflection-submit
-# path runs entirely in Rust instead of going through $lib/db.ts like the
-# regular /overlay page does. SQLite handles multiple connections to one file
-# fine at this app's write volume (a handful of inserts per break).
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
 
 [dev-dependencies]
 chrono-tz = "0.10.4"

@@ -202,17 +202,6 @@ export async function getLastReflectionText(): Promise<string | null> {
   return rows[0]?.text ?? null;
 }
 
-/** The reflection row most recently saved for a given slot -- throws rather than returning null/undefined so a missing row (which shouldn't happen; the check-in popup only ever opens after a reflection was saved) fails loudly instead of silently no-opping. */
-export async function getReflectionIdForSlot(slotStartIso: string): Promise<number> {
-  const db = await getDb();
-  const rows = await db.select<{ id: number }[]>(
-    `SELECT id FROM reflection WHERE slot_start_at = $1 ORDER BY id DESC LIMIT 1`,
-    [slotStartIso],
-  );
-  if (!rows[0]) throw new Error(`no reflection row found for slot ${slotStartIso}`);
-  return rows[0].id;
-}
-
 export interface WellnessCheckValues {
   relaxedEyes: boolean;
   exercise: boolean;
@@ -220,20 +209,41 @@ export interface WellnessCheckValues {
   washroom: boolean;
 }
 
-/** Returns the `created_at` it saved, so callers needing that exact value
+/** Saves a wellness check-in keyed directly on the work slot it's about
+ * (`slotStartIso`, the same value as `reflection.slot_start_at`) rather than
+ * a `reflection.id` FK -- see CLAUDE.md's "Data model" for why
+ * `wellness_check.reflection_id` was replaced with `slot_start_at`
+ * (migration 17): it lets Settings -> Data merge-mode import dedupe/collapse
+ * on the slot directly instead of remapping a foreign key through every
+ * reflection-row collapse.
+ *
+ * Still throws rather than silently inserting an orphaned row if no
+ * reflection exists for this slot (which shouldn't happen; the check-in
+ * popup only ever opens after a reflection was saved) -- same fail-loudly
+ * behavior the old `getReflectionIdForSlot` gave for free via its own
+ * lookup, preserved here as an explicit existence check since there's no
+ * FK to enforce it anymore.
+ *
+ * Returns the `created_at` it saved, so callers needing that exact value
  * (e.g. syncing the macOS media-toggle guard) don't take a second, possibly
  * drifting, timestamp reading of their own. */
 export async function saveWellnessCheck(
-  reflectionId: number,
+  slotStartIso: string,
   values: WellnessCheckValues,
 ): Promise<string> {
   const db = await getDb();
+  const existing = await db.select<{ found: number }[]>(
+    `SELECT 1 as found FROM reflection WHERE slot_start_at = $1 LIMIT 1`,
+    [slotStartIso],
+  );
+  if (!existing[0]) throw new Error(`no reflection row found for slot ${slotStartIso}`);
+
   const createdAt = new Date().toISOString();
   await db.execute(
-    `INSERT INTO wellness_check (reflection_id, relaxed_eyes, exercise, drank_water, washroom, created_at)
+    `INSERT INTO wellness_check (slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at)
      VALUES ($1, $2, $3, $4, $5, $6)`,
     [
-      reflectionId,
+      slotStartIso,
       values.relaxedEyes ? 1 : 0,
       values.exercise ? 1 : 0,
       values.drankWater ? 1 : 0,
@@ -252,12 +262,13 @@ export interface WellnessSummary {
   washroom: number;
 }
 
-/** Totals for each wellness check-in item on a given day, keyed off the
- * *reflection's* slot_start_at (via reflection_id) rather than
- * wellness_check's own created_at -- same grouping basis getReflectionsForDate
- * uses, so a late-night check-in submitted after midnight stays filed under
- * the pomodoro it was actually about instead of leaking onto the next day
- * and disagreeing with the reflections shown beside it on the Entries page. */
+/** Totals for each wellness check-in item on a given day, keyed off
+ * wellness_check's own `slot_start_at` (not `created_at`) -- same grouping
+ * basis getReflectionsForDate uses, so a late-night check-in submitted
+ * after midnight stays filed under the pomodoro it was actually about
+ * instead of leaking onto the next day and disagreeing with the reflections
+ * shown beside it on the Entries page. No longer needs a JOIN to reflection
+ * for this -- see CLAUDE.md's "Data model" on migration 17. */
 export async function getWellnessSummaryForDate(dateStamp: string): Promise<WellnessSummary> {
   const db = await getDb();
   const rows = await db.select<
@@ -275,8 +286,7 @@ export async function getWellnessSummaryForDate(dateStamp: string): Promise<Well
             SUM(drank_water) as drank_water,
             SUM(washroom) as washroom
      FROM wellness_check
-     JOIN reflection ON reflection.id = wellness_check.reflection_id
-     WHERE date(reflection.slot_start_at, 'localtime') = $1`,
+     WHERE date(slot_start_at, 'localtime') = $1`,
     [dateStamp],
   );
   const row = rows[0];
@@ -1246,8 +1256,7 @@ interface SettingRow {
 }
 
 interface WellnessCheckRow {
-  id: number;
-  reflection_id: number;
+  slot_start_at: string;
   relaxed_eyes: number;
   exercise: number;
   drank_water: number;
@@ -1290,7 +1299,7 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
       ? db.select<SettingRow[]>(`SELECT key, value FROM app_setting`)
       : Promise.resolve([]),
     db.select<WellnessCheckRow[]>(
-      `SELECT id, reflection_id, relaxed_eyes, exercise, drank_water, washroom, created_at FROM wellness_check`,
+      `SELECT slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at FROM wellness_check`,
     ),
     db.select<ScreenTimeSessionRow[]>(
       `SELECT id, app_id, display_name, platform, device_name, started_at, ended_at FROM screen_time_session`,
@@ -1449,19 +1458,13 @@ export function parseAndValidateExport(raw: string): ExportPayload {
     }
   }
 
-  const reflectionIds = new Set(reflection.map((r) => r.id));
   const wellnessRaw = data.wellness_check;
   if (!Array.isArray(wellnessRaw)) throw new Error("data.wellness_check is missing or not an array");
   const wellness_check: WellnessCheckRow[] = wellnessRaw.map((row, i) => {
     if (typeof row !== "object" || row === null) throw new Error(`wellness_check[${i}] is not an object`);
     const r = row as Record<string, unknown>;
-    const reflection_id = assertNumber(r.reflection_id, `wellness_check[${i}].reflection_id`);
-    if (!reflectionIds.has(reflection_id)) {
-      throw new Error(`wellness_check[${i}].reflection_id ${reflection_id} has no matching reflection in this file`);
-    }
     return {
-      id: assertNumber(r.id, `wellness_check[${i}].id`),
-      reflection_id,
+      slot_start_at: assertString(r.slot_start_at, `wellness_check[${i}].slot_start_at`),
       relaxed_eyes: assertNumber(r.relaxed_eyes, `wellness_check[${i}].relaxed_eyes`),
       exercise: assertNumber(r.exercise, `wellness_check[${i}].exercise`),
       drank_water: assertNumber(r.drank_water, `wellness_check[${i}].drank_water`),
@@ -1512,142 +1515,52 @@ export interface ImportResult {
   settingCount: number;
   wellnessCheckCount: number;
   screenTimeSessionCount: number;
+  /** How many slots had more than one reflection row (pre-existing
+   * duplicates and/or multiple imported rows for that slot) collapse into
+   * one surviving row -- see import.rs's per-slot merge algorithm. */
+  mergedSlotCount: number;
+  /** How many imported screen_time_session rows were skipped because a row
+   * with the same (app_id, platform, device_name, started_at, ended_at)
+   * already existed -- always 0 in "replace" mode. */
+  screenTimeDuplicateCount: number;
+  /** How many imported wellness_check rows lost the "keep the earliest
+   * created_at per slot_start_at" collapse to an existing row or another
+   * imported row -- see import.rs's import_wellness_checks. Always 0 in
+   * "replace" mode. */
+  wellnessCheckDuplicateCount: number;
 }
 
 /**
- * Applies a validated export payload to the DB. "replace" wipes all five
- * tables first; "merge" upserts daily_task_list/not_to_do_list/app_setting (imported wins
- * on key conflict, untouched rows keep their existing value) and always
- * appends reflection/wellness_check rows fresh -- reflection has no natural
- * dedupe key, and any timestamp-based heuristic risks silently discarding a
- * real reflection, which a backup/restore feature must never do (see plan
- * doc). Because every imported reflection gets a brand-new autoincrement id
- * (the file's own `id` is never reused), wellness_check.reflection_id is
- * remapped through `idMap` (old file id -> newly-inserted id) rather than
- * copied verbatim -- otherwise it would silently point at the wrong
- * reflection or a row that no longer exists.
+ * Applies a validated export payload to the DB by invoking the Rust
+ * `import_data` command (`src-tauri/src/import.rs`), which runs the whole
+ * operation -- replace-mode wipes, "merge" mode's per-slot reflection line
+ * merge (existing lines and imported lines combined git-merge-style, "Skip"
+ * placeholder lines dropped once real content arrives), daily_task_list/
+ * not_to_do_list/app_setting upserts (imported wins on key conflict), and
+ * the wellness_check FK remap -- inside one real `sqlx` transaction on a
+ * dedicated connection. That fixes what used to be a real gap here: sending
+ * `BEGIN`/`COMMIT` through tauri-plugin-sql's own `execute()` isn't reliably
+ * atomic, since its pooled connections aren't guaranteed to stay pinned
+ * across calls.
  *
- * Not wrapped in a SQL transaction: confirmed against tauri-plugin-sql
- * 2.4.0's source (its `execute` Tauri command calls `pool.execute(query)`
- * directly, once per invocation, with no session/connection pinned across
- * calls) that a `BEGIN`/`COMMIT` sent as separate `db.execute()` calls
- * is not guaranteed to land on the same underlying SQLite connection --
- * the pool defaults to up to 10 connections, so it can't be relied on to
- * serialize onto one. A transaction wrapper here would be a false promise
- * of atomicity, not a real one.
- *
- * Safety instead comes from parseAndValidateExport() fully validating the
- * payload before this function is ever called -- including that every
- * wellness_check.reflection_id resolves within the same file, and that
- * daily_task_list/not_to_do_list/app_setting each have no duplicate
- * PRIMARY KEY. That duplicate-key check specifically is what stands between
- * "replace" mode and its worst failure mode: without it, a malformed file
- * could pass validation, let the DELETEs below commit, and only then hit a
- * PRIMARY KEY collision partway through the INSERT loop -- by which point
- * the user's previous data is already gone and the thrown error (caught and
- * shown by Settings' runImport) can't bring it back. Validating hard enough
- * that a well-formed file can never reach that constraint violation is the
- * only atomicity substitute this plugin's API leaves available from here.
- * A different class of failure -- a genuine I/O error, or the DB locked by
- * a concurrent write from another window -- can still interrupt this loop
- * mid-way and isn't something front-end validation can rule out; that
- * residual risk is real and unresolved, not something this function papers
- * over.
+ * `parseAndValidateExport()` still fully validates the payload client-side
+ * before this is ever called -- that hasn't moved. Everything below this
+ * point is just the invoke call plus the settings-cache resyncs, which stay
+ * here since they only read SQLite (via the plugin) and refresh in-memory
+ * Rust state -- no writes of their own to keep transactional.
  */
 export async function importData(
   payload: ExportPayload,
   mode: ImportMode,
   includeSettings: boolean = true,
 ): Promise<ImportResult> {
-  const db = await getDb();
-  const { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check, screen_time_session } =
-    payload.data;
-
-  if (mode === "replace") {
-    // Child table first: wellness_check references reflection(id).
-    await db.execute(`DELETE FROM wellness_check`);
-    await db.execute(`DELETE FROM reflection`);
-    await db.execute(`DELETE FROM daily_task_list`);
-    await db.execute(`DELETE FROM not_to_do_list`);
-    await db.execute(`DELETE FROM screen_time_session`);
-    if (includeSettings) await db.execute(`DELETE FROM app_setting`);
-  }
-
-  const idMap = new Map<number, number>();
-  for (const row of reflection) {
-    const result = await db.execute(
-      `INSERT INTO reflection (created_at, slot_start_at, text) VALUES ($1, $2, $3)`,
-      [row.created_at, row.slot_start_at, row.text],
-    );
-    if (result.lastInsertId !== undefined) idMap.set(row.id, result.lastInsertId);
-  }
-
-  for (const row of wellness_check) {
-    const newReflectionId = idMap.get(row.reflection_id);
-    if (newReflectionId === undefined) continue; // guarded by parseAndValidateExport; defensive only
-    await db.execute(
-      `INSERT INTO wellness_check (reflection_id, relaxed_eyes, exercise, drank_water, washroom, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [newReflectionId, row.relaxed_eyes, row.exercise, row.drank_water, row.washroom, row.created_at],
-    );
-  }
-
-  for (const row of daily_task_list) {
-    await db.execute(
-      mode === "merge"
-        ? `INSERT INTO daily_task_list (date, content, updated_at) VALUES ($1, $2, $3)
-           ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`
-        : `INSERT INTO daily_task_list (date, content, updated_at) VALUES ($1, $2, $3)`,
-      [row.date, row.content, row.updated_at],
-    );
-  }
-
-  for (const row of not_to_do_list) {
-    await db.execute(
-      mode === "merge"
-        ? `INSERT INTO not_to_do_list (date, content, updated_at) VALUES ($1, $2, $3)
-           ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`
-        : `INSERT INTO not_to_do_list (date, content, updated_at) VALUES ($1, $2, $3)`,
-      [row.date, row.content, row.updated_at],
-    );
-  }
-
-  // Appended fresh (own autoincrement id, the file's is never reused), like
-  // reflection rows -- screen-time sessions have no natural dedupe key either,
-  // and nothing else references their ids, so no id remapping is needed.
-  // Reuses saveScreenTimeSessions' chunked multi-row INSERT rather than one
-  // statement per row: this is by far the highest-row-count table in an
-  // export, and a per-row loop is where a large import would actually crawl.
-  // device_name is carried from the file, not overwritten with this device's,
-  // so imported rows keep saying which machine they came from.
-  for (let i = 0; i < screen_time_session.length; i += SCREEN_TIME_INSERT_CHUNK) {
-    const chunk = screen_time_session.slice(i, i + SCREEN_TIME_INSERT_CHUNK);
-    const values: string[] = [];
-    const placeholders = chunk
-      .map((row, index) => {
-        const base = index * 6;
-        values.push(row.app_id, row.display_name, row.platform, row.device_name, row.started_at, row.ended_at);
-        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`;
-      })
-      .join(", ");
-    await db.execute(
-      `INSERT INTO screen_time_session (app_id, display_name, platform, device_name, started_at, ended_at)
-       VALUES ${placeholders}`,
-      values,
-    );
-  }
+  const result = await invoke<ImportResult>("import_data", {
+    data: payload.data,
+    mode,
+    includeSettings,
+  });
 
   if (includeSettings) {
-    for (const row of app_setting) {
-      await db.execute(
-        mode === "merge"
-          ? `INSERT INTO app_setting (key, value) VALUES ($1, $2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-          : `INSERT INTO app_setting (key, value) VALUES ($1, $2)`,
-        [row.key, row.value],
-      );
-    }
-
     // Rust's in-memory breakit config, force-close-shortcut flag, and overlay
     // auto-close minutes are all caches of app_setting -- resync so an
     // imported value takes effect immediately, not just after the next app
@@ -1668,12 +1581,5 @@ export async function importData(
   // includeSettings, so this needs to resync even when settings are excluded.
   await loadAndSyncMediaToggleGuard();
 
-  return {
-    reflectionCount: reflection.length,
-    taskListCount: daily_task_list.length,
-    notToDoListCount: not_to_do_list.length,
-    settingCount: includeSettings ? app_setting.length : 0,
-    wellnessCheckCount: wellness_check.length,
-    screenTimeSessionCount: screen_time_session.length,
-  };
+  return result;
 }
