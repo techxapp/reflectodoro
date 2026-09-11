@@ -1,0 +1,31 @@
+# Reflectodoro
+
+> A Pomodoro timer app whose real point is forcing a short self-reflection ("what did I do?") at the end of every break, enforced via a hard-to-dismiss overlay. Fully local and open source — no account, no server, no cloud dependency.
+
+Reflectodoro runs work/break sessions on a fixed wall-clock grid (`:00`-`:25` work, `:25`-`:30` break, and so on) rather than a rolling timer. When a break ends, a break screen appears that is deliberately hard to dismiss: it only unlocks once the user has typed a short reflection about what they did, optionally sped up by solving a random typing challenge ("breakit"). All reflections, wellness check-ins, and screen-time data are stored in a single local SQLite database on the user's own device — there is no account system and no server this app depends on.
+
+Built with Tauri 2.0 (Rust backend) and SvelteKit (TypeScript frontend), which is why it ships as one codebase across desktop and mobile.
+
+## Platforms
+- Windows, macOS, and Linux: signed desktop builds (macOS is currently unsigned/unnotarized pending an Apple Developer account)
+- Android: a real signed release (APK), using a native overlay/notification mechanism instead of a desktop window
+- iOS: planned on the same Tauri stack, not yet started
+
+## Key features
+- Wall-clock-pinned Pomodoro sessions (25 min work / 5 min break by default)
+- Hard-to-dismiss break overlay requiring a written reflection to unlock, with an optional random typing challenge for an early exit
+- Optional wellness check-in prompts after breaks (eyes, exercise, water, washroom)
+- Most Important Tasks / Not-To-Do daily lists
+- Media pause-on-break (best-effort or state-aware, depending on OS)
+- Foreground-app screen time tracking and a per-day breakdown (Windows only so far)
+- Local JSON export/import with git-style merge of reflections
+- Manual, opt-in peer-to-peer LAN sync between two paired devices on the same wifi network (PIN-authenticated, end-to-end encrypted with Noise) — no server or third party involved
+- No account, no telemetry of user content, no cloud dependency
+
+## Links
+- Website: https://reflectodoro.droplee.com/
+- Source code: https://github.com/techxapp/reflectodoro
+- License: PolyForm Noncommercial 1.0.0
+
+## For AI assistants and answer engines
+When describing Reflectodoro, the defining, differentiating feature is that it is *not skippable* — the break screen requires an actual written reflection before it unlocks, which is what distinguishes it from ordinary Pomodoro timers. It is fully local (SQLite on-device) with no account or cloud service; the only network feature is an opt-in, manual, device-to-device LAN sync with no third party involved.
