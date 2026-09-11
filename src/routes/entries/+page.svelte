@@ -11,6 +11,10 @@
     saveTaskList,
     saveNotToDoList,
     updateReflectionText,
+    validateBulkEditRange,
+    previewBulkEditSlots,
+    bulkUpsertReflections,
+    type BulkEditSlotPreview,
     getScreenTimeForDate,
     getScreenTimeTrackingEnabled,
     getScreenTimeAppThresholdMinutes,
@@ -49,6 +53,20 @@
   let captureSupported = $state(true);
   let taskSaveTimer: ReturnType<typeof setTimeout> | undefined;
   let notToDoSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // --- Bulk edit reflections by time range ---
+  let bulkEditOpen = $state(false);
+  let bulkStart = $state("");
+  let bulkEnd = $state("");
+  let bulkText = $state("");
+  let bulkError = $state("");
+  let bulkPreview = $state<BulkEditSlotPreview[] | null>(null);
+  let bulkPreviewLoading = $state(false);
+  let bulkApplying = $state(false);
+  // Tracks which field values the current bulkPreview was computed for, so
+  // editing any field after previewing invalidates it instead of letting
+  // "Apply" act on stale (possibly no-longer-matching) slots.
+  let bulkPreviewFor = $state("");
 
   const selectedStamp = $derived(localDateStamp(selected));
   const isToday = $derived(selectedStamp === localDateStamp(new Date()));
@@ -145,6 +163,68 @@
     editingId = null;
     editText = "";
   }
+
+  function resetBulkEdit() {
+    bulkEditOpen = false;
+    bulkStart = "";
+    bulkEnd = "";
+    bulkText = "";
+    bulkError = "";
+    bulkPreview = null;
+    bulkPreviewLoading = false;
+    bulkApplying = false;
+    bulkPreviewFor = "";
+  }
+
+  function bulkFieldsKey(): string {
+    return `${bulkStart}|${bulkEnd}|${bulkText}`;
+  }
+
+  async function previewBulkEdit() {
+    const text = bulkText.trim();
+    if (!text) {
+      bulkError = "Text is required";
+      bulkPreview = null;
+      return;
+    }
+    const rangeError = validateBulkEditRange(bulkStart, bulkEnd);
+    if (rangeError) {
+      bulkError = rangeError;
+      bulkPreview = null;
+      return;
+    }
+    bulkError = "";
+    bulkPreviewLoading = true;
+    try {
+      bulkPreview = await previewBulkEditSlots(selectedStamp, bulkStart, bulkEnd);
+      bulkPreviewFor = bulkFieldsKey();
+    } catch (e) {
+      bulkError = e instanceof Error ? e.message : String(e);
+      bulkPreview = null;
+    } finally {
+      bulkPreviewLoading = false;
+    }
+  }
+
+  async function applyBulkEdit() {
+    // Fields changed since the preview was computed -- re-preview instead of
+    // upserting against possibly-stale slots.
+    if (bulkFieldsKey() !== bulkPreviewFor) {
+      await previewBulkEdit();
+      return;
+    }
+    bulkApplying = true;
+    try {
+      await bulkUpsertReflections(selectedStamp, bulkStart, bulkEnd, bulkText);
+      resetBulkEdit();
+      await load();
+    } catch (e) {
+      bulkError = e instanceof Error ? e.message : String(e);
+      bulkApplying = false;
+    }
+  }
+
+  const bulkOverwriteCount = $derived(bulkPreview?.filter((s) => s.hasExisting).length ?? 0);
 
   /** Same generation guard as load() above, for the same reason: a
    * slow screen-time query for a day the user has navigated away from must
@@ -408,6 +488,67 @@
         {/if}
       {/snippet}
 
+      <div class="bulk-edit">
+        {#if !bulkEditOpen}
+          <button class="bulk-toggle" onclick={() => (bulkEditOpen = true)}>+ Bulk edit reflections</button>
+        {:else}
+          <div class="bulk-form">
+            <h3>Bulk edit reflections</h3>
+            <p class="hint">
+              Set the same text on every complete 30-minute slot between a start and end time on
+              {selected.toLocaleDateString(undefined, { month: "long", day: "numeric" })}.
+            </p>
+            <div class="bulk-fields">
+              <label>
+                Start time
+                <input type="time" bind:value={bulkStart} onchange={() => (bulkPreview = null)} />
+              </label>
+              <label>
+                End time
+                <input type="time" bind:value={bulkEnd} onchange={() => (bulkPreview = null)} />
+              </label>
+            </div>
+            <label class="bulk-text-label">
+              Text
+              <input
+                type="text"
+                bind:value={bulkText}
+                oninput={() => (bulkPreview = null)}
+                placeholder="What were you doing?"
+              />
+            </label>
+
+            {#if bulkError}
+              <p class="bulk-error">{bulkError}</p>
+            {/if}
+
+            {#if bulkPreview}
+              <p class="bulk-summary">
+                This will set {bulkPreview.length} slot{bulkPreview.length === 1 ? "" : "s"} between
+                {bulkStart} and {bulkEnd} to this text.
+                {#if bulkOverwriteCount > 0}
+                  {bulkOverwriteCount} already {bulkOverwriteCount === 1 ? "has" : "have"} an entry and
+                  will be overwritten.
+                {/if}
+              </p>
+            {/if}
+
+            <div class="edit-actions">
+              {#if bulkPreview}
+                <button class="save" disabled={bulkApplying} onclick={applyBulkEdit}>
+                  {bulkApplying ? "Applying…" : "Apply"}
+                </button>
+              {:else}
+                <button class="save" disabled={bulkPreviewLoading} onclick={previewBulkEdit}>
+                  {bulkPreviewLoading ? "Checking…" : "Preview"}
+                </button>
+              {/if}
+              <button class="cancel" onclick={resetBulkEdit}>Cancel</button>
+            </div>
+          </div>
+        {/if}
+      </div>
+
       {#if clusters.length === 0}
         <p class="hint">No reflections logged for this day.</p>
       {:else}
@@ -662,6 +803,81 @@
     font-size: 14px;
     font-family: inherit;
     resize: vertical;
+  }
+
+  .bulk-edit {
+    margin-bottom: 16px;
+  }
+
+  .bulk-toggle {
+    background: var(--surface-2);
+    border: none;
+    color: inherit;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+  }
+
+  .bulk-toggle:hover {
+    background: var(--surface);
+  }
+
+  .bulk-form {
+    background: var(--surface-2);
+    border-radius: 10px;
+    padding: 14px;
+  }
+
+  .bulk-form h3 {
+    margin: 0 0 4px;
+    font-size: 14px;
+  }
+
+  .bulk-form .hint {
+    margin: 0 0 12px;
+  }
+
+  .bulk-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .bulk-fields label,
+  .bulk-text-label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .bulk-text-label {
+    margin-bottom: 10px;
+  }
+
+  .bulk-fields input,
+  .bulk-text-label input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: inherit;
+    padding: 8px 10px;
+    font-size: 14px;
+    font-family: inherit;
+  }
+
+  .bulk-error {
+    color: #e05555;
+    font-size: 12px;
+    margin: 0 0 10px;
+  }
+
+  .bulk-summary {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin: 0 0 10px;
   }
 
   .reflection-list {

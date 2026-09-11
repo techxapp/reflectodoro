@@ -350,6 +350,114 @@ export async function updateReflectionText(id: number, text: string): Promise<vo
   await db.execute(`UPDATE reflection SET text = $1 WHERE id = $2`, [text, id]);
 }
 
+// --- Bulk edit by time range (Entries page) ----------------------------
+//
+// Lets the user set the same text across every 30-minute work slot that
+// falls *completely* inside a given hh:mm-hh:mm range on the day they're
+// currently viewing, in one action -- an upsert per slot (update if a row
+// already exists for it, insert if not) rather than one-row-at-a-time via
+// the inline pencil edit.
+
+const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export function validateBulkEditRange(startTime: string, endTime: string): string | null {
+  if (!HHMM_RE.test(startTime)) return "Start time must be in HH:MM format";
+  if (!HHMM_RE.test(endTime)) return "End time must be in HH:MM format";
+  if (startTime >= endTime) return "End time must be after start time";
+  return null;
+}
+
+function hhmmToMinuteOfDay(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/**
+ * Only slots *completely* contained in [startTime, endTime) count -- a slot
+ * that merely overlaps the range's edge is excluded. E.g. 11:45-13:15 keeps
+ * 12:00 and 12:30 but not 11:30 (starts before 11:45) or 13:00 (would end at
+ * 13:30, past 13:15).
+ */
+export function computeBulkEditSlots(dateStamp: string, startTime: string, endTime: string): string[] {
+  const [y, mo, d] = dateStamp.split("-").map(Number);
+  const startMin = hhmmToMinuteOfDay(startTime);
+  const endMin = hhmmToMinuteOfDay(endTime);
+  const firstSlotMinute = Math.ceil(startMin / 30) * 30;
+  const lastSlotMinute = Math.floor((endMin - 30) / 30) * 30;
+  const slots: string[] = [];
+  for (let m = firstSlotMinute; m <= lastSlotMinute; m += 30) {
+    slots.push(new Date(y, mo - 1, d, Math.floor(m / 60), m % 60).toISOString());
+  }
+  return slots;
+}
+
+export interface BulkEditSlotPreview {
+  slotStartIso: string;
+  hasExisting: boolean;
+}
+
+/** Validates and resolves the slots a bulk edit would touch, plus whether
+ * each already has a reflection -- so the UI can confirm ("N slots, M
+ * already have an entry and will be overwritten") before anything is
+ * written. Throws (rather than returning an error string) on invalid input,
+ * since this is only ever called after the caller's own field-level
+ * validation already passed. */
+export async function previewBulkEditSlots(
+  dateStamp: string,
+  startTime: string,
+  endTime: string,
+): Promise<BulkEditSlotPreview[]> {
+  const rangeError = validateBulkEditRange(startTime, endTime);
+  if (rangeError) throw new Error(rangeError);
+  const slots = computeBulkEditSlots(dateStamp, startTime, endTime);
+  if (slots.length === 0) {
+    throw new Error("No complete 30-minute slot falls within that time range");
+  }
+  return Promise.all(
+    slots.map(async (slotStartIso) => ({
+      slotStartIso,
+      hasExisting: await isSlotCovered(slotStartIso),
+    })),
+  );
+}
+
+/** Re-validates and re-derives the slots rather than trusting a prior
+ * previewBulkEditSlots call -- the fields may have changed since the user
+ * last previewed. Returns the number of slots touched. */
+export async function bulkUpsertReflections(
+  dateStamp: string,
+  startTime: string,
+  endTime: string,
+  text: string,
+): Promise<number> {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error("Text is required");
+  const rangeError = validateBulkEditRange(startTime, endTime);
+  if (rangeError) throw new Error(rangeError);
+  const slots = computeBulkEditSlots(dateStamp, startTime, endTime);
+  if (slots.length === 0) {
+    throw new Error("No complete 30-minute slot falls within that time range");
+  }
+
+  const db = await getDb();
+  const createdAt = new Date().toISOString();
+  for (const slot of slots) {
+    const existing = await db.select<{ id: number }[]>(
+      `SELECT id FROM reflection WHERE slot_start_at = $1`,
+      [slot],
+    );
+    if (existing.length > 0) {
+      await db.execute(`UPDATE reflection SET text = $1 WHERE slot_start_at = $2`, [trimmed, slot]);
+    } else {
+      await db.execute(
+        `INSERT INTO reflection (created_at, slot_start_at, text) VALUES ($1, $2, $3)`,
+        [createdAt, slot, trimmed],
+      );
+    }
+  }
+  return slots.length;
+}
+
 export async function getTaskList(dateStamp: string): Promise<string> {
   const db = await getDb();
   const rows = await db.select<{ content: string }[]>(
