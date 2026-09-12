@@ -1263,7 +1263,14 @@
                   <td class="yes">&#10003;</td>
                   <td class="no">&#10007;<span class="table-note">Planned</span></td>
                   <td class="no">&#10007;<span class="table-note">Planned</span></td>
+                  <td class="yes">&#10003;</td>
+                </tr>
+                <tr>
+                  <td>Cross-device sync (Local)</td>
+                  <td class="yes">&#10003;</td>
                   <td class="no">&#10007;<span class="table-note">Planned</span></td>
+                  <td class="no">&#10007;<span class="table-note">Planned</span></td>
+                  <td class="yes">&#10003;</td>
                 </tr>
               </tbody>
             </table>
@@ -1450,19 +1457,25 @@
             </details>
 
             <details class="faq-item reveal">
-              <summary>Is my data private? Does Reflectodoro sync across devices?</summary>
+              <summary>Is my data private?</summary>
               <div class="faq-answer">
                 <p>Everything is stored locally in a SQLite file on your device &mdash; there's no account, no
-                   server, and nothing is uploaded anywhere. Cross-device sync is on the roadmap but not built
-                   yet, so today each install's history is fully independent.</p>
+                   server, and nothing is uploaded on cloud.</p>
+              </div>
+            </details>
+
+            <details class="faq-item reveal">
+              <summary>Does Reflectodoro sync data across devices?</summary>
+              <div class="faq-answer">
+                <p>Cross-device data sync is on the roadmap and being built
+                   gradually, currently it supports manual sync between android/windows platform.</p>
               </div>
             </details>
 
             <details class="faq-item reveal">
               <summary>Can I change the work/break lengths from 25 and 5 minutes?</summary>
               <div class="faq-answer">
-                <p>Not yet &mdash; they're fixed constants for now. Configurable durations are a planned addition,
-                   not currently exposed in Settings.</p>
+                <p>Not yet &mdash; they're fixed constants for now.</p>
               </div>
             </details>
 
@@ -1502,7 +1515,7 @@
             </details>
 
             <details class="faq-item reveal">
-              <summary>Why is Reflectodoro free?</summary>
+              <summary>Is Reflectodoro completely free?</summary>
               <div class="faq-answer">
                 <p>Reflectodoro is in early release, and every feature it has today is free. Premium features
                    are planned but not built yet &mdash; nothing currently in the app is being held back or
@@ -1527,7 +1540,7 @@
               <p>Capture app usage screen time.</p>
             </div>
             <div class="card reveal">
-              <span class="roadmap-badge">Planned</span>
+              <span class="roadmap-badge">In Progress</span>
               <h3>Cross-device sync &#128260;</h3>
               <p>Sync reflections and task lists across your devices.</p>
             </div>
