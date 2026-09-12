@@ -25,14 +25,23 @@
     ensureDeviceName,
   } from "$lib/db";
 
+  type SnoozeInfo = { resume_at: string; minutes: number };
+  const SNOOZE_MINUTES_OPTIONS = [30, 60, 90, 120];
+  function snoozeOptionLabel(minutes: number): string {
+    const hours = minutes / 60;
+    return `Pause for ${hours < 1 ? `${minutes} min` : `${hours} hr`}`;
+  }
+
   let now = $state(new Date());
   let enabled = $state(true);
+  let snoozeInfo = $state<SnoozeInfo | null>(null);
   let mediaPauseOnBreakEnabled = $state(true);
   let mediaPauseOnBreakLoaded = $state(false);
   let mediaPauseOnBreakBusy = $state(false);
   let taskListContent = $state("");
   let notToDoContent = $state("");
   let unlisten: UnlistenFn | null = null;
+  let unlistenSnooze: UnlistenFn | null = null;
   let unlistenTasks: UnlistenFn | null = null;
   let unlistenNotToDo: UnlistenFn | null = null;
   let unlistenMediaToggle: UnlistenFn | null = null;
@@ -49,6 +58,16 @@
     return `${m}:${String(s).padStart(2, "0")}`;
   });
 
+  // Drives the dropdown's selected option: a snooze always wins over the
+  // plain enabled flag (POMODORO_ENABLED is false for both a snooze and a
+  // permanent Off -- snoozeInfo is what tells them apart).
+  const pomodoroSelection = $derived(snoozeInfo ? String(snoozeInfo.minutes) : enabled ? "on" : "off");
+  const snoozeResumeLabel = $derived.by(() => {
+    if (!snoozeInfo) return "";
+    const resumeAt = new Date(snoozeInfo.resume_at);
+    return `Resumes at ${resumeAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  });
+
   function scheduleTaskSave() {
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
     taskSaveTimer = setTimeout(() => {
@@ -63,9 +82,24 @@
     }, 800);
   }
 
-  async function toggleEnabled() {
-    enabled = !enabled;
-    await invoke("set_enabled", { enabled });
+  async function handlePomodoroSelect(event: Event) {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    if (value === "on") {
+      enabled = true;
+      snoozeInfo = null;
+      await invoke("set_enabled", { enabled: true });
+    } else if (value === "off") {
+      enabled = false;
+      snoozeInfo = null;
+      await invoke("set_enabled", { enabled: false });
+    } else {
+      const minutes = Number(value);
+      enabled = false;
+      // Uses the command's own return value rather than waiting on the
+      // pomodoro://snooze-changed event, so this window's dropdown/hint
+      // update immediately instead of racing it (see best_practices.md).
+      snoozeInfo = await invoke<SnoozeInfo>("snooze_pomodoro", { minutes });
+    }
   }
 
   async function toggleMediaPauseOnBreak() {
@@ -96,11 +130,15 @@
     await loadAndSyncScreenTimeTrackingSetting();
     await ensureDeviceName();
     enabled = await invoke<boolean>("get_enabled");
+    snoozeInfo = await invoke<SnoozeInfo | null>("get_snooze_until");
     taskListContent = await getTaskList(localDateStamp());
     notToDoContent = await getNotToDoList(localDateStamp());
 
     unlisten = await listen<boolean>("pomodoro://enabled-changed", (event) => {
       enabled = event.payload;
+    });
+    unlistenSnooze = await listen<SnoozeInfo | null>("pomodoro://snooze-changed", (event) => {
+      snoozeInfo = event.payload;
     });
     unlistenTasks = await listenForTaskListUpdates((content) => {
       taskListContent = content;
@@ -128,6 +166,7 @@
 
   onDestroy(() => {
     unlisten?.();
+    unlistenSnooze?.();
     unlistenTasks?.();
     unlistenNotToDo?.();
     unlistenMediaToggle?.();
@@ -141,9 +180,16 @@
   <section class="card timer-card">
     <p class="label">{slot.phase === "work" ? "Working" : "On break"}</p>
     <p class="big">{remainingLabel}</p><br/>
-    <button class="toggle" class:off={!enabled} onclick={toggleEnabled}>
-      {enabled ? "Pomodoro mode: On" : "Pomodoro mode: Off"}
-    </button>
+    <select class="pomodoro-select" class:off={!enabled} value={pomodoroSelection} onchange={handlePomodoroSelect}>
+      <option value="on">Pomodoro mode: On</option>
+      {#each SNOOZE_MINUTES_OPTIONS as minutes (minutes)}
+        <option value={String(minutes)}>{snoozeOptionLabel(minutes)}</option>
+      {/each}
+      <option value="off">Pomodoro mode: Off</option>
+    </select>
+    {#if snoozeInfo}
+      <p class="hint">{snoozeResumeLabel}</p>
+    {/if}
 
     {#if mediaPauseOnBreakLoaded}
       <button
@@ -245,6 +291,23 @@
   }
 
   .toggle.off {
+    background: var(--surface-2);
+    color: var(--text-dim);
+  }
+
+  .pomodoro-select {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: none;
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  .pomodoro-select.off {
     background: var(--surface-2);
     color: var(--text-dim);
   }

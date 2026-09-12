@@ -15,7 +15,7 @@ mod p2p_sync;
 mod screen_time;
 mod state;
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration as StdDuration;
 
@@ -25,10 +25,8 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 #[cfg(desktop)]
 use tauri::tray::TrayIconBuilder;
 #[cfg(desktop)]
-use tauri::Emitter;
-#[cfg(desktop)]
 use tauri::WindowEvent;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 #[cfg(desktop)]
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -52,6 +50,34 @@ fn resolve_dev_mode() -> bool {
 }
 
 pub(crate) static POMODORO_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Epoch-millis resume time for an active "snooze" (Pomodoro mode
+/// temporarily paused from the main window's dropdown) -- 0 means no snooze
+/// is pending. Set by `commands::snooze_pomodoro`, cleared by
+/// `apply_pomodoro_enabled` (so any manual On/Off, from either the main
+/// window or the tray, cancels a pending snooze rather than leaving a stale
+/// timestamp that could later flip `POMODORO_ENABLED` back on unexpectedly).
+/// Checked by wall-clock comparison inside `run_scheduler`'s own poll loop --
+/// deliberately not a `tokio::time::sleep`-based timer, since that's
+/// `Instant`/`CLOCK_MONOTONIC`-based and would suffer the exact same
+/// suspend/Doze bug `ANDROID_POLL_INTERVAL` exists to work around (see its
+/// doc comment below).
+pub(crate) static POMODORO_SNOOZE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
+
+/// The duration originally chosen for the active snooze (if any) -- purely so
+/// the frontend can re-select the right dropdown option on boot/reload;
+/// `POMODORO_SNOOZE_UNTIL_MS` alone is what actually governs resume timing.
+pub(crate) static POMODORO_SNOOZE_MINUTES: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) const SNOOZE_MIN_MINUTES: u32 = 30;
+pub(crate) const SNOOZE_MAX_MINUTES: u32 = 120;
+
+/// How often `run_scheduler`'s loop re-checks wall-clock time against
+/// `POMODORO_SNOOZE_UNTIL_MS` while a snooze is pending, on every platform
+/// (not just Android) -- capping `sleep_dur` to this is what makes the poll
+/// actually catch the expiry promptly instead of desktop sleeping for up to
+/// ~25 minutes until the next grid boundary.
+const SNOOZE_POLL_INTERVAL: StdDuration = StdDuration::from_secs(30);
 
 /// Whether Ctrl+Alt+Shift+F12 (Cmd+Option+Shift+F12 on macOS) actually
 /// force-closes the overlay. Backed by
@@ -181,12 +207,79 @@ fn generate_breakit_challenge(app: &AppHandle) -> String {
     challenge
 }
 
+/// Applies a Pomodoro mode on/off change and keeps every side effect (event
+/// emission, Android's foreground service + boot-recovery pref) in one place
+/// -- shared by `commands::set_enabled` (the main window's On/Off dropdown
+/// options), the tray "toggle" menu item, and `run_scheduler`'s own
+/// snooze-expiry auto-resume below, so none of the three can drift out of
+/// sync with each other. Always clears any pending snooze: a manual On/Off
+/// from any of these three places should cancel a snooze outright rather than
+/// leaving `POMODORO_SNOOZE_UNTIL_MS` armed to unexpectedly flip things back
+/// later.
+pub(crate) fn apply_pomodoro_enabled(app: &AppHandle, enabled: bool) {
+    POMODORO_ENABLED.store(enabled, Ordering::SeqCst);
+    POMODORO_SNOOZE_UNTIL_MS.store(0, Ordering::SeqCst);
+    POMODORO_SNOOZE_MINUTES.store(0, Ordering::SeqCst);
+    let _ = app.emit("pomodoro://enabled-changed", enabled);
+    let _ = app.emit("pomodoro://snooze-changed", Option::<commands::SnoozeInfo>::None);
+
+    // Keeps the Android foreground service (and its AlarmManager backup) in
+    // step with the toggle: starting it when the user turns Pomodoro mode
+    // on (mirrors the same call in lib.rs's .setup(), for the already-on
+    // default at launch) and stopping it when they turn it off, so
+    // disabling actually lets Android reclaim the process instead of
+    // leaving a phantom "running" notification behind.
+    #[cfg(target_os = "android")]
+    {
+        let bridge = app.state::<android_bridge::AndroidBridge<tauri::Wry>>();
+        let result = if enabled {
+            bridge.start_foreground_service()
+        } else {
+            bridge.stop_foreground_service()
+        };
+        if let Err(e) = result {
+            log::error!("failed to toggle Android foreground service: {e:?}");
+        }
+        // So a reboot (BootCompletedReceiver, which runs before any Rust
+        // runtime exists in that fresh process) can respect a deliberate
+        // "off" choice instead of always re-arming everything -- see
+        // PomodoroEnabledPref's doc comment (Kotlin).
+        if let Err(e) = bridge.persist_pomodoro_enabled(enabled) {
+            log::error!("failed to persist pomodoro-enabled preference: {e:?}");
+        }
+    }
+}
+
 async fn run_scheduler(app: AppHandle) {
     let mut last_phase: Option<Phase> = None;
     let mut expected_wake: Option<DateTime<Local>> = None;
 
     loop {
         let now = Local::now();
+
+        // Wall-clock (not a separate timer) check for a pending snooze
+        // (POMODORO_SNOOZE_UNTIL_MS -- see commands::snooze_pomodoro) having
+        // expired. Deliberately not a `tokio::time::sleep`-based timer: that
+        // would be `Instant`/`CLOCK_MONOTONIC`-based and could fire far later
+        // than intended across a real suspend/Doze gap, the same class of bug
+        // `ANDROID_POLL_INTERVAL` below exists to work around -- polling this
+        // loop's own wall clock sidesteps it the same way. `sleep_dur` is
+        // capped to `SNOOZE_POLL_INTERVAL` further below whenever a snooze is
+        // pending so this check actually runs often enough to matter.
+        if !POMODORO_ENABLED.load(Ordering::SeqCst) {
+            let until_ms = POMODORO_SNOOZE_UNTIL_MS.load(Ordering::SeqCst);
+            if until_ms != 0 && now.timestamp_millis() >= until_ms {
+                log::info!("scheduler: snooze expired, resuming Pomodoro mode");
+                apply_pomodoro_enabled(&app, true);
+                // Same trick as the suspend-gap branch below: force the
+                // transition check to re-evaluate the current phase from
+                // scratch, so a snooze expiring while the wall clock is
+                // already inside a Break window opens the overlay
+                // immediately instead of waiting for the next real phase
+                // transition (up to ~25 minutes away).
+                last_phase = None;
+            }
+        }
 
         // If we woke up much later than the last iteration scheduled for,
         // the process was almost certainly suspended/hibernated in between.
@@ -331,6 +424,18 @@ async fn run_scheduler(app: AppHandle) {
             .unwrap_or(StdDuration::from_secs(1));
         #[cfg(target_os = "android")]
         let sleep_dur = sleep_dur.min(ANDROID_POLL_INTERVAL);
+        // Caps the sleep on every platform (not just Android) whenever a
+        // snooze is pending, so the wall-clock check above actually runs
+        // often enough to resume close to on time -- without this, desktop
+        // would otherwise sleep until the next grid boundary (up to ~25
+        // minutes away) regardless of how soon the snooze is due to expire.
+        let snooze_pending = !POMODORO_ENABLED.load(Ordering::SeqCst)
+            && POMODORO_SNOOZE_UNTIL_MS.load(Ordering::SeqCst) != 0;
+        let sleep_dur = if snooze_pending {
+            sleep_dur.min(SNOOZE_POLL_INTERVAL)
+        } else {
+            sleep_dur
+        };
         // Refreshes MainActivity.lastSchedulerHeartbeatAt every iteration
         // (at least every ANDROID_POLL_INTERVAL, thanks to the cap above) so
         // BreakAlarmReceiver can tell a genuinely live scheduler apart from
@@ -406,14 +511,13 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             "open" => open_main_window(app),
             "toggle" => {
                 let enabled = !POMODORO_ENABLED.load(Ordering::SeqCst);
-                POMODORO_ENABLED.store(enabled, Ordering::SeqCst);
+                apply_pomodoro_enabled(app, enabled);
                 let label = if enabled {
                     "Disable Pomodoro Mode"
                 } else {
                     "Enable Pomodoro Mode"
                 };
                 let _ = toggle_item.set_text(label);
-                let _ = app.emit("pomodoro://enabled-changed", enabled);
             }
             "quit" => {
                 // Deliberately a hard process exit, not app.exit()/window.close():
@@ -611,6 +715,8 @@ pub fn run() {
             commands::dev_force_close,
             commands::get_enabled,
             commands::set_enabled,
+            commands::snooze_pomodoro,
+            commands::get_snooze_until,
             commands::get_checkin_slot,
             commands::read_text_file,
             commands::write_text_file,

@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 
+use chrono::TimeZone;
 use tauri::{AppHandle, Emitter, State};
 #[cfg(target_os = "android")]
 use tauri::Manager;
@@ -11,9 +12,11 @@ use crate::overlay;
 use crate::screen_time;
 use crate::state::{AppState, OverlayState};
 use crate::{
-    BREAK_NOTIFICATION_PERSISTENT_ENABLED, FORCE_CLOSE_SHORTCUT_ENABLED, LAST_MEDIA_TOGGLE_AT,
-    LAST_WELLNESS_CHECK_AT, MACOS_HIDE_MENU_BAR_DOCK_ENABLED, MEDIA_PAUSE_ON_BREAK_ENABLED,
-    OVERLAY_AUTO_CLOSE_MINUTES, POMODORO_ENABLED, SCREEN_TIME_TRACKING_ENABLED,
+    apply_pomodoro_enabled, BREAK_NOTIFICATION_PERSISTENT_ENABLED, FORCE_CLOSE_SHORTCUT_ENABLED,
+    LAST_MEDIA_TOGGLE_AT, LAST_WELLNESS_CHECK_AT, MACOS_HIDE_MENU_BAR_DOCK_ENABLED,
+    MEDIA_PAUSE_ON_BREAK_ENABLED, OVERLAY_AUTO_CLOSE_MINUTES, POMODORO_ENABLED,
+    POMODORO_SNOOZE_MINUTES, POMODORO_SNOOZE_UNTIL_MS, SCREEN_TIME_TRACKING_ENABLED,
+    SNOOZE_MAX_MINUTES, SNOOZE_MIN_MINUTES,
 };
 
 #[tauri::command]
@@ -148,34 +151,84 @@ pub fn get_enabled() -> bool {
 
 #[tauri::command]
 pub fn set_enabled(app: AppHandle, enabled: bool) {
-    POMODORO_ENABLED.store(enabled, Ordering::SeqCst);
-    let _ = app.emit("pomodoro://enabled-changed", enabled);
+    apply_pomodoro_enabled(&app, enabled);
+}
 
-    // Keeps the Android foreground service (and its AlarmManager backup) in
-    // step with the toggle: starting it when the user turns Pomodoro mode
-    // on (mirrors the same call in lib.rs's .setup(), for the already-on
-    // default at launch) and stopping it when they turn it off, so
-    // disabling actually lets Android reclaim the process instead of
-    // leaving a phantom "running" notification behind.
+/// A pending "snooze" (Pomodoro mode temporarily paused from the main
+/// window's dropdown, auto-resuming on its own -- see `snooze_pomodoro`).
+/// Snake_case fields, no camelCase rename: matches `OverlayState`'s existing
+/// convention, read directly (e.g. `current_slot_start`) on the frontend.
+#[derive(Clone, serde::Serialize)]
+pub struct SnoozeInfo {
+    pub resume_at: String,
+    pub minutes: u32,
+}
+
+/// Pauses Pomodoro mode for `minutes` (clamped to `[SNOOZE_MIN_MINUTES,
+/// SNOOZE_MAX_MINUTES]`), auto-resuming on its own once that time passes --
+/// see `run_scheduler`'s wall-clock poll of `POMODORO_SNOOZE_UNTIL_MS` in
+/// lib.rs for why this is a poll rather than a timer. Returns the resolved
+/// `SnoozeInfo` so the caller doesn't have to race the
+/// `pomodoro://snooze-changed` event for its own same-window update (see
+/// best_practices.md on preferring command return values).
+///
+/// Android-specific and load-bearing: unlike a permanent Off
+/// (`apply_pomodoro_enabled`), this deliberately never calls
+/// `stop_foreground_service` -- stopping it is what lets Android reclaim
+/// (kill) the process while backgrounded, which would leave nothing running
+/// to notice the snooze expiring. It also persists the boot-recovery
+/// preference as `true`, not `false`: the durable preference stays "on"
+/// through a snooze, and only a real permanent Off should persist `false`.
+/// Known accepted limitation: there's no persisted resume-at, so a full
+/// device reboot mid-snooze comes back enabled rather than resuming the
+/// remaining snooze -- the same non-persistence already documented for
+/// `POMODORO_ENABLED` itself (see CLAUDE.md's Android section).
+#[tauri::command]
+pub fn snooze_pomodoro(app: AppHandle, minutes: u32) -> SnoozeInfo {
+    let minutes = minutes.clamp(SNOOZE_MIN_MINUTES, SNOOZE_MAX_MINUTES);
+    let resume_at = chrono::Local::now() + chrono::Duration::minutes(minutes as i64);
+    let resume_at_iso = resume_at.to_rfc3339();
+
+    POMODORO_ENABLED.store(false, Ordering::SeqCst);
+    POMODORO_SNOOZE_UNTIL_MS.store(resume_at.timestamp_millis(), Ordering::SeqCst);
+    POMODORO_SNOOZE_MINUTES.store(minutes, Ordering::SeqCst);
+
+    let info = SnoozeInfo {
+        resume_at: resume_at_iso,
+        minutes,
+    };
+    log::info!("snooze_pomodoro: pausing for {minutes} min, resuming at {}", info.resume_at);
+
+    let _ = app.emit("pomodoro://enabled-changed", false);
+    let _ = app.emit("pomodoro://snooze-changed", Some(info.clone()));
+
     #[cfg(target_os = "android")]
     {
         let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
-        let result = if enabled {
-            bridge.start_foreground_service()
-        } else {
-            bridge.stop_foreground_service()
-        };
-        if let Err(e) = result {
-            log::error!("failed to toggle Android foreground service: {e:?}");
+        if let Err(e) = bridge.start_foreground_service() {
+            log::error!("failed to (re)start Android foreground service for snooze: {e:?}");
         }
-        // So a reboot (BootCompletedReceiver, which runs before any Rust
-        // runtime exists in that fresh process) can respect a deliberate
-        // "off" choice instead of always re-arming everything -- see
-        // PomodoroEnabledPref's doc comment (Kotlin).
-        if let Err(e) = bridge.persist_pomodoro_enabled(enabled) {
-            log::error!("failed to persist pomodoro-enabled preference: {e:?}");
+        if let Err(e) = bridge.persist_pomodoro_enabled(true) {
+            log::error!("failed to persist pomodoro-enabled preference during snooze: {e:?}");
         }
     }
+
+    info
+}
+
+/// Read by the main window on boot to restore a snooze already in progress
+/// (e.g. after a page reload) -- see `snooze_pomodoro`.
+#[tauri::command]
+pub fn get_snooze_until() -> Option<SnoozeInfo> {
+    let until_ms = POMODORO_SNOOZE_UNTIL_MS.load(Ordering::SeqCst);
+    if until_ms == 0 {
+        return None;
+    }
+    let resume_at = chrono::Local.timestamp_millis_opt(until_ms).single()?;
+    Some(SnoozeInfo {
+        resume_at: resume_at.to_rfc3339(),
+        minutes: POMODORO_SNOOZE_MINUTES.load(Ordering::SeqCst),
+    })
 }
 
 /// Read by the check-in window on mount to learn which slot triggered it.
