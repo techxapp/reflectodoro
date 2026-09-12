@@ -769,9 +769,10 @@
         </label>
       </div>
       <p class="hint">
-        Off by default since it's a bigger change to your desktop than anything else here &mdash;
-        like the rest of the break screen, it's a strong deterrent, not an absolute lock: Activity
-        Monitor/Force Quit always still works.
+        Off by default since it's a bigger change to your desktop than anything else here. Either
+        way the Dock auto-hides for the duration of a break &mdash; macOS won't let an app block
+        Cmd+Tab without that. Like the rest of the break screen, it's a strong deterrent, not an
+        absolute lock: Activity Monitor/Force Quit always still works.
       </p>
     {/if}
   </section>

@@ -14,10 +14,14 @@
 //!   `.always_on_top(true)` sets (meant only for "stay above other windows in
 //!   *this* Space") -- so this also bumps it to `NSScreenSaverWindowLevel`.
 //!   `NSApplicationPresentationOptions.DisableProcessSwitching` (blocks
-//!   Cmd+Tab) is also always on, for the same reason.
+//!   Cmd+Tab) is also always on, for the same reason. AppKit refuses that
+//!   flag unless a Dock flag comes with it (see `enable_presentation_lockdown`
+//!   for the exact rules), so `AutoHideDock` rides along with it by default.
 //! - **Gated on the `macos_hide_menu_bar_dock_enabled` app_setting** (off by
-//!   default -- opt-in): `HideMenuBar` + `HideDock`, a more disruptive change
-//!   to the user's desktop than blocking one keyboard shortcut.
+//!   default -- opt-in): upgrades that to `HideDock` + `HideMenuBar`, a more
+//!   disruptive change to the user's desktop than blocking one keyboard
+//!   shortcut. The toggle therefore picks *which* Dock flag accompanies the
+//!   Cmd+Tab block, not whether one is present -- one always is.
 //!
 //! Both tiers deliberately never include `DisableForceQuit`: Activity
 //! Monitor/Force Quit is kill switch #1 (see CLAUDE.md) and must always work,
@@ -151,64 +155,67 @@ fn configure_window(ptr: *mut c_void) {
     );
 }
 
-/// `DisableProcessSwitching` (blocks Cmd+Tab) is always included; `HideMenuBar`
-/// + `HideDock` are only added when `hide_menu_bar_and_dock` is true (the
-/// user's `macos_hide_menu_bar_dock_enabled` Settings toggle, off by default).
+/// `DisableProcessSwitching` (blocks Cmd+Tab) is always included, and AppKit
+/// requires it to be accompanied by one of the two Dock flags -- so
+/// `hide_menu_bar_and_dock` (the user's `macos_hide_menu_bar_dock_enabled`
+/// Settings toggle, off by default) selects *which* Dock flag comes with it,
+/// rather than whether one is present at all. See the combination rules below.
 fn enable_presentation_lockdown(hide_menu_bar_and_dock: bool) {
     let Some(mtm) = MainThreadMarker::new() else {
         log::error!("macos_overlay: enable_presentation_lockdown called off the main thread");
         return;
     };
-    let mut options = NSApplicationPresentationOptions::DisableProcessSwitching;
-    if hide_menu_bar_and_dock {
-        options |= NSApplicationPresentationOptions::HideMenuBar
-            | NSApplicationPresentationOptions::HideDock;
-    }
 
-    let app = NSApplication::sharedApplication(mtm);
+    // Apple's documented restrictions on presentation-option combinations
+    // (the "Valid Combinations of Settings" section of the Kiosk Mode
+    // technote; AppKit's own NSApplication.h points at the same rules):
+    //
+    //   - DisableProcessSwitching "must be accompanied by either
+    //     NSApplicationPresentationHideDock or
+    //     NSApplicationPresentationAutoHideDock".
+    //   - HideMenuBar "must be accompanied by
+    //     NSApplicationPresentationHideDock".
+    //   - HideDock and AutoHideDock are mutually exclusive.
+    //
+    // Getting this wrong is not survivable here: -setPresentationOptions:
+    // raises NSInvalidArgumentException on an invalid combination, and the
+    // shipped release build cannot catch it (see the catch below). This
+    // shipped setting DisableProcessSwitching *on its own* whenever the
+    // menu-bar/Dock toggle was off -- i.e. in the default configuration --
+    // which violates the first rule above and aborted the process at the
+    // start of every single break on a real Mac, in a restart loop.
+    //
+    // With the toggle off, AutoHideDock ("Dock appears when moused to") is
+    // the gentlest flag that satisfies the rule, and it costs the user
+    // nothing visible during a break anyway: the overlay sits at
+    // NSScreenSaverWindowLevel, above the Dock either way.
+    let options = if hide_menu_bar_and_dock {
+        NSApplicationPresentationOptions::DisableProcessSwitching
+            | NSApplicationPresentationOptions::HideDock
+            | NSApplicationPresentationOptions::HideMenuBar
+    } else {
+        NSApplicationPresentationOptions::DisableProcessSwitching
+            | NSApplicationPresentationOptions::AutoHideDock
+    };
 
-    // `-setPresentationOptions:` raises an NSException if the app isn't the
-    // *active* application at the moment it's called -- confirmed live: a
-    // real crash report showed the process aborting on every single break,
-    // right after `configure_window`'s log line and before this function's
-    // own success log ever printed, with `DisableProcessSwitching` alone (no
-    // hide-menu-bar/dock flags involved, so this isn't a flag-combination
-    // conflict). Nothing upstream of here actually activates the app --
-    // `win.show()`/`win.set_focus()` (overlay.rs) order the overlay window
-    // to the front but don't reliably make the *application* active, e.g.
-    // when a different app currently has focus. Activating first, and
-    // skipping the call entirely if activation didn't take, trades a missed
-    // kiosk-mode-for-this-break for not crashing the whole app.
-    if !app.isActive() {
-        log::warn!(
-            "macos_overlay::enable_presentation_lockdown: app not active yet, activating before setPresentationOptions"
-        );
-        // Deliberately the older `activateIgnoringOtherApps:` rather than
-        // the newer `activate()` (macOS 14+ only): this app's minimum
-        // supported macOS version is older than that, and calling a
-        // selector AppKit doesn't implement raises its own
-        // "unrecognized selector" NSException -- exactly the
-        // process-aborting failure mode this function exists to avoid.
-        #[allow(deprecated)]
-        app.activateIgnoringOtherApps(true);
-    }
-    if !app.isActive() {
-        log::error!(
-            "macos_overlay::enable_presentation_lockdown: app still not active after activation attempt, skipping setPresentationOptions this break to avoid an unrecoverable NSInvalidArgumentException"
-        );
-        return;
-    }
+    // Deliberately never touches NSApplicationPresentationFullScreen. That
+    // bit is AppKit's own "a window of this app is in fullscreen" state, and
+    // passing it when no fullscreen window is visible draws a complaint from
+    // AppKit; nothing here needs to preserve it, since the overlay never
+    // uses real fullscreen on macOS (see this module's doc comment).
 
-    // Belt-and-suspenders: even with the active-app precondition satisfied
-    // above, still wrap the call itself. This only actually helps in dev
-    // builds (panic = "unwind") -- it does NOT help in the shipped release
-    // build, which sets panic = "abort" (Cargo.toml's [profile.release]);
-    // objc2::exception::catch's own doc comment states it cannot catch
-    // anything in that configuration, so an exception here would still
-    // abort the whole process. The activation check above is the real
-    // mitigation now; this stays as defense-in-depth for whatever we
-    // haven't thought of.
+    // Kept as defense-in-depth, but it does nothing in the build that
+    // actually ships: objc2::exception::catch's own docs say "if your Rust
+    // code is compiled with panic=abort ... this cannot catch the
+    // exception", and [profile.release] sets panic = "abort" (Cargo.toml).
+    // An invalid combination therefore aborts the whole process in release
+    // -- the flag rules above are the real safety mechanism, not this.
+    //
+    // NSApplication is built inside the closure rather than hoisted out of
+    // it: Retained<NSApplication> isn't RefUnwindSafe, so capturing one by
+    // reference fails catch's UnwindSafe bound.
     let result = objc2::exception::catch(|| {
+        let app = NSApplication::sharedApplication(mtm);
         app.setPresentationOptions(options);
         log::info!(
             "macos_overlay::enable_presentation_lockdown: set presentationOptions={:?} (readback: {:?})",
