@@ -190,6 +190,34 @@ impl<R: Runtime> AndroidBridge<R> {
         self.0
             .run_mobile_plugin("discoverP2pServices", serde_json::json!({ "timeoutMs": timeout_ms }))
     }
+
+    /// Whether "Usage access" (`PACKAGE_USAGE_STATS`, a special-access grant
+    /// like draw-overlays/exact-alarm) is on -- screen_time.rs's Android
+    /// polling depends on it; surfaced to Settings so it only prompts for a
+    /// grant that's actually missing.
+    pub fn can_query_usage_stats(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("canQueryUsageStats", ())
+    }
+
+    /// Deep-links to the system Usage Access settings screen -- there is no
+    /// in-app runtime-dialog form of this permission, same as draw-overlays
+    /// and exact-alarm.
+    pub fn request_usage_stats_permission(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("requestUsageStatsPermission", ())
+    }
+
+    /// Polls `UsageStatsManager` for foreground-transition events since
+    /// Kotlin's own persisted cursor (see `NativeBridgePlugin.kt`'s
+    /// `queryUsageEvents` doc comment for why the cursor lives in
+    /// SharedPreferences rather than being passed in from here). Returns
+    /// `{"events": [{"timestamp": ms, "appId": "...", "displayName": "..."}]}`
+    /// ordered oldest-first; an empty `appId` means focus left every app
+    /// (Reflectodoro's own foreground, or the screen turning off) -- see
+    /// screen_time.rs's Android `platform_impl` for how this replays into
+    /// the same open/close session model every other platform uses.
+    pub fn query_usage_events(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("queryUsageEvents", ())
+    }
 }
 
 pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {

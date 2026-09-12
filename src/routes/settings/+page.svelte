@@ -110,6 +110,9 @@
   let notificationGranted = $state(false);
   let notificationChecked = $state(false);
 
+  let usageStatsGranted = $state(false);
+  let usageStatsChecked = $state(false);
+
   let includeSettingsInTransfer = $state(true);
 
   let exportStatus = $state<"idle" | "success" | "error">("idle");
@@ -374,6 +377,19 @@
     await refreshNotificationPermission();
   }
 
+  /** "Usage access" (PACKAGE_USAGE_STATS) -- same no-in-app-dialog shape as
+   * the overlay/exact-alarm grants above; screen_time.rs's Android polling
+   * (NativeBridgePlugin.kt::queryUsageEvents) simply returns nothing until
+   * this is granted. */
+  async function refreshUsageStatsPermission() {
+    usageStatsGranted = await invoke<boolean>("can_query_usage_stats");
+    usageStatsChecked = true;
+  }
+
+  async function openUsageStatsSettings() {
+    await invoke("request_usage_stats_permission");
+  }
+
   // Re-checks when the user comes back from the system settings screen --
   // same pattern as onboarding's exact-alarm re-check, needed since that
   // screen's return doesn't reliably resolve any promise here.
@@ -382,6 +398,7 @@
       void refreshOverlayPermission();
       void refreshExactAlarmPermission();
       void refreshNotificationPermission();
+      void refreshUsageStatsPermission();
     }
   }
 
@@ -389,6 +406,7 @@
     void refreshOverlayPermission();
     void refreshExactAlarmPermission();
     void refreshNotificationPermission();
+    void refreshUsageStatsPermission();
     document.addEventListener("visibilitychange", onOverlayVisibilityChange);
   });
 
@@ -885,10 +903,24 @@
       </div>
     {/if}
 
-    {#if osResolved && !isWindows}
+    {#if osResolved && !isWindows && !isAndroid}
       <p class="hint warning">
-        Not captured on this platform yet &mdash; Windows is the only one recording so far. The
-        setting is here, but nothing lands until support for this platform ships.
+        Not captured on this platform yet &mdash; Windows and Android are the only ones recording
+        so far. The setting is here, but nothing lands until support for this platform ships.
+      </p>
+    {/if}
+
+    {#if isAndroid && usageStatsChecked}
+      <div class="data-row">
+        <span>Usage access: {usageStatsGranted ? "Granted" : "Not granted"}</span>
+        {#if !usageStatsGranted}
+          <button type="button" onclick={openUsageStatsSettings}>Open settings&hellip;</button>
+        {/if}
+      </div>
+      <p class="hint">
+        Required for screen time on Android &mdash; there's no push notification for "which app
+        just took focus" without this special-access grant, so tracking records nothing until
+        it's on.
       </p>
     {/if}
 

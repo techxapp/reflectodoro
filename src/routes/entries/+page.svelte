@@ -47,10 +47,16 @@
   let screenTimeLoaded = $state(false);
   let screenTimeTrackingOn = $state(true);
   let screenTimeThresholdMinutes = $state(5);
-  // Windows is the only platform capturing focus so far -- without this the
-  // empty state on the others reads as "you did nothing today" rather than
-  // "nothing is recording yet".
+  // Windows and Android are the only platforms capturing focus so far --
+  // without this the empty state on the others reads as "you did nothing
+  // today" rather than "nothing is recording yet".
   let captureSupported = $state(true);
+  let isAndroid = $state(false);
+  // Android's capture depends on the special-access "Usage access" grant
+  // (see screen_time.rs's Android platform_impl); without it tracking can be
+  // on and still record nothing, which would otherwise look identical to a
+  // genuinely quiet day.
+  let usageAccessGranted = $state(true);
   let taskSaveTimer: ReturnType<typeof setTimeout> | undefined;
   let notToDoSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -302,13 +308,30 @@
     void loadScreenTime();
   }
 
+  async function refreshUsageAccess() {
+    if (!isAndroid) return;
+    usageAccessGranted = await invoke<boolean>("can_query_usage_stats");
+  }
+
+  function onEntriesVisibilityChange() {
+    // Catches the user granting Usage Access in system Settings and coming
+    // back -- same pattern as settings/+page.svelte's own permission
+    // re-checks.
+    if (document.visibilityState === "visible") void refreshUsageAccess();
+  }
+
   onMount(async () => {
     window.addEventListener("focus", onWindowFocus);
-    captureSupported = (await invoke<string>("current_os")) === "windows";
+    document.addEventListener("visibilitychange", onEntriesVisibilityChange);
+    const os = await invoke<string>("current_os");
+    captureSupported = os === "windows" || os === "android";
+    isAndroid = os === "android";
+    await refreshUsageAccess();
   });
 
   onDestroy(() => {
     window.removeEventListener("focus", onWindowFocus);
+    document.removeEventListener("visibilitychange", onEntriesVisibilityChange);
   });
 
   const calendarDays = $derived.by(() => {
@@ -376,6 +399,11 @@
       </p>
     {:else if screenTime.length === 0 && !captureSupported}
       <p class="hint">Screen time isn't captured on this platform yet.</p>
+    {:else if screenTime.length === 0 && isAndroid && !usageAccessGranted}
+      <p class="hint">
+        Usage access isn't granted, so nothing can be recorded yet. Turn it on in
+        <a href="/settings">Settings</a>.
+      </p>
     {:else if screenTime.length === 0}
       <p class="hint">Nothing recorded for this day.</p>
     {:else if visibleScreenTime.length === 0}

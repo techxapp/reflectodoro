@@ -2,7 +2,10 @@ package com.reflectodoro.app
 
 import android.app.Activity
 import android.app.AlarmManager
+import android.app.AppOpsManager
 import android.app.PendingIntent
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
@@ -14,6 +17,7 @@ import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.provider.Settings
 import android.util.Log
 import app.tauri.annotation.Command
@@ -86,11 +90,35 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         activity.getSystemService(Context.NSD_SERVICE) as NsdManager
     }
 
+    // Best-effort friendly-label cache for queryUsageEvents, keyed by package
+    // name -- PackageManager.getApplicationLabel does real work (an
+    // ApplicationInfo lookup + resource resolution), and the same handful of
+    // apps get queried over and over. Mirrors screen_time.rs's Windows
+    // NAME_CACHE, just kept here since Kotlin is what has PackageManager
+    // access, not Rust.
+    private val appLabelCache = mutableMapOf<String, String>()
+
     companion object {
         // Trailing dot matches the format NsdManager expects (mirrors
         // p2p_sync.rs's SERVICE_TYPE constant on the Rust side -- both must
         // agree for desktop and Android instances to discover each other).
         private const val P2P_SERVICE_TYPE = "_reflectodoro._tcp."
+
+        // Where queryUsageEvents persists "how far we've already queried" so
+        // a process restart doesn't re-walk up to a full day of history and
+        // re-report sessions already flushed to SQLite. Plain
+        // SharedPreferences rather than Rust's app_setting table, same
+        // reasoning as PomodoroEnabledPref: this needs to be read/written
+        // entirely on the Kotlin side (queryUsageEvents owns the cursor, not
+        // Rust -- see the doc comment below), so there's no reason to round
+        // trip it through IPC just to store it in SQLite instead.
+        private const val USAGE_STATS_PREFS = "reflectodoro_usage_stats"
+        private const val PREF_LAST_QUERY_AT = "last_query_at"
+
+        // Plan-specified cap on how far back the very first poll (no
+        // persisted cursor yet, e.g. right after the Usage Access grant) is
+        // allowed to look.
+        private const val INITIAL_LOOKBACK_MS = 24L * 60 * 60 * 1000
     }
 
     @Command
@@ -294,6 +322,147 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
             activity.startActivity(intent)
         }
         invoke.resolve(JSObject())
+    }
+
+    /** minSdk 29 is already API Q, so unsafeCheckOpNoThrow (its
+     * checkOpNoThrow replacement) is always available -- unlike
+     * canScheduleExactAlarms below, there's no pre-minSdk branch to keep. */
+    private fun hasUsageStatsPermission(): Boolean {
+        val appOps = activity.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        val mode = appOps.unsafeCheckOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            Process.myUid(),
+            activity.packageName,
+        )
+        return mode == AppOpsManager.MODE_ALLOWED
+    }
+
+    /** "Usage access" (PACKAGE_USAGE_STATS) is a special-access permission
+     * like draw-overlays/exact-alarm -- no runtime dialog, checked via
+     * AppOpsManager rather than a normal checkSelfPermission call. Surfaced
+     * to Settings so screen_time.rs's Android polling (screen_time.rs's
+     * platform_impl) only gets treated as "on" once this is actually
+     * granted. */
+    @Command
+    fun canQueryUsageStats(invoke: Invoke) {
+        val ret = JSObject()
+        ret.put("value", hasUsageStatsPermission())
+        invoke.resolve(ret)
+    }
+
+    /** Deep-links to the system Usage Access list -- same no-in-app-dialog
+     * situation as requestDrawOverlaysPermission/requestScheduleExactAlarmPermission.
+     * Unlike those two, ACTION_USAGE_ACCESS_SETTINGS is not documented to
+     * accept a "package:" data URI to land directly on this app's row -- it
+     * works on some OEMs and not others. Try the direct form first since it
+     * costs nothing when it works, and fall back to the bare list (which
+     * always resolves) if the device throws on it. Needs on-device
+     * confirmation across OEM skins, same as exact-alarm's grant screen. */
+    @Command
+    fun requestUsageStatsPermission(invoke: Invoke) {
+        try {
+            val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+            intent.data = Uri.parse("package:" + activity.packageName)
+            activity.startActivity(intent)
+        } catch (e: Exception) {
+            activity.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+        }
+        invoke.resolve(JSObject())
+    }
+
+    private fun displayNameForPackage(packageName: String): String {
+        appLabelCache[packageName]?.let { return it }
+        val label = try {
+            val pm = activity.packageManager
+            pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
+        } catch (e: Exception) {
+            // Uninstalled since the event was recorded, or some other
+            // PackageManager lookup failure -- every caller already falls
+            // back to the raw package name (app_id) when this is empty.
+            ""
+        }
+        appLabelCache[packageName] = label
+        return label
+    }
+
+    /** Polls UsageStatsManager for foreground-transition events since the
+     * last successful call, and returns them as an ordered event stream --
+     * NOT pre-paired sessions. Rust replays this exactly the way it treats
+     * Windows' own EVENT_SYSTEM_FOREGROUND callback (screen_time.rs's
+     * record_focus_change_at): each entry means "focus changed to this app
+     * at this instant," which implicitly closes whatever was open before it.
+     * That's simpler and more robust than pairing MOVE_TO_FOREGROUND with
+     * MOVE_TO_BACKGROUND per package here, since a background event whose
+     * matching foreground event was already consumed by an earlier poll
+     * would otherwise have nothing to pair with.
+     *
+     * An empty `appId` is the "focus left every app" sentinel (mirrors
+     * display_name's own empty-string-means-unresolved convention elsewhere
+     * in this codebase) and covers two cases Rust needs to treat as "close
+     * without reopening": Reflectodoro's own process taking foreground (the
+     * break overlay, self-exclusion -- same reasoning as the pid check in
+     * screen_time.rs's Windows app_id_for_window), and the screen turning off
+     * (SCREEN_NON_INTERACTIVE) -- without the latter, a session spanning a
+     * real suspend would otherwise get attributed entirely to whatever app
+     * happened to be focused when the screen went dark, the same wrong
+     * attribution SUSPEND_GAP_THRESHOLD exists to prevent on desktop.
+     *
+     * The query's own end bound (`now`, captured once) becomes the next
+     * call's start bound, persisted in SharedPreferences so a process
+     * restart resumes from there instead of re-querying (and re-reporting)
+     * up to a full day of already-seen history -- see PREF_LAST_QUERY_AT.
+     * The cursor is only advanced when the permission is actually granted;
+     * left untouched otherwise, so the first poll after the user grants it
+     * gets the full INITIAL_LOOKBACK_MS window the plan calls for, rather
+     * than silently missing everything that happened before the grant. */
+    @Command
+    fun queryUsageEvents(invoke: Invoke) {
+        val ret = JSObject()
+        if (!hasUsageStatsPermission()) {
+            ret.put("events", JSArray())
+            invoke.resolve(ret)
+            return
+        }
+
+        val prefs = activity.getSharedPreferences(USAGE_STATS_PREFS, Activity.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val storedCursor = prefs.getLong(PREF_LAST_QUERY_AT, 0L)
+        val since = if (storedCursor <= 0L) now - INITIAL_LOOKBACK_MS else storedCursor
+
+        val usm = activity.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val ownPackage = activity.packageName
+        val events = JSArray()
+        val usageEvents = usm.queryEvents(since, now)
+        val event = UsageEvents.Event()
+        while (usageEvents.hasNextEvent()) {
+            usageEvents.getNextEvent(event)
+            when (event.eventType) {
+                UsageEvents.Event.MOVE_TO_FOREGROUND -> {
+                    val pkg = event.packageName
+                    val entry = JSObject()
+                    entry.put("timestamp", event.timeStamp)
+                    if (pkg == null || pkg == ownPackage) {
+                        entry.put("appId", "")
+                        entry.put("displayName", "")
+                    } else {
+                        entry.put("appId", pkg)
+                        entry.put("displayName", displayNameForPackage(pkg))
+                    }
+                    events.put(entry)
+                }
+                UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
+                    val entry = JSObject()
+                    entry.put("timestamp", event.timeStamp)
+                    entry.put("appId", "")
+                    entry.put("displayName", "")
+                    events.put(entry)
+                }
+            }
+        }
+
+        prefs.edit().putLong(PREF_LAST_QUERY_AT, now).apply()
+        ret.put("events", events)
+        invoke.resolve(ret)
     }
 
     /** Requests transient audio focus so any well-behaved playing app

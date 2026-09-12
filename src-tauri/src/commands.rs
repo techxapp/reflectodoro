@@ -364,7 +364,7 @@ pub fn set_screen_time_tracking_enabled(app: AppHandle, enabled: bool) {
     if enabled {
         // Start attributing whatever is focused right now instead of waiting
         // for the next window switch.
-        screen_time::resync_current_focus();
+        screen_time::resync_current_focus(&app);
     } else {
         screen_time::flush_now(&app);
     }
@@ -515,6 +515,44 @@ pub fn request_schedule_exact_alarm_permission(app: AppHandle) {
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub fn request_schedule_exact_alarm_permission() {}
+
+/// Whether the special-access "Usage access" grant (`PACKAGE_USAGE_STATS`)
+/// is on -- screen_time.rs's Android polling depends on it; surfaced to
+/// Settings so it only prompts for a grant that's actually missing. Without
+/// it, `screen_time_session` simply stays empty on Android.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn can_query_usage_stats(app: AppHandle) -> bool {
+    let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+    match bridge.can_query_usage_stats() {
+        Ok(v) => v.get("value").and_then(|x| x.as_bool()).unwrap_or(false),
+        Err(e) => {
+            log::error!("can_query_usage_stats failed: {e:?}");
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub fn can_query_usage_stats() -> bool {
+    true
+}
+
+/// Opens the system Usage Access settings screen -- there is no in-app
+/// runtime-dialog form of this permission. No-op on desktop.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn request_usage_stats_permission(app: AppHandle) {
+    let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+    if let Err(e) = bridge.request_usage_stats_permission() {
+        log::error!("request_usage_stats_permission failed: {e:?}");
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub fn request_usage_stats_permission() {}
 
 /// Mirrors app_setting.break_notification_persistent_enabled -- loaded and
 /// pushed here by the frontend on boot and on every Settings save (see

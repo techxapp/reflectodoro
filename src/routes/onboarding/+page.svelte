@@ -11,6 +11,8 @@
   let exactAlarmChecked = $state(false);
   let notificationGranted = $state(false);
   let notificationChecked = $state(false);
+  let usageStatsGranted = $state(false);
+  let usageStatsChecked = $state(false);
   let finishing = $state(false);
 
   async function refreshStatus() {
@@ -20,6 +22,8 @@
     exactAlarmChecked = true;
     notificationGranted = await isPermissionGranted();
     notificationChecked = true;
+    usageStatsGranted = await invoke<boolean>("can_query_usage_stats");
+    usageStatsChecked = true;
   }
 
   async function grantOverlay() {
@@ -37,6 +41,11 @@
   async function grantNotifications() {
     await requestPermission();
     await refreshStatus();
+  }
+
+  async function grantUsageStats() {
+    // Same no-in-app-dialog situation as grantOverlay/grantExactAlarm above.
+    await invoke("request_usage_stats_permission");
   }
 
   // Catches the return from the overlay settings screen or the notification
@@ -124,6 +133,25 @@
       </p>
       {#if !notificationGranted}
         <button type="button" onclick={grantNotifications}>Enable notifications</button>
+      {/if}
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Screen time</h2>
+        {#if usageStatsChecked}
+          <span class="status" class:ok={usageStatsGranted}>
+            {usageStatsGranted ? "Granted" : "Not granted"}
+          </span>
+        {/if}
+      </div>
+      <p class="hint">
+        Lets Reflectodoro record which app has focus and for how long, so the Entries tab can show
+        where your day went. Everything stays on this device. Without it, screen time just isn't
+        tracked.
+      </p>
+      {#if !usageStatsGranted}
+        <button type="button" onclick={grantUsageStats}>Open settings&hellip;</button>
       {/if}
     </section>
 

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- Foreground service + AlarmManager backup that keep the wall-clock
@@ -40,6 +41,17 @@
          NativeBridgePlugin.kt's registerP2pService/discoverP2pServices. -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- Screen time tracking (screen_time.rs): Android has no push API for
+         foreground focus changes without an Accessibility Service (this app
+         deliberately doesn't use one), so it polls UsageStatsManager
+         instead. Usage access is a special-access permission (Settings
+         deep link, not a runtime dialog, same tier as SYSTEM_ALERT_WINDOW
+         above) declared here so the grant screen and canQueryUsageStats
+         exist for this app at all; tools:ignore suppresses the lint warning
+         that flags protected permissions requiring manual review. -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

@@ -19,16 +19,35 @@
 //! resource at all -- common for console tools/scripts-turned-exe -- or one
 //! present without this specific string).
 //!
-//! macOS / Linux / Android: not implemented yet -- `install_watcher` is a
-//! documented no-op on those, so everything below (buffering, flushing, the
-//! Settings toggle, the Entries breakdown) is already wired and simply has
-//! nothing feeding it until those land. Planned mechanisms, per the plan doc:
-//! macOS `NSWorkspace.didActivateApplicationNotification`, Linux X11
+//! Android: no push API exists for a third-party app without an
+//! Accessibility Service (deliberately not used elsewhere in this app), so
+//! this polls `UsageStatsManager.queryEvents` on its own interval
+//! (`android::USAGE_POLL_INTERVAL`, deliberately decoupled from the
+//! unrelated 20s `ANDROID_POLL_INTERVAL` used for break-scheduling Doze-wake
+//! correctness in lib.rs -- session boundaries come from the OS's own
+//! timestamped event log inside each query's result, not from how often the
+//! query itself runs, so a coarser interval only delays *when* a session
+//! shows up in the flush pipeline, not its recorded accuracy) via
+//! `NativeBridgePlugin.kt::queryUsageEvents`. That returns an ordered stream
+//! of foreground-transition events (ISO app id/timestamp pairs), which
+//! `record_focus_change_at` replays exactly the way it treats Windows' own
+//! `EVENT_SYSTEM_FOREGROUND` callback -- each entry closes whatever was
+//! previously open and opens the new one, at that event's own timestamp
+//! rather than "now". This is deliberately simpler than pairing
+//! `MOVE_TO_FOREGROUND`/`MOVE_TO_BACKGROUND` events per package in Kotlin:
+//! see `queryUsageEvents`'s doc comment for why a paired-events approach
+//! breaks across poll boundaries. `PACKAGE_USAGE_STATS` ("Usage access") is
+//! a special-access grant like the draw-overlays/exact-alarm permissions --
+//! `can_query_usage_stats`/`request_usage_stats_permission` follow that same
+//! shape.
+//!
+//! macOS / Linux: not implemented yet -- `install_watcher` is a documented
+//! no-op on those, so everything else (buffering, flushing, the Settings
+//! toggle, the Entries breakdown) is already wired and simply has nothing
+//! feeding it until those land. Planned mechanisms, per the plan doc: macOS
+//! `NSWorkspace.didActivateApplicationNotification`, Linux X11
 //! `_NET_ACTIVE_WINDOW` property watching (no Wayland equivalent, same
-//! protocol-level wall hook.rs already documents), and Android
-//! `UsageStatsManager.queryEvents` polling (the one non-push platform -- a
-//! third-party app can't get focus pushes there without an Accessibility
-//! Service, which this app deliberately doesn't use).
+//! protocol-level wall hook.rs already documents).
 //!
 //! **Self-exclusion is mandatory on every platform**: Reflectodoro's own
 //! windows (main, overlay, checkin) take focus every ~25 minutes by design,
@@ -36,7 +55,9 @@
 //! the `pid == std::process::id()` check in `app_id_for_window`, which
 //! records "no app in focus" rather than a session -- so time spent in the
 //! break overlay is attributed to nothing rather than leaking into whatever
-//! app happened to be focused before it.
+//! app happened to be focused before it. On Android, `queryUsageEvents`
+//! (Kotlin) does the equivalent by package-name comparison, since Android
+//! has no pid concept exposed to `UsageEvents`.
 //!
 //! ## Session buffering, flushing, and why the two intervals differ
 //!
@@ -167,20 +188,34 @@ fn queue(session: Option<ScreenTimeSession>) {
     }
 }
 
-/// Called by every platform's focus callback. `None` means "focus went
-/// somewhere we don't attribute" -- Reflectodoro itself, or a window whose
-/// owning process couldn't be resolved -- which closes the current session
-/// without opening a new one.
+/// Called by every live/push-based platform's focus callback (Windows'
+/// `EVENT_SYSTEM_FOREGROUND`, and eventually macOS/Linux's equivalents) at
+/// the instant the change happens. `None` means "focus went somewhere we
+/// don't attribute" -- Reflectodoro itself, or a window whose owning process
+/// couldn't be resolved -- which closes the current session without opening
+/// a new one.
 ///
 /// Gated on `SCREEN_TIME_TRACKING_ENABLED` here rather than by
 /// installing/uninstalling the OS watcher, mirroring hook.rs's `ACTIVE`
 /// flag: toggling this feature isn't latency-sensitive, and re-registering a
 /// hook at runtime is a whole class of failure this doesn't need.
+///
+/// Unused on Android, which polls historical events instead and replays them
+/// through `record_focus_change_at` directly (see the module doc).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn record_focus_change(new_app: Option<FocusedApp>) {
+    record_focus_change_at(new_app, Utc::now());
+}
+
+/// The timestamped core `record_focus_change` delegates to. Exists
+/// separately so Android's polling `platform_impl` (which only learns about
+/// a focus change well after it actually happened) can replay each event at
+/// its own real timestamp instead of "now" -- see the module doc's Android
+/// section. Every other caller should go through `record_focus_change`.
+fn record_focus_change_at(new_app: Option<FocusedApp>, at: DateTime<Utc>) {
     if !SCREEN_TIME_TRACKING_ENABLED.load(Ordering::SeqCst) {
         return;
     }
-    let now = Utc::now();
     let closed = {
         let mut cur = CURRENT_SESSION.lock().unwrap();
         // Re-focusing the app that's already focused (a second window of the
@@ -192,11 +227,11 @@ pub fn record_focus_change(new_app: Option<FocusedApp>) {
                 return;
             }
         }
-        let closed = take_closed(&mut cur, now);
+        let closed = take_closed(&mut cur, at);
         *cur = new_app.map(|app| PendingSession {
             app_id: app.app_id,
             display_name: app.display_name,
-            started_at: now,
+            started_at: at,
         });
         closed
     };
@@ -277,16 +312,20 @@ pub fn flush_now(app: &AppHandle) {
 
 /// Opens a session for whatever is focused right now, without waiting for the
 /// next switch -- called when tracking is switched back on, so re-enabling it
-/// doesn't silently record nothing until the user next changes windows.
-pub fn resync_current_focus() {
-    platform_impl::resync_current_focus();
+/// doesn't silently record nothing until the user next changes windows. On
+/// Windows this resolves synchronously (one `GetForegroundWindow` call); on
+/// Android there's no equivalent synchronous query, so this just triggers an
+/// immediate out-of-cadence poll instead of waiting up to
+/// `android::USAGE_POLL_INTERVAL` for the next scheduled one.
+pub fn resync_current_focus(app: &AppHandle) {
+    platform_impl::resync_current_focus(app);
 }
 
 /// Installs the platform's focus watcher. Called once from `.setup()`,
-/// unconditionally: the enable flag is checked inside `record_focus_change`,
-/// not here.
-pub fn start_tracking(_app: &AppHandle) {
-    platform_impl::install_watcher();
+/// unconditionally: the enable flag is checked inside `record_focus_change`
+/// (and, on Android, `record_focus_change_at`), not here.
+pub fn start_tracking(app: &AppHandle) {
+    platform_impl::install_watcher(app.clone());
 }
 
 /// Batches buffered sessions to the frontend every `FLUSH_INTERVAL`, and
@@ -536,11 +575,11 @@ mod platform_impl {
     /// breakdown itself.
     /// Cheap enough to call on demand (one `GetForegroundWindow` plus one
     /// process-name lookup) -- no need to cache anything for it.
-    pub fn resync_current_focus() {
+    pub fn resync_current_focus(_app: &tauri::AppHandle) {
         unsafe { handle_foreground(GetForegroundWindow()) };
     }
 
-    pub fn install_watcher() {
+    pub fn install_watcher(_app: tauri::AppHandle) {
         THREAD_STARTED.call_once(|| {
             std::thread::spawn(|| unsafe {
                 // Seed with whatever is already focused, so the app doesn't
@@ -572,17 +611,117 @@ mod platform_impl {
     }
 }
 
-/// macOS/Linux/Android capture isn't built yet -- see the module doc for the
-/// planned mechanism on each. Everything else (buffering, flushing, the
-/// Settings toggle, the Entries breakdown) is already platform-agnostic and
-/// simply has nothing feeding it here.
-#[cfg(not(windows))]
+/// Android has no push API for foreground focus changes without an
+/// Accessibility Service (deliberately not used elsewhere in this app), so
+/// this polls `UsageStatsManager` (via `NativeBridgePlugin.kt::queryUsageEvents`)
+/// on its own interval and replays the resulting event stream through
+/// `record_focus_change_at` -- see the module doc's Android section for why
+/// that's simpler and more robust than pairing MOVE_TO_FOREGROUND/
+/// MOVE_TO_BACKGROUND events per package in Kotlin.
+#[cfg(target_os = "android")]
 mod platform_impl {
-    pub fn install_watcher() {
+    use std::time::Duration;
+
+    use chrono::{TimeZone, Utc};
+    use tauri::{AppHandle, Manager};
+
+    use super::{record_focus_change_at, FocusedApp};
+
+    /// Deliberately decoupled from lib.rs's `ANDROID_POLL_INTERVAL` (20s,
+    /// used for break-scheduling Doze-wake correctness) -- see the module
+    /// doc for why a coarser interval here only delays *when* a session
+    /// shows up, not its recorded accuracy, plus it's fewer
+    /// `UsageStatsManager` queries for a small additional battery win.
+    const USAGE_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+    /// Installed unconditionally at boot, like every other platform's
+    /// watcher -- `record_focus_change_at` is what actually gates on
+    /// `SCREEN_TIME_TRACKING_ENABLED`, so polling continues regardless of the
+    /// Settings toggle (matching Windows' hook, which also always runs) and
+    /// the only cost of tracking being off is that replayed events get
+    /// discarded rather than recorded. This keeps `queryUsageEvents`'s
+    /// SharedPreferences cursor advancing steadily too, so re-enabling
+    /// tracking after a while doesn't have to catch up on a large backlog it
+    /// would otherwise have to discard event-by-event.
+    pub fn install_watcher(app: AppHandle) {
+        tauri::async_runtime::spawn(poll_loop(app));
+    }
+
+    async fn poll_loop(app: AppHandle) {
+        loop {
+            // `query_usage_events` is a blocking JNI round trip (PackageManager
+            // lookups, SharedPreferences I/O) -- run it off the async runtime's
+            // worker threads rather than blocking one of them directly.
+            let app_for_poll = app.clone();
+            if let Err(e) =
+                tauri::async_runtime::spawn_blocking(move || poll_once(&app_for_poll)).await
+            {
+                log::error!("screen_time: usage-stats poll task panicked: {e:?}");
+            }
+            tokio::time::sleep(USAGE_POLL_INTERVAL).await;
+        }
+    }
+
+    fn poll_once(app: &AppHandle) {
+        let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+        let result = match bridge.query_usage_events() {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("screen_time: query_usage_events failed: {e:?}");
+                return;
+            }
+        };
+        let Some(events) = result.get("events").and_then(|v| v.as_array()) else {
+            return;
+        };
+        for event in events {
+            let Some(timestamp_ms) = event.get("timestamp").and_then(|v| v.as_i64()) else {
+                continue;
+            };
+            let Some(at) = Utc.timestamp_millis_opt(timestamp_ms).single() else {
+                continue;
+            };
+            let app_id = event.get("appId").and_then(|v| v.as_str()).unwrap_or("");
+            let focused = if app_id.is_empty() {
+                // Reflectodoro's own foreground, or the screen turning off --
+                // see queryUsageEvents's doc comment. Close without opening.
+                None
+            } else {
+                let display_name = event
+                    .get("displayName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Some(FocusedApp { app_id: app_id.to_string(), display_name })
+            };
+            record_focus_change_at(focused, at);
+        }
+    }
+
+    /// No synchronous "what's focused right now" query exists on Android
+    /// outside of an Accessibility Service, so this just runs an immediate
+    /// poll rather than waiting up to `USAGE_POLL_INTERVAL` for the next
+    /// scheduled one -- best-effort, same as everywhere else this feature
+    /// treats toggling as "not latency-sensitive".
+    pub fn resync_current_focus(app: &AppHandle) {
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || poll_once(&app));
+    }
+}
+
+/// macOS/Linux capture isn't built yet -- see the module doc for the planned
+/// mechanism on each. Everything else (buffering, flushing, the Settings
+/// toggle, the Entries breakdown) is already platform-agnostic and simply
+/// has nothing feeding it here.
+#[cfg(not(any(windows, target_os = "android")))]
+mod platform_impl {
+    use tauri::AppHandle;
+
+    pub fn install_watcher(_app: AppHandle) {
         log::info!(
             "screen_time: no foreground watcher on this platform yet -- tracking will record nothing"
         );
     }
 
-    pub fn resync_current_focus() {}
+    pub fn resync_current_focus(_app: &AppHandle) {}
 }
