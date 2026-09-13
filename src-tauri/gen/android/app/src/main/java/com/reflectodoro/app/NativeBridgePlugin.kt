@@ -54,6 +54,12 @@ class PersistPomodoroEnabledArgs {
 }
 
 @InvokeArg
+class PersistPomodoroSnoozeUntilArgs {
+    var untilMs: Long = 0
+    var minutes: Int = 0
+}
+
+@InvokeArg
 class RegisterP2pServiceArgs {
     lateinit var deviceId: String
     lateinit var name: String
@@ -177,6 +183,43 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
             .putBoolean(PomodoroEnabledPref.PREF_POMODORO_ENABLED, args.enabled)
             .apply()
         invoke.resolve(JSObject())
+    }
+
+    /** Persists an in-progress snooze's resume-at timestamp (0 = none) and its
+     * originally chosen duration to the same SharedPreferences file as
+     * PomodoroEnabledPref, so it survives the process being killed while
+     * backgrounded -- some OEM skins kill a foreground-service process
+     * outright when the user swipes it from Recent Apps, which would
+     * otherwise silently reset Rust's in-memory POMODORO_SNOOZE_UNTIL_MS/
+     * POMODORO_SNOOZE_MINUTES back to 0 and cancel the pause. `minutes` is
+     * persisted alongside `untilMs` (not just the timestamp) because the
+     * main window's dropdown selects its displayed <option> off
+     * SnoozeInfo.minutes -- restoring untilMs alone left `minutes` at 0,
+     * which matches none of the dropdown's fixed option values and rendered
+     * it blank/empty. Called from commands::snooze_pomodoro (sets both) and
+     * apply_pomodoro_enabled (clears both on any manual On/Off or on the
+     * scheduler's own auto-resume). */
+    @Command
+    fun persistPomodoroSnoozeUntil(invoke: Invoke) {
+        val args = invoke.parseArgs(PersistPomodoroSnoozeUntilArgs::class.java)
+        activity.getSharedPreferences(PomodoroEnabledPref.PREFS_NAME, Activity.MODE_PRIVATE)
+            .edit()
+            .putLong(PomodoroEnabledPref.PREF_SNOOZE_UNTIL_MS, args.untilMs)
+            .putInt(PomodoroEnabledPref.PREF_SNOOZE_MINUTES, args.minutes)
+            .apply()
+        invoke.resolve(JSObject())
+    }
+
+    /** Read back by Rust's setup() on every fresh process start (before
+     * run_scheduler is spawned) to restore a snooze that was still pending
+     * when the previous process incarnation was killed. See
+     * persistPomodoroSnoozeUntil above. */
+    @Command
+    fun getPersistedPomodoroSnoozeUntil(invoke: Invoke) {
+        val ret = JSObject()
+        ret.put("untilMs", PomodoroEnabledPref.getSnoozeUntilMs(activity))
+        ret.put("minutes", PomodoroEnabledPref.getSnoozeMinutes(activity))
+        invoke.resolve(ret)
     }
 
     @Command

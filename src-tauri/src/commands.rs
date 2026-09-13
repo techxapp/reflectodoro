@@ -179,10 +179,14 @@ pub struct SnoozeInfo {
 /// to notice the snooze expiring. It also persists the boot-recovery
 /// preference as `true`, not `false`: the durable preference stays "on"
 /// through a snooze, and only a real permanent Off should persist `false`.
-/// Known accepted limitation: there's no persisted resume-at, so a full
-/// device reboot mid-snooze comes back enabled rather than resuming the
-/// remaining snooze -- the same non-persistence already documented for
-/// `POMODORO_ENABLED` itself (see CLAUDE.md's Android section).
+/// Also persists the resume-at timestamp itself (`persist_pomodoro_snooze_until`)
+/// so a process killed while backgrounded (some OEM skins kill a
+/// foreground-service process outright on a Recent-Apps swipe) picks the
+/// pause back up on relaunch via `setup()`'s restore step, instead of
+/// silently resetting to enabled. Known accepted limitation: nothing
+/// proactively flips things back if the process is never relaunched before
+/// the resume time passes -- it's corrected lazily, next process start (see
+/// CLAUDE.md's Android section).
 #[tauri::command]
 pub fn snooze_pomodoro(app: AppHandle, minutes: u32) -> SnoozeInfo {
     let minutes = minutes.clamp(SNOOZE_MIN_MINUTES, SNOOZE_MAX_MINUTES);
@@ -210,6 +214,9 @@ pub fn snooze_pomodoro(app: AppHandle, minutes: u32) -> SnoozeInfo {
         }
         if let Err(e) = bridge.persist_pomodoro_enabled(true) {
             log::error!("failed to persist pomodoro-enabled preference during snooze: {e:?}");
+        }
+        if let Err(e) = bridge.persist_pomodoro_snooze_until(resume_at.timestamp_millis(), minutes) {
+            log::error!("failed to persist snooze-until: {e:?}");
         }
     }
 

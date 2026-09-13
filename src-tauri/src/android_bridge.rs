@@ -152,6 +152,38 @@ impl<R: Runtime> AndroidBridge<R> {
             .run_mobile_plugin("persistPomodoroEnabled", serde_json::json!({ "enabled": enabled }))
     }
 
+    /// Persists an in-progress snooze's resume-at (epoch millis, 0 = none)
+    /// and its originally chosen duration to the same SharedPreferences file
+    /// `persist_pomodoro_enabled` uses -- called from
+    /// `commands::snooze_pomodoro` (sets both) and `apply_pomodoro_enabled`
+    /// (clears both). `minutes` is persisted alongside `until_ms`, not just
+    /// the timestamp, because the frontend's dropdown selects its displayed
+    /// option off `SnoozeInfo.minutes` -- restoring `until_ms` alone left
+    /// `POMODORO_SNOOZE_MINUTES` at 0 after a restore, which matches none of
+    /// the dropdown's fixed option values and rendered it blank/empty. See
+    /// PersistPomodoroSnoozeUntilArgs (Kotlin) for why persistence exists at
+    /// all: a foreground-service process can still get killed by the user
+    /// swiping it from Recent Apps on some OEM skins, which would otherwise
+    /// silently reset both atomics back to 0 on the next launch and cancel
+    /// the pause.
+    pub fn persist_pomodoro_snooze_until(&self, until_ms: i64, minutes: u32) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin(
+            "persistPomodoroSnoozeUntil",
+            serde_json::json!({ "untilMs": until_ms, "minutes": minutes }),
+        )
+    }
+
+    /// Reads the persisted snooze-until/minutes back -- called once from
+    /// `setup()`, before `run_scheduler` is spawned, to restore a snooze that
+    /// was still pending when the previous process incarnation was killed.
+    /// Returns `(until_ms, minutes)`.
+    pub fn get_persisted_pomodoro_snooze_until(&self) -> Result<(i64, u32), PluginInvokeError> {
+        let v: Value = self.0.run_mobile_plugin("getPersistedPomodoroSnoozeUntil", ())?;
+        let until_ms = v.get("untilMs").and_then(|x| x.as_i64()).unwrap_or(0);
+        let minutes = v.get("minutes").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+        Ok((until_ms, minutes))
+    }
+
     /// Refreshes `MainActivity.lastSchedulerHeartbeatAt` -- called from every
     /// iteration of `run_scheduler` (capped to at least every
     /// `ANDROID_POLL_INTERVAL`) so `BreakAlarmReceiver` can tell a genuinely

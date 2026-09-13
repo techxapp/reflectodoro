@@ -19,10 +19,35 @@ import android.content.Intent
 object PomodoroEnabledPref {
   const val PREFS_NAME = "reflectodoro_prefs"
   const val PREF_POMODORO_ENABLED = "pomodoro_enabled"
+  // Epoch-millis resume time for an in-progress snooze (see
+  // NativeBridgePlugin.persistPomodoroSnoozeUntil / commands::snooze_pomodoro
+  // in Rust), 0 = no snooze pending. Persisted so a snooze survives the
+  // process being killed while backgrounded (some OEM skins kill a
+  // foreground-service process outright when the user swipes it from
+  // Recent Apps) -- Rust's own POMODORO_SNOOZE_UNTIL_MS atomic resets to 0
+  // on every fresh process start otherwise, silently cancelling the pause.
+  const val PREF_SNOOZE_UNTIL_MS = "pomodoro_snooze_until_ms"
+  // The originally chosen snooze duration (30/60/90/120), persisted purely
+  // so the main window's dropdown can redisplay the right selected <option>
+  // after a restore -- Rust's SnoozeInfo.minutes drives the <select>'s
+  // value, and 0 (the Rust atomic's own default) matches none of the
+  // dropdown's fixed option values, which left it rendering blank/empty
+  // rather than falling back to any option at all.
+  const val PREF_SNOOZE_MINUTES = "pomodoro_snooze_minutes"
 
   fun isEnabled(context: Context): Boolean {
     return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
       .getBoolean(PREF_POMODORO_ENABLED, true)
+  }
+
+  fun getSnoozeUntilMs(context: Context): Long {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getLong(PREF_SNOOZE_UNTIL_MS, 0L)
+  }
+
+  fun getSnoozeMinutes(context: Context): Int {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getInt(PREF_SNOOZE_MINUTES, 0)
   }
 }
 

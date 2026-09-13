@@ -247,6 +247,13 @@ pub(crate) fn apply_pomodoro_enabled(app: &AppHandle, enabled: bool) {
         if let Err(e) = bridge.persist_pomodoro_enabled(enabled) {
             log::error!("failed to persist pomodoro-enabled preference: {e:?}");
         }
+        // Clears any persisted snooze-until alongside the in-memory atomics
+        // above, so a killed-and-relaunched process doesn't resurrect a
+        // snooze that was already cancelled (manually, or by the scheduler's
+        // own auto-resume) before it died. See commands::snooze_pomodoro.
+        if let Err(e) = bridge.persist_pomodoro_snooze_until(0, 0) {
+            log::error!("failed to clear persisted snooze-until: {e:?}");
+        }
     }
 }
 
@@ -809,6 +816,41 @@ pub fn run() {
                     log::error!("failed to start Android foreground service: {e:?}");
                 }
                 native_overlay::install_channel(&handle);
+
+                // Restores a snooze that was still pending when the previous
+                // process incarnation died -- some OEM skins kill a
+                // foreground-service process outright when the user swipes
+                // it from Recent Apps, which would otherwise silently reset
+                // POMODORO_ENABLED/POMODORO_SNOOZE_UNTIL_MS back to their
+                // Rust defaults and cancel the pause. Must run before
+                // run_scheduler is spawned below, so its very first loop
+                // iteration already sees the correct atomics. See
+                // commands::snooze_pomodoro and apply_pomodoro_enabled.
+                match bridge.get_persisted_pomodoro_snooze_until() {
+                    Ok((until_ms, minutes)) if until_ms > Local::now().timestamp_millis() => {
+                        POMODORO_ENABLED.store(false, Ordering::SeqCst);
+                        POMODORO_SNOOZE_UNTIL_MS.store(until_ms, Ordering::SeqCst);
+                        // Restoring `minutes` alongside `until_ms` matters:
+                        // the main window's dropdown selects its displayed
+                        // <option> off SnoozeInfo.minutes, and leaving this
+                        // atomic at its default 0 matched none of the fixed
+                        // option values, rendering the dropdown blank/empty
+                        // on reopen even though the pause itself was still
+                        // correctly in effect.
+                        POMODORO_SNOOZE_MINUTES.store(minutes, Ordering::SeqCst);
+                        log::info!("setup: restored persisted snooze until {until_ms} ({minutes} min)");
+                    }
+                    Ok((until_ms, _)) if until_ms != 0 => {
+                        // Stale -- already expired while the process was
+                        // dead. Clear it so a future restart doesn't have to
+                        // reason about staleness again.
+                        if let Err(e) = bridge.persist_pomodoro_snooze_until(0, 0) {
+                            log::error!("failed to clear stale persisted snooze-until: {e:?}");
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => log::error!("failed to read persisted snooze-until: {e:?}"),
+                }
             }
 
             // Hidden, built immediately: gives WebView2 a head start on the
