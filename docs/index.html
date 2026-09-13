@@ -1574,6 +1574,29 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
+              <p class="timeline-date">Sunday, Sep 13, 2026</p>
+              <ul class="timeline-items">
+                <li>Fixed Android's snooze-and-resume Pomodoro state getting wiped if the process was killed while paused</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Saturday, Sep 12, 2026</p>
+              <ul class="timeline-items">
+                <li>Replaced the Pomodoro on/off toggle with a dropdown that adds a snooze option (30/60/90/120 min)</li>
+                <li>Added Android screen time tracking, showing which apps you spent your day in</li>
+                <li>Fixed a macOS crash loop on every break screen caused by an invalid AppKit presentation-option combination</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Friday, Sep 11, 2026</p>
+              <ul class="timeline-items">
+                <li>Added P2P LAN device pairing and manual sync between two devices on the same wifi, with no server or cloud involved, and fixed several bugs found in live two-device testing</li>
+                <li>Made Settings &rarr; Data import transactional and merge-aware, so a failed import can no longer leave the database partially written</li>
+                <li>Added bulk-edit for reflections across a time range</li>
+                <li>Improved AI crawler visibility for the landing page (robots.txt, llms.txt, structured data)</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
               <p class="timeline-date">Thursday, Sep 10, 2026</p>
               <ul class="timeline-items">
                 <li>Added screen time tracking on Windows, showing which apps you spent your day in, with friendly app names</li>
@@ -1608,37 +1631,16 @@
                 <li>Fixed reflections being timestamped to the break slot instead of the work slot they were actually about</li>
               </ul>
             </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Sunday, Sep 6, 2026</p>
-              <ul class="timeline-items">
-                <li>Reworked the landing page's visual theme, layout, and copy</li>
-              </ul>
-            </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Saturday, Sep 5, 2026</p>
-              <ul class="timeline-items">
-                <li>Redesigned the landing page and restructured the development journey timeline into daily/weekly/monthly tiers</li>
-              </ul>
-            </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Friday, Sep 4, 2026</p>
-              <ul class="timeline-items">
-                <li>Completed a full-codebase audit, fixing a DST-transition crash, reflections/wellness data misdated across the UTC/local day boundary, a data-import bug that could wipe history, and ways the break screen could strand users with no way out</li>
-                <li>Hardened Android further: crash-guarded overlay/foreground-service calls, disabled cloud auto-backup of the local database, added an independent overlay watchdog, and fixed task-list/scheduler bugs across midnight</li>
-                <li>Hardened the release CI pipeline against security issues and fixed several settings/UI race conditions</li>
-                <li>Fixed a blank check-in window from a missed event, an unreliable Android wake alarm, break-screen escapability, and black nav tabs after the overlay closes</li>
-                <li>Polished the landing page: touch-friendly benefit cards, OS-aware download buttons, and social preview images</li>
-              </ul>
-            </div>
             <p class="timeline-tier reveal">Previous 3 weeks</p>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Aug 31 &ndash; Sep 6, 2026</p>
               <ul class="timeline-items">
                 <li>Signed Android release builds, fixed the Android CI build pipeline, and shrank the release APK size</li>
-                <li>Fixed several Linux packaging issues, including AppImage builds silently dropping Wayland libraries</li>
+                <li>Completed a full-codebase audit &mdash; fixed a DST-transition crash, reflections/wellness data misdated across the UTC/local day boundary, a data-import bug that could wipe history, and ways the break screen could strand users with no way out; hardened Android further (crash-guarded overlay calls, disabled cloud auto-backup, an independent overlay watchdog) and hardened the release CI pipeline</li>
+                <li>Fixed several Linux packaging issues (including AppImage builds silently dropping Wayland libraries), a white-screen overlay after Windows monitor sleep/wake, a blank check-in window, an unreliable Android wake alarm, and other break-screen edge cases</li>
                 <li>Added a &ldquo;Not to do&rdquo; list alongside Most Important Tasks, and made both Most Important Tasks and past reflection entries editable</li>
                 <li>Moved the media pause-on-break toggle to the main window, pre-filled the break screen's reflection field with your last entry, and excluded visually ambiguous characters from the emergency-exit challenge</li>
-                <li>Fixed a white-screen overlay after Windows monitor sleep/wake, an early-break issue on Android, and the main window not reopening from the tray on Windows</li>
+                <li>Redesigned the landing page with a new theme, layout, and copy, restructured the development journey into daily/weekly/monthly tiers, and added touch-friendly benefit cards, OS-aware downloads, and social preview images</li>
                 <li>Added a &ldquo;Why it helps&rdquo; benefits section and a Discord community link to the landing page, and renamed &ldquo;break overlay&rdquo; to &ldquo;break screen&rdquo; throughout the Settings UI</li>
               </ul>
             </div>
