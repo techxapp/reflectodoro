@@ -76,7 +76,16 @@
 
   const selectedStamp = $derived(localDateStamp(selected));
   const isToday = $derived(selectedStamp === localDateStamp(new Date()));
-  const clusters = $derived(clusterReflectionRows(reflectionRows));
+  // clusterReflectionRows needs its input in ascending slot order (it relies
+  // on forward contiguity to merge runs), so clustering happens on the
+  // as-fetched ASC rows and only the resulting cluster list -- and each
+  // cluster's own rows, for the expanded per-slot view -- gets reversed for
+  // display, newest slot first.
+  const clusters = $derived(
+    clusterReflectionRows(reflectionRows)
+      .map((cluster) => ({ rows: [...cluster.rows].reverse() }))
+      .reverse(),
+  );
 
   // Bumped on every load() call and captured per-call so a load for a day the
   // user has already navigated away from can't win a race against a load for
