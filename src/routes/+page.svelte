@@ -38,6 +38,9 @@
   let mediaPauseOnBreakEnabled = $state(true);
   let mediaPauseOnBreakLoaded = $state(false);
   let mediaPauseOnBreakBusy = $state(false);
+  let isMacos = $state(false);
+  // Defaults to true so nothing flashes before the real check resolves.
+  let mediaKeyPermissionGranted = $state(true);
   let taskListContent = $state("");
   let notToDoContent = $state("");
   let unlisten: UnlistenFn | null = null;
@@ -113,6 +116,21 @@
     }
   }
 
+  async function refreshMediaKeyPermission() {
+    if (!isMacos) return;
+    mediaKeyPermissionGranted = await invoke<boolean>("get_media_key_permission_granted");
+  }
+
+  async function requestMediaKeyPermission() {
+    await invoke("request_media_key_permission");
+    await refreshMediaKeyPermission();
+  }
+
+  // Granting happens in System Settings, so re-check when the user comes back.
+  function onWindowFocus() {
+    void refreshMediaKeyPermission();
+  }
+
   /** The boot sequence below is a chain of awaits: before this wrapper, the
    * first one to throw silently killed every step after it -- including the
    * event-listener registrations at the end, so the window kept running while
@@ -124,6 +142,8 @@
     await loadAndSyncOverlayAutoClose();
     mediaPauseOnBreakEnabled = await loadAndSyncMediaPauseOnBreakSetting();
     mediaPauseOnBreakLoaded = true;
+    isMacos = (await invoke<string>("current_os")) === "macos";
+    await refreshMediaKeyPermission();
     await loadAndSyncBreakNotificationPersistentSetting();
     await loadAndSyncMediaToggleGuard();
     await loadAndSyncMacosHideMenuBarDockSetting();
@@ -157,6 +177,7 @@
   }
 
   onMount(async () => {
+    window.addEventListener("focus", onWindowFocus);
     try {
       await bootMainWindow();
     } catch (e) {
@@ -165,6 +186,7 @@
   });
 
   onDestroy(() => {
+    window.removeEventListener("focus", onWindowFocus);
     unlisten?.();
     unlistenSnooze?.();
     unlistenTasks?.();
@@ -200,6 +222,12 @@
       >
         {mediaPauseOnBreakEnabled ? "Pause media on break: On" : "Pause media on break: Off"}
       </button>
+      {#if isMacos && mediaPauseOnBreakEnabled && !mediaKeyPermissionGranted}
+        <p class="hint">macOS needs Accessibility access for Reflectodoro to pause media.</p>
+        <button class="toggle permission-button" onclick={requestMediaKeyPermission}>
+          Grant Accessibility access…
+        </button>
+      {/if}
     {/if}
   </section>
 
@@ -315,6 +343,13 @@
   .media-toggle {
     display: block;
     margin: 14px auto 0;
+  }
+
+  .permission-button {
+    display: block;
+    margin: 8px auto 0;
+    padding: 6px 12px;
+    font-size: 12px;
   }
 
   h2 {

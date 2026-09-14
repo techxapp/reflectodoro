@@ -130,18 +130,12 @@ pub(crate) static SCREEN_TIME_TRACKING_ENABLED: AtomicBool = AtomicBool::new(tru
 /// desktop than anything else this app does.
 pub(crate) static MACOS_HIDE_MENU_BAR_DOCK_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// macOS-only media-toggle guard state (see media.rs's macos_impl module for
-/// the full rationale). Both are RFC3339/ISO8601 UTC strings, same convention
-/// as `reflection.created_at`/`wellness_check.created_at`, so they're safe to
-/// compare lexicographically. `LAST_MEDIA_TOGGLE_AT` is written by media.rs
-/// itself the instant it fires the toggle (and separately persisted to
-/// `app_setting.last_toggle_time` by the frontend via the
-/// `media-toggle://recorded` event, so it survives a crash/relaunch mid-break).
-/// `LAST_WELLNESS_CHECK_AT` is pushed from the frontend on boot and again
-/// after every completed (non-skipped) check-in -- see
-/// `sync_last_wellness_check_at` in commands.rs.
+/// macOS-only media-toggle guard state (see media.rs's macos_impl module): the
+/// RFC3339 UTC time the last synthetic Play/Pause key was actually posted.
+/// Written by media.rs itself, and persisted to `app_setting.last_toggle_time`
+/// by the frontend via the `media-toggle://recorded` event so it survives a
+/// crash/relaunch mid-break.
 pub(crate) static LAST_MEDIA_TOGGLE_AT: Mutex<Option<String>> = Mutex::new(None);
-pub(crate) static LAST_WELLNESS_CHECK_AT: Mutex<Option<String>> = Mutex::new(None);
 
 /// How long after a break ends the overlay force-closes even without a
 /// reflection. Backed by `app_setting.overlay_auto_close_minutes`; the
@@ -736,7 +730,8 @@ pub fn run() {
             commands::get_media_pause_on_break_enabled,
             commands::set_media_pause_on_break_enabled,
             commands::sync_media_toggle_guard,
-            commands::sync_last_wellness_check_at,
+            commands::get_media_key_permission_granted,
+            commands::request_media_key_permission,
             commands::get_break_notification_persistent_enabled,
             commands::set_break_notification_persistent_enabled,
             commands::get_macos_hide_menu_bar_dock_enabled,

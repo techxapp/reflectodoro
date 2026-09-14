@@ -13,7 +13,7 @@ use crate::screen_time;
 use crate::state::{AppState, OverlayState};
 use crate::{
     apply_pomodoro_enabled, BREAK_NOTIFICATION_PERSISTENT_ENABLED, FORCE_CLOSE_SHORTCUT_ENABLED,
-    LAST_MEDIA_TOGGLE_AT, LAST_WELLNESS_CHECK_AT, MACOS_HIDE_MENU_BAR_DOCK_ENABLED,
+    LAST_MEDIA_TOGGLE_AT, MACOS_HIDE_MENU_BAR_DOCK_ENABLED,
     MEDIA_PAUSE_ON_BREAK_ENABLED, OVERLAY_AUTO_CLOSE_MINUTES, POMODORO_ENABLED,
     POMODORO_SNOOZE_MINUTES, POMODORO_SNOOZE_UNTIL_MS, SCREEN_TIME_TRACKING_ENABLED,
     SNOOZE_MAX_MINUTES, SNOOZE_MIN_MINUTES,
@@ -388,21 +388,23 @@ pub fn set_macos_hide_menu_bar_dock_enabled(enabled: bool) {
     MACOS_HIDE_MENU_BAR_DOCK_ENABLED.store(enabled, Ordering::SeqCst);
 }
 
-/// Pushes both halves of the macOS media-toggle guard (see media.rs) into
-/// Rust state. Called once on main-window boot, after the frontend loads
-/// `app_setting.last_toggle_time` and the most recent `wellness_check.created_at`.
+/// Pushes the macOS media-toggle guard's persisted `app_setting.last_toggle_time`
+/// (see media.rs) into Rust state, on main-window boot and after a settings import.
 #[tauri::command]
-pub fn sync_media_toggle_guard(last_toggle_at: Option<String>, last_wellness_check_at: Option<String>) {
+pub fn sync_media_toggle_guard(last_toggle_at: Option<String>) {
     *LAST_MEDIA_TOGGLE_AT.lock().unwrap() = last_toggle_at;
-    *LAST_WELLNESS_CHECK_AT.lock().unwrap() = last_wellness_check_at;
 }
 
-/// Called after a check-in is actually saved (not skipped/auto-closed) so the
-/// macOS media-toggle guard resets within the current session, not just after
-/// a restart. See `submit()` in checkin/+page.svelte.
+/// Always `true` off macOS -- see media.rs's macos_impl.
 #[tauri::command]
-pub fn sync_last_wellness_check_at(at: String) {
-    *LAST_WELLNESS_CHECK_AT.lock().unwrap() = Some(at);
+pub fn get_media_key_permission_granted() -> bool {
+    crate::media::media_key_permission_granted()
+}
+
+/// Async so a TCC prompt or the `open` call can't stall the main thread.
+#[tauri::command]
+pub async fn request_media_key_permission() {
+    crate::media::request_media_key_permission();
 }
 
 /// Mirrors app_setting.screen_time_tracking_enabled -- loaded and pushed here

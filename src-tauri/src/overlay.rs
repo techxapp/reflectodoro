@@ -120,13 +120,16 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
         log::info!("spawn_or_update_overlay: overlay window is_visible={is_visible:?}");
 
         if !is_visible.unwrap_or(false) {
-            // Sizes/positions the window to cover the whole screen before
-            // showing it -- the macOS substitute for the `.fullscreen(true)`
-            // skipped above (see build_overlay_window). Must happen before
-            // `.show()`: doing it after would show the window at its
-            // previous (small default) frame for one visible frame first.
+            // Both must happen before `.show()`. The accessory policy is what
+            // lets the window appear over another app's full-screen Space at
+            // all (see macos_overlay.rs); covering the screen is the macOS
+            // substitute for the `.fullscreen(true)` skipped above, and doing
+            // it after `.show()` would flash the previous small frame first.
             #[cfg(target_os = "macos")]
-            crate::macos_overlay::cover_current_monitor(&win);
+            {
+                crate::macos_overlay::enter_accessory_policy(app);
+                crate::macos_overlay::cover_current_monitor(&win);
+            }
             // Previously `let _ = ...`, silently discarding a failure here --
             // this is exactly the step in the middle of the "overlay didn't
             // open on its own" bug report that had no log coverage at all.

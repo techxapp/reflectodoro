@@ -11,7 +11,6 @@
     getWellnessTextExclusions,
     parseWellnessTextExclusions,
     saveWellnessCheck,
-    syncLastWellnessCheckAtToBackend,
     type WellnessCheckValues,
   } from "$lib/db";
 
@@ -229,11 +228,7 @@
     saving = true;
     error = "";
     try {
-      const createdAt = await saveWellnessCheck(slot, values);
-      // Resets the macOS media-toggle guard for the next break -- see
-      // media.rs. Deliberately not called from skip()/auto-close: those
-      // don't save a wellness_check row, so they shouldn't reset it either.
-      await syncLastWellnessCheckAtToBackend(createdAt);
+      await saveWellnessCheck(slot, values);
       await dismiss();
     } catch (e) {
       // Surface it on-page rather than failing silently -- a save that

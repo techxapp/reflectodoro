@@ -1,22 +1,33 @@
 //! macOS-only enforcement layer for the break overlay.
 //!
-//! Two AppKit mechanisms, both permission-free (no Accessibility prompt, no
-//! TCC entry at all -- unlike a `CGEventTap`-based approach), split into an
+//! AppKit mechanisms, all permission-free (no Accessibility prompt, no TCC
+//! entry at all -- unlike a `CGEventTap`-based approach), split into an
 //! always-on tier and an opt-in tier:
 //!
 //! - **Always on, no Settings toggle** (same as the rest of the overlay's
 //!   enforcement -- fullscreen/always-on-top aren't toggleable either):
-//!   `NSWindowCollectionBehavior` (`CanJoinAllSpaces` + `FullScreenAuxiliary`)
-//!   makes the overlay follow the user to any Space, including one occupied
-//!   by another app's true full-screen window. That alone isn't enough,
-//!   though: `FullScreenAuxiliary` only lifts the window into a full-screen
-//!   Space if its `NSWindow.level` is also raised above the level Tauri's own
-//!   `.always_on_top(true)` sets (meant only for "stay above other windows in
-//!   *this* Space") -- so this also bumps it to `NSScreenSaverWindowLevel`.
-//!   `NSApplicationPresentationOptions.DisableProcessSwitching` (blocks
-//!   Cmd+Tab) is also always on, for the same reason. AppKit refuses that
-//!   flag unless a Dock flag comes with it (see `enable_presentation_lockdown`
-//!   for the exact rules), so `AutoHideDock` rides along with it by default.
+//!   - The process switches to the *accessory* activation policy for the
+//!     duration of a break (`enter_accessory_policy`, restored to regular in
+//!     `exit_kiosk_mode`). Since macOS 10.14 a regular (Dock-icon) app's
+//!     windows can't float over *another app's* full-screen Space whatever
+//!     their collection behavior or level -- Electron's `visibleOnFullScreen`
+//!     works around the same restriction the same way. Confirmed from a real
+//!     user's log: every readback below matched and `is_visible()` was true,
+//!     yet the overlay stayed hidden behind a full-screen video until the user
+//!     left full screen. Side effect: no Dock icon or Cmd+Tab entry while a
+//!     break is open.
+//!   - `NSWindowCollectionBehavior` (`CanJoinAllSpaces` + `FullScreenAuxiliary`)
+//!     makes the overlay follow the user to any Space. `FullScreenAuxiliary`
+//!     only lifts the window into a full-screen Space if its `NSWindow.level`
+//!     is also raised above the level Tauri's own `.always_on_top(true)` sets
+//!     (meant only for "stay above other windows in *this* Space") -- so this
+//!     also bumps it to `NSScreenSaverWindowLevel`.
+//!   - `NSApplicationPresentationOptions.DisableProcessSwitching` (blocks
+//!     Cmd+Tab). AppKit refuses that flag unless a Dock flag comes with it
+//!     (see `enable_presentation_lockdown` for the exact rules), so
+//!     `AutoHideDock` rides along with it by default. Presentation options only
+//!     apply while this app is *active*, which is why the overlay also
+//!     re-requests activation (`reassert_front_after_delay`).
 //! - **Gated on the `macos_hide_menu_bar_dock_enabled` app_setting** (off by
 //!   default -- opt-in): upgrades that to `HideDock` + `HideMenuBar`, a more
 //!   disruptive change to the user's desktop than blocking one keyboard
@@ -27,11 +38,11 @@
 //! Monitor/Force Quit is kill switch #1 (see CLAUDE.md) and must always work,
 //! exactly like Task Manager on Windows.
 //!
-//! `presentationOptions` is process-global, not per-window, so
-//! `exit_kiosk_mode` must be called on every overlay-close path -- see its
-//! call site in `close_overlay` (overlay.rs), which is the one function every
-//! close path (unlock, F12 kill switch, dev force-close, the save-failure
-//! escape hatch, auto-close) already funnels through.
+//! `presentationOptions` and the activation policy are process-global, not
+//! per-window, so `exit_kiosk_mode` must be called on every overlay-close
+//! path -- see its call site in `close_overlay` (overlay.rs), which is the one
+//! function every close path (unlock, F12 kill switch, dev force-close, the
+//! save-failure escape hatch, auto-close) already funnels through.
 //!
 //! **The overlay window must never use real (`toggleFullScreen:`-driven)
 //! fullscreen on macOS** -- `overlay.rs`'s `build_overlay_window` skips
@@ -54,13 +65,29 @@
 #![cfg(target_os = "macos")]
 
 use std::ffi::c_void;
+use std::time::Duration;
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSApplication, NSApplicationPresentationOptions, NSScreenSaverWindowLevel, NSWindow,
     NSWindowCollectionBehavior,
 };
-use tauri::{AppHandle, Position, Size, WebviewWindow};
+use tauri::{ActivationPolicy, AppHandle, Manager, Position, Size, WebviewWindow};
+
+use crate::state::AppState;
+
+/// Activation-policy changes reach the WindowServer asynchronously with no
+/// completion signal, so the overlay is re-ordered front once more after this.
+const REASSERT_DELAY: Duration = Duration::from_secs(1);
+
+/// Must run before the overlay's `.show()` -- see the module doc. Tauri queues
+/// this onto the main thread in order with the show/focus calls after it.
+pub fn enter_accessory_policy(app: &AppHandle) {
+    log::info!("macos_overlay::enter_accessory_policy: switching to Accessory activation policy");
+    if let Err(e) = app.set_activation_policy(ActivationPolicy::Accessory) {
+        log::error!("macos_overlay::enter_accessory_policy: set_activation_policy failed: {e:?}");
+    }
+}
 
 /// Substitute for real fullscreen (see module doc for why real fullscreen is
 /// never used here): sizes and positions the overlay window to exactly cover
@@ -130,6 +157,14 @@ pub fn enter_kiosk_mode(win: &WebviewWindow, hide_menu_bar_and_dock: bool) {
     }) {
         log::warn!("macos_overlay::enter_kiosk_mode: run_on_main_thread failed: {e:?}");
     }
+    reassert_front_after_delay(win);
+}
+
+/// `(activationPolicy, isActive)` for log lines; policy 0 = Regular, 1 = Accessory.
+fn app_policy_and_active() -> Option<(isize, bool)> {
+    let mtm = MainThreadMarker::new()?;
+    let app = NSApplication::sharedApplication(mtm);
+    Some((app.activationPolicy().0, app.isActive()))
 }
 
 /// SAFETY: `ptr` comes from `WebviewWindow::ns_window()`, which returns the
@@ -146,13 +181,62 @@ fn configure_window(ptr: *mut c_void) {
         | NSWindowCollectionBehavior::IgnoresCycle;
     ns_window.setCollectionBehavior(behavior);
     ns_window.setLevel(NSScreenSaverWindowLevel);
+    // Unlike tao's makeKeyAndOrderFront, this orders front even while another
+    // app (e.g. a full-screen video player) is still the active one.
+    ns_window.orderFrontRegardless();
     log::info!(
-        "macos_overlay::configure_window: set collectionBehavior={:?} level={:?} (readback: collectionBehavior={:?} level={:?})",
+        "macos_overlay::configure_window: set collectionBehavior={:?} level={:?} (readback: collectionBehavior={:?} level={:?} isOnActiveSpace={} app(policy,active)={:?})",
         behavior,
         NSScreenSaverWindowLevel,
         ns_window.collectionBehavior(),
-        ns_window.level()
+        ns_window.level(),
+        ns_window.isOnActiveSpace(),
+        app_policy_and_active()
     );
+}
+
+/// Re-orders the overlay front and re-requests activation once the accessory
+/// policy switch has had time to land. `isOnActiveSpace=false` in this log line
+/// means the overlay is still not on the Space the user is looking at.
+fn reassert_front_after_delay(win: &WebviewWindow) {
+    let win = win.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(REASSERT_DELAY).await;
+        let still_open = {
+            let state = win.app_handle().state::<AppState>();
+            let open = state.overlay.lock().unwrap().open;
+            open
+        };
+        if !still_open {
+            return;
+        }
+        let win_for_closure = win.clone();
+        if let Err(e) = win.run_on_main_thread(move || {
+            let ptr = match win_for_closure.ns_window() {
+                Ok(ptr) => ptr,
+                Err(e) => {
+                    log::warn!("macos_overlay::reassert_front_after_delay: ns_window() failed: {e:?}");
+                    return;
+                }
+            };
+            // SAFETY: same as configure_window.
+            let ns_window: &NSWindow = unsafe { &*(ptr as *mut NSWindow) };
+            ns_window.orderFrontRegardless();
+            if let Some(mtm) = MainThreadMarker::new() {
+                // Presentation options (the Cmd+Tab block) only apply while active.
+                #[allow(deprecated)]
+                NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+            }
+            log::info!(
+                "macos_overlay::reassert_front_after_delay: isVisible={} isOnActiveSpace={} app(policy,active)={:?}",
+                ns_window.isVisible(),
+                ns_window.isOnActiveSpace(),
+                app_policy_and_active()
+            );
+        }) {
+            log::warn!("macos_overlay::reassert_front_after_delay: run_on_main_thread failed: {e:?}");
+        }
+    });
 }
 
 /// `DisableProcessSwitching` (blocks Cmd+Tab) is always included, and AppKit
@@ -229,10 +313,11 @@ fn enable_presentation_lockdown(hide_menu_bar_and_dock: bool) {
 }
 
 /// Restores default presentation options (visible menu bar/Dock, Cmd+Tab
-/// re-enabled). Unconditional and idempotent -- safe to call even if
-/// `hide_menu_bar_and_dock` was never true for this occurrence (the setting
-/// could have been toggled off mid-break), same "harmless no-op" pattern as
-/// `media::resume_playing_sessions` and `hook::uninstall()`.
+/// re-enabled) and the regular activation policy (Dock icon back). Unconditional
+/// and idempotent -- safe to call even if `hide_menu_bar_and_dock` was never
+/// true for this occurrence (the setting could have been toggled off mid-break),
+/// same "harmless no-op" pattern as `media::resume_playing_sessions` and
+/// `hook::uninstall()`.
 pub fn exit_kiosk_mode(app: &AppHandle) {
     log::info!("macos_overlay::exit_kiosk_mode: queuing onto main thread");
     if let Err(e) = app.run_on_main_thread(|| {
@@ -245,5 +330,9 @@ pub fn exit_kiosk_mode(app: &AppHandle) {
         log::info!("macos_overlay::exit_kiosk_mode: presentationOptions restored to Default");
     }) {
         log::warn!("macos_overlay::exit_kiosk_mode: run_on_main_thread failed: {e:?}");
+    }
+    match app.set_activation_policy(ActivationPolicy::Regular) {
+        Ok(()) => log::info!("macos_overlay::exit_kiosk_mode: activation policy restored to Regular"),
+        Err(e) => log::error!("macos_overlay::exit_kiosk_mode: set_activation_policy(Regular) failed: {e:?}"),
     }
 }

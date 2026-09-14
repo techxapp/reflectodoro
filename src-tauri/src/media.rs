@@ -12,17 +12,18 @@
 //! does (only the private, undocumented MediaRemote.framework can), so this
 //! posts a synthetic hardware Play/Pause media-key event instead -- a blind
 //! toggle, with exactly the failure mode described above for Windows. This
-//! was a deliberate, explicit tradeoff (see CLAUDE.md): shipping a
-//! best-effort toggle now rather than waiting on a MediaRemote.framework-based
-//! fix later. `macos_impl::should_skip_toggle` narrows (does not eliminate)
-//! the risk by skipping a second toggle within the same break cycle -- see
-//! its own doc comment. Note this guard uses `wellness_check.created_at` as
-//! the "cycle completed" signal even though check-in is skippable (closing
-//! or auto-closing it saves nothing); a user who routinely skips check-ins
-//! will see the guard's reset stop firing after their first break. That's a
-//! known, accepted tradeoff, not a bug -- `reflection.created_at` would have
-//! been skip-proof instead, but `wellness_check.created_at` was the explicit
-//! choice.
+//! was a deliberate, explicit tradeoff (see CLAUDE.md). Three things bound it:
+//! `macos_impl::already_toggled_this_break` skips a second toggle for the
+//! same break occurrence (a relaunch or suspend-resume mid-break re-shows the
+//! overlay); `macos_impl::any_output_device_running` skips when no audio
+//! output device is running anywhere, since then nothing can be playing and a
+//! toggle could only resume something; and nothing is posted at all unless
+//! the app holds macOS's post-event access (listed under Privacy & Security >
+//! Accessibility) -- without it the WindowServer silently drops synthetic
+//! events. An earlier
+//! guard reset only on a *submitted* wellness check-in, which in practice
+//! blocked the pause on every break after one that auto-closed unanswered
+//! (confirmed from a real user's log).
 //!
 //! On Linux: uses MPRIS (the Media Player Remote Interfacing Specification,
 //! exposed over the session D-Bus) via the `mpris` crate. Unlike macOS's
@@ -75,13 +76,20 @@ mod windows_impl {
 
 #[cfg(target_os = "macos")]
 mod macos_impl {
-    use chrono::{SecondsFormat, Utc};
-    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
-    use objc2_core_graphics::{CGEvent, CGEventTapLocation};
-    use objc2_foundation::NSPoint;
-    use tauri::{AppHandle, Emitter};
+    use std::ffi::c_void;
+    use std::mem::size_of;
+    use std::ptr;
 
-    use crate::{LAST_MEDIA_TOGGLE_AT, LAST_WELLNESS_CHECK_AT};
+    use chrono::{DateTime, SecondsFormat, Utc};
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+    use objc2_core_graphics::{
+        CGEvent, CGEventTapLocation, CGPreflightPostEventAccess, CGRequestPostEventAccess,
+    };
+    use objc2_foundation::NSPoint;
+    use tauri::{AppHandle, Emitter, Manager};
+
+    use crate::state::AppState;
+    use crate::LAST_MEDIA_TOGGLE_AT;
 
     // From the public IOKit header <IOKit/hidsystem/ev_keymap.h>, not exposed
     // as Rust constants by any crate here.
@@ -89,6 +97,148 @@ mod macos_impl {
     const NX_SUBTYPE_AUX_CONTROL_BUTTONS: i16 = 8;
     const KEY_STATE_DOWN: isize = 0xa;
     const KEY_STATE_UP: isize = 0xb;
+
+    const ACCESSIBILITY_SETTINGS_URL: &str =
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+
+    // Core Audio HAL, from <CoreAudio/AudioHardware.h> and AudioHardwareBase.h.
+    // C multi-char constants like 'dev#' are big-endian four-char codes.
+    const fn fourcc(code: &[u8; 4]) -> u32 {
+        u32::from_be_bytes(*code)
+    }
+    const K_AUDIO_OBJECT_SYSTEM_OBJECT: u32 = 1;
+    const K_AUDIO_HARDWARE_PROPERTY_DEVICES: u32 = fourcc(b"dev#");
+    const K_AUDIO_DEVICE_PROPERTY_STREAMS: u32 = fourcc(b"stm#");
+    const K_AUDIO_DEVICE_PROPERTY_DEVICE_IS_RUNNING_SOMEWHERE: u32 = fourcc(b"gone");
+    const K_AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL: u32 = fourcc(b"glob");
+    const K_AUDIO_OBJECT_PROPERTY_SCOPE_OUTPUT: u32 = fourcc(b"outp");
+    const K_AUDIO_OBJECT_PROPERTY_ELEMENT_MAIN: u32 = 0;
+
+    #[repr(C)]
+    struct AudioObjectPropertyAddress {
+        selector: u32,
+        scope: u32,
+        element: u32,
+    }
+
+    #[link(name = "CoreAudio", kind = "framework")]
+    extern "C" {
+        fn AudioObjectGetPropertyDataSize(
+            object_id: u32,
+            address: *const AudioObjectPropertyAddress,
+            qualifier_data_size: u32,
+            qualifier_data: *const c_void,
+            out_data_size: *mut u32,
+        ) -> i32;
+        fn AudioObjectGetPropertyData(
+            object_id: u32,
+            address: *const AudioObjectPropertyAddress,
+            qualifier_data_size: u32,
+            qualifier_data: *const c_void,
+            io_data_size: *mut u32,
+            out_data: *mut c_void,
+        ) -> i32;
+    }
+
+    fn property_address(selector: u32, scope: u32) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress {
+            selector,
+            scope,
+            element: K_AUDIO_OBJECT_PROPERTY_ELEMENT_MAIN,
+        }
+    }
+
+    /// Whether any audio output device is currently running in any process.
+    /// `None` if Core Audio couldn't be queried, so the caller can fail open.
+    /// "Running" is not "audible": apps can hold a device open while paused or
+    /// silent, so `Some(true)` is only a hint. `Some(false)` is the useful
+    /// answer: nothing is sending audio anywhere, so a blind toggle could only
+    /// resume something.
+    fn any_output_device_running() -> Option<bool> {
+        let devices_address =
+            property_address(K_AUDIO_HARDWARE_PROPERTY_DEVICES, K_AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL);
+        let mut size: u32 = 0;
+        // SAFETY: plain C calls with valid pointers to live locals/buffers; the
+        // HAL writes at most `size` bytes into the device-ID buffer.
+        let status = unsafe {
+            AudioObjectGetPropertyDataSize(
+                K_AUDIO_OBJECT_SYSTEM_OBJECT,
+                &devices_address,
+                0,
+                ptr::null(),
+                &mut size,
+            )
+        };
+        if status != 0 {
+            log::warn!("media toggle: listing audio devices (size) failed, OSStatus={status}");
+            return None;
+        }
+        let mut device_ids = vec![0u32; size as usize / size_of::<u32>()];
+        let mut size = (device_ids.len() * size_of::<u32>()) as u32;
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                K_AUDIO_OBJECT_SYSTEM_OBJECT,
+                &devices_address,
+                0,
+                ptr::null(),
+                &mut size,
+                device_ids.as_mut_ptr().cast(),
+            )
+        };
+        if status != 0 {
+            log::warn!("media toggle: listing audio devices failed, OSStatus={status}");
+            return None;
+        }
+        device_ids.truncate(size as usize / size_of::<u32>());
+
+        let streams_address =
+            property_address(K_AUDIO_DEVICE_PROPERTY_STREAMS, K_AUDIO_OBJECT_PROPERTY_SCOPE_OUTPUT);
+        let running_address = property_address(
+            K_AUDIO_DEVICE_PROPERTY_DEVICE_IS_RUNNING_SOMEWHERE,
+            K_AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL,
+        );
+        let mut queried_output_devices = 0;
+        for device_id in device_ids {
+            let mut streams_size: u32 = 0;
+            let status = unsafe {
+                AudioObjectGetPropertyDataSize(
+                    device_id,
+                    &streams_address,
+                    0,
+                    ptr::null(),
+                    &mut streams_size,
+                )
+            };
+            if status != 0 || streams_size == 0 {
+                continue;
+            }
+            let mut running: u32 = 0;
+            let mut running_size = size_of::<u32>() as u32;
+            let status = unsafe {
+                AudioObjectGetPropertyData(
+                    device_id,
+                    &running_address,
+                    0,
+                    ptr::null(),
+                    &mut running_size,
+                    (&mut running as *mut u32).cast(),
+                )
+            };
+            if status != 0 {
+                continue;
+            }
+            queried_output_devices += 1;
+            if running != 0 {
+                log::info!("media toggle: audio output device {device_id} is running");
+                return Some(true);
+            }
+        }
+        if queried_output_devices == 0 {
+            log::warn!("media toggle: no audio output device could be queried");
+            return None;
+        }
+        Some(false)
+    }
 
     /// Posts one half (key-down or key-up) of a synthetic hardware Play/Pause
     /// media-key press. NSEventTypeSystemDefined media-key events can only be
@@ -123,29 +273,77 @@ mod macos_impl {
         CGEvent::post(CGEventTapLocation::SessionEventTap, Some(&cg_event));
     }
 
-    /// Skip iff we already toggled media paused this break cycle and no
-    /// completed check-in has happened since -- toggling again in that
-    /// window would resume the media we just paused. See this module's doc
-    /// comment for what this guard does and does not protect against.
-    fn should_skip_toggle() -> bool {
-        let last_toggle = LAST_MEDIA_TOGGLE_AT.lock().unwrap().clone();
-        let Some(last_toggle) = last_toggle else {
+    /// True iff the last posted toggle landed at or after this break's slot
+    /// start -- i.e. this same break already toggled once.
+    fn already_toggled_this_break(slot_start: &str) -> bool {
+        let Some(last_toggle) = LAST_MEDIA_TOGGLE_AT.lock().unwrap().clone() else {
             return false;
         };
-        match LAST_WELLNESS_CHECK_AT.lock().unwrap().clone() {
-            Some(last_wellness) if last_wellness > last_toggle => false,
-            _ => true,
+        match (
+            DateTime::parse_from_rfc3339(&last_toggle),
+            DateTime::parse_from_rfc3339(slot_start),
+        ) {
+            (Ok(toggled_at), Ok(slot_start)) => toggled_at >= slot_start,
+            _ => false,
+        }
+    }
+
+    pub fn media_key_permission_granted() -> bool {
+        CGPreflightPostEventAccess()
+    }
+
+    /// TCC only ever shows its own prompt once per app identity, so this also
+    /// opens the Accessibility pane directly -- otherwise a second click after
+    /// a dismissed prompt would appear to do nothing.
+    pub fn request_media_key_permission() {
+        if CGPreflightPostEventAccess() {
+            return;
+        }
+        let granted = CGRequestPostEventAccess();
+        log::info!("media toggle: requested post-event access, granted={granted}");
+        if let Err(e) = std::process::Command::new("open")
+            .arg(ACCESSIBILITY_SETTINGS_URL)
+            .status()
+        {
+            log::warn!("media toggle: failed to open Accessibility settings: {e}");
         }
     }
 
     pub fn pause_playing_sessions(app: &AppHandle) {
-        if should_skip_toggle() {
-            log::info!("media toggle: skipped (already toggled since the last completed check-in)");
+        let slot_start = app
+            .state::<AppState>()
+            .overlay
+            .lock()
+            .unwrap()
+            .current_slot_start
+            .clone();
+
+        if already_toggled_this_break(&slot_start) {
+            log::info!("media toggle: skipped (already toggled for the break starting {slot_start})");
+            return;
+        }
+
+        match any_output_device_running() {
+            Some(false) => {
+                log::info!(
+                    "media toggle: skipped (no audio output device is running, so nothing is playing -- toggling could only resume paused media)"
+                );
+                return;
+            }
+            Some(true) => {}
+            None => log::warn!("media toggle: couldn't determine whether audio is playing, toggling anyway"),
+        }
+
+        if !CGPreflightPostEventAccess() {
+            log::warn!(
+                "media toggle: skipped -- post-event (Accessibility) access not granted, macOS would silently drop the media key"
+            );
             return;
         }
 
         post_media_key_event(true);
         post_media_key_event(false);
+        log::info!("media toggle: posted Play/Pause media key for the break starting {slot_start}");
 
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         *LAST_MEDIA_TOGGLE_AT.lock().unwrap() = Some(now.clone());
@@ -218,13 +416,22 @@ mod noop_impl {
 #[cfg(windows)]
 pub use windows_impl::pause_playing_sessions;
 #[cfg(target_os = "macos")]
-pub use macos_impl::pause_playing_sessions;
+pub use macos_impl::{media_key_permission_granted, pause_playing_sessions, request_media_key_permission};
 #[cfg(target_os = "linux")]
 pub use linux_impl::pause_playing_sessions;
 #[cfg(target_os = "android")]
 pub use android_impl::pause_playing_sessions;
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux", target_os = "android")))]
 pub use noop_impl::pause_playing_sessions;
+
+/// Only macOS gates media pause on a permission (see macos_impl).
+#[cfg(not(target_os = "macos"))]
+pub fn media_key_permission_granted() -> bool {
+    true
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn request_media_key_permission() {}
 
 /// Symmetric release for `pause_playing_sessions`, called from
 /// `close_overlay`. Only Android's audio-focus model has anything to

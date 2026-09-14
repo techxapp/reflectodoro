@@ -222,15 +222,11 @@ export interface WellnessCheckValues {
  * popup only ever opens after a reflection was saved) -- same fail-loudly
  * behavior the old `getReflectionIdForSlot` gave for free via its own
  * lookup, preserved here as an explicit existence check since there's no
- * FK to enforce it anymore.
- *
- * Returns the `created_at` it saved, so callers needing that exact value
- * (e.g. syncing the macOS media-toggle guard) don't take a second, possibly
- * drifting, timestamp reading of their own. */
+ * FK to enforce it anymore. */
 export async function saveWellnessCheck(
   slotStartIso: string,
   values: WellnessCheckValues,
-): Promise<string> {
+): Promise<void> {
   const db = await getDb();
   const existing = await db.select<{ found: number }[]>(
     `SELECT 1 as found FROM reflection WHERE slot_start_at = $1 LIMIT 1`,
@@ -251,7 +247,6 @@ export async function saveWellnessCheck(
       createdAt,
     ],
   );
-  return createdAt;
 }
 
 export interface WellnessSummary {
@@ -799,9 +794,9 @@ export async function loadAndSyncBreakNotificationPersistentSetting(): Promise<b
 // --- macOS media-toggle guard (see media.rs's macos_impl module) -------
 //
 // Windows' media pause queries actual playback state, so it never needs
-// this; macOS's toggle is blind, so this narrows (does not eliminate) the
-// risk of a second toggle within the same break cycle resuming media we
-// already paused. Not a user-facing setting -- no Settings UI for this.
+// this; macOS's toggle is blind, so this keeps a relaunch or suspend-resume
+// mid-break from toggling a second time for the same break and resuming the
+// media the first toggle paused. Not a user-facing setting.
 
 const LAST_TOGGLE_TIME_KEY = "last_toggle_time";
 
@@ -826,25 +821,10 @@ export async function saveLastMediaToggleTime(at: string): Promise<void> {
   );
 }
 
-export async function getLastWellnessCheckTime(): Promise<string | null> {
-  const db = await getDb();
-  const rows = await db.select<{ created_at: string }[]>(
-    `SELECT created_at FROM wellness_check ORDER BY created_at DESC LIMIT 1`,
-  );
-  return rows[0]?.created_at ?? null;
-}
-
-export async function syncLastWellnessCheckAtToBackend(at: string): Promise<void> {
-  await invoke("sync_last_wellness_check_at", { at });
-}
-
 /** Call once on app boot (main window) so Rust's media-toggle guard matches SQLite. */
 export async function loadAndSyncMediaToggleGuard(): Promise<void> {
-  const [lastToggleAt, lastWellnessCheckAt] = await Promise.all([
-    getLastMediaToggleTime(),
-    getLastWellnessCheckTime(),
-  ]);
-  await invoke("sync_media_toggle_guard", { lastToggleAt, lastWellnessCheckAt });
+  const lastToggleAt = await getLastMediaToggleTime();
+  await invoke("sync_media_toggle_guard", { lastToggleAt });
 }
 
 /** Persists Rust's media-toggle timestamp (emitted right after it actually
@@ -1590,16 +1570,12 @@ export async function importData(
     await loadAndSyncOverlayAutoClose();
     await loadAndSyncMediaPauseOnBreakSetting();
     await loadAndSyncScreenTimeTrackingSetting();
+    await loadAndSyncMediaToggleGuard();
     // device_name is read through a process-lifetime cache (see
     // cachedDeviceName) -- drop it so an imported value doesn't keep getting
     // stamped onto new rows from the pre-import name until the next restart.
     cachedDeviceName = null;
   }
-
-  // Unconditional (unlike the block above): wellness_check rows -- half of
-  // the macOS media-toggle guard's state -- import regardless of
-  // includeSettings, so this needs to resync even when settings are excluded.
-  await loadAndSyncMediaToggleGuard();
 
   return result;
 }
