@@ -48,6 +48,7 @@
 
   let length = $state(15);
   let includeSpecial = $state(false);
+  let maxPerDay = $state(5);
   let saved = $state(false);
   let loaded = $state(false);
 
@@ -287,6 +288,7 @@
     const settings: BreakitSettings = await getBreakitSettings();
     length = settings.length;
     includeSpecial = settings.includeSpecial;
+    maxPerDay = settings.maxPerDay;
     loaded = true;
   }
 
@@ -556,7 +558,11 @@
 
   async function save(e: Event) {
     e.preventDefault();
-    await saveBreakitSettings({ length: Math.min(64, Math.max(4, length)), includeSpecial });
+    await saveBreakitSettings({
+      length: Math.min(64, Math.max(4, length)),
+      includeSpecial,
+      maxPerDay: Math.min(100, Math.max(1, maxPerDay)),
+    });
     saved = true;
     setTimeout(() => (saved = false), 2000);
   }
@@ -675,6 +681,8 @@
     <p class="hint">
       Typing a captcha is the way of early-exit in case of emergency &mdash;
       it still requires the reflection ("what did I do?") too.
+      Emergency exits are capped per day &mdash; once used up, only the
+      reflection-plus-timer path is left for the rest of the day.
       If neither happens,
       the screen auto-closes on its own after the timeout below.
     </p>
@@ -683,11 +691,15 @@
       <form onsubmit={save}>
         <label>
           Captcha length
-          <input type="number" min="4" max="64" bind:value={length} />
+          <input type="number" min="8" max="25" bind:value={length} />
         </label>
         <label class="checkbox">
           <input type="checkbox" bind:checked={includeSpecial} />
           Include special characters
+        </label>
+        <label>
+          Emergency exits per day
+          <input type="number" min="1" max="48" bind:value={maxPerDay} />
         </label>
         <button type="submit">Save</button>
         {#if saved}
@@ -700,7 +712,7 @@
       <form onsubmit={saveOverlayAutoClose}>
         <label>
           Auto-close after (minutes past break end)
-          <input type="number" min="1" max="60" bind:value={overlayAutoCloseMinutes} />
+          <input type="number" min="1" max="15" bind:value={overlayAutoCloseMinutes} />
         </label>
         <button type="submit">Save</button>
         {#if overlayAutoCloseSaved}

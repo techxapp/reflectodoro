@@ -208,6 +208,7 @@
             placeholder="type the code above, then press Enter" />
         </div>
         <p id="breakit-matched" class="hint ok" style="display:none">Code matched.</p>
+        <p id="breakit-limit-reached" class="hint" style="display:none">Emergency exit limit reached for today. Please wait for the timer instead.</p>
         <p class="hint">Reflection is still required either way.</p>
       </div>
     </section>
@@ -233,6 +234,7 @@
       reflection_entered: false,
       breakit_challenge: "",
       breakit_matched: false,
+      breakit_limit_reached: false,
       time_expired: false,
       current_slot_start: "",
       dev_mode: false,
@@ -252,6 +254,7 @@
     var breakitInputEl = document.getElementById("breakit-input");
     var breakitPendingEl = document.getElementById("breakit-pending");
     var breakitMatchedEl = document.getElementById("breakit-matched");
+    var breakitLimitReachedEl = document.getElementById("breakit-limit-reached");
     var challengeEl = document.getElementById("challenge");
     var promptHeadingEl = document.getElementById("prompt-heading");
     var clockEl = document.getElementById("clock");
@@ -299,8 +302,9 @@
         comingNextEl.style.display = "none";
       }
 
-      breakitPendingEl.style.display = state.breakit_matched ? "none" : "";
+      breakitPendingEl.style.display = (state.breakit_matched || state.breakit_limit_reached) ? "none" : "";
       breakitMatchedEl.style.display = state.breakit_matched ? "" : "none";
+      breakitLimitReachedEl.style.display = (!state.breakit_matched && state.breakit_limit_reached) ? "" : "none";
 
       if (pendingBreakitCheck) {
         pendingBreakitCheck = false;

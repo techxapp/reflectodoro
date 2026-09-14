@@ -477,8 +477,11 @@ fn handle_channel_event(app: &AppHandle, value: Value) {
             });
         }
         NativeOverlayEvent::BreakitAttempt { input } => {
-            let state = app.state::<AppState>();
-            commands::breakit_attempt(app.clone(), state, input);
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<AppState>();
+                let _ = commands::breakit_attempt(app.clone(), state, input).await;
+            });
         }
         NativeOverlayEvent::DevForceClose => {
             let state = app.state::<AppState>();

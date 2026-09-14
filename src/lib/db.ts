@@ -652,19 +652,22 @@ function numberOr(value: string | undefined, fallback: number): number {
 export interface BreakitSettings {
   length: number;
   includeSpecial: boolean;
+  /** Max successful breakit early-exits allowed per local calendar day. */
+  maxPerDay: number;
 }
 
-const DEFAULT_BREAKIT: BreakitSettings = { length: 15, includeSpecial: false };
+const DEFAULT_BREAKIT: BreakitSettings = { length: 15, includeSpecial: false, maxPerDay: 5 };
 
 export async function getBreakitSettings(): Promise<BreakitSettings> {
   const db = await getDb();
   const rows = await db.select<{ key: string; value: string }[]>(
-    `SELECT key, value FROM app_setting WHERE key IN ('breakit_length', 'breakit_include_special')`,
+    `SELECT key, value FROM app_setting WHERE key IN ('breakit_length', 'breakit_include_special', 'breakit_max_per_day')`,
   );
   const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
   return {
     length: numberOr(map.breakit_length, DEFAULT_BREAKIT.length),
     includeSpecial: (map.breakit_include_special ?? "false") === "true",
+    maxPerDay: numberOr(map.breakit_max_per_day, DEFAULT_BREAKIT.maxPerDay),
   };
 }
 
@@ -680,6 +683,11 @@ export async function saveBreakitSettings(settings: BreakitSettings): Promise<vo
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [String(settings.includeSpecial)],
   );
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ('breakit_max_per_day', $1)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [String(settings.maxPerDay)],
+  );
   await syncBreakitConfigToBackend(settings);
 }
 
@@ -687,6 +695,7 @@ export async function syncBreakitConfigToBackend(settings: BreakitSettings): Pro
   await invoke("sync_breakit_config", {
     length: settings.length,
     includeSpecial: settings.includeSpecial,
+    maxPerDay: settings.maxPerDay,
   });
 }
 
@@ -1510,6 +1519,7 @@ export function parseAndValidateExport(raw: string): ExportPayload {
   // NaN reaching a u32-typed Tauri command.
   const NUMERIC_SETTING_KEYS = new Set([
     "breakit_length",
+    "breakit_max_per_day",
     "overlay_auto_close_minutes",
     "checkin_auto_close_minutes",
     "screen_time_app_threshold_minutes",

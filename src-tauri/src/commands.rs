@@ -42,14 +42,21 @@ pub fn current_os() -> &'static str {
 /// Settings saves, so SQLite stays the source of truth while the scheduler
 /// still has a fast in-memory copy to use when it spawns a fresh overlay.
 #[tauri::command]
-pub fn sync_breakit_config(app: AppHandle, state: State<AppState>, length: u32, include_special: bool) {
-    let (len, include_special) = {
+pub fn sync_breakit_config(
+    app: AppHandle,
+    state: State<AppState>,
+    length: u32,
+    include_special: bool,
+    max_per_day: u32,
+) {
+    let (len, include_special, max_per_day) = {
         let mut cfg = state.breakit_config.lock().unwrap();
         cfg.length = length.clamp(4, 64);
         cfg.include_special = include_special;
-        (cfg.length, cfg.include_special)
+        cfg.max_per_day = max_per_day.max(1);
+        (cfg.length, cfg.include_special, cfg.max_per_day)
     };
-    log::info!("sync_breakit_config: length={len} include_special={include_special}");
+    log::info!("sync_breakit_config: length={len} include_special={include_special} max_per_day={max_per_day}");
 
     // Cold-start config race (see run_scheduler's Break arm, lib.rs): this
     // sync can still land after a break has already opened and shown a
@@ -132,16 +139,42 @@ pub fn close_after_save_failure(app: AppHandle, state: State<AppState>) -> Resul
     Ok(())
 }
 
+/// Server-side choke point for the breakit early-exit, shared by both
+/// desktop (invoked directly from overlay/+page.svelte) and Android
+/// (native_overlay.rs's BreakitAttempt event, which has no other path into
+/// Rust) -- enforcing the daily quota here covers both platforms from one
+/// place rather than duplicating the check per-platform. Async because it
+/// needs to read/write `breakit_daily_use` (see breakit::uses_today /
+/// increment_daily_use) via a direct DB connection.
 #[tauri::command]
-pub fn breakit_attempt(app: AppHandle, state: State<AppState>, input: String) -> OverlayState {
-    {
-        let mut overlay = state.overlay.lock().unwrap();
-        if overlay.open && input == overlay.breakit_challenge {
-            overlay.breakit_matched = true;
+pub async fn breakit_attempt(app: AppHandle, state: State<'_, AppState>, input: String) -> Result<OverlayState, String> {
+    let matches = {
+        let overlay = state.overlay.lock().unwrap();
+        overlay.open && !overlay.breakit_matched && input == overlay.breakit_challenge
+    };
+
+    if matches {
+        let max_per_day = state.breakit_config.lock().unwrap().max_per_day;
+        let used = breakit::uses_today(&app).await.unwrap_or(0);
+        if used < max_per_day {
+            breakit::increment_daily_use(&app).await.ok();
+            let mut overlay = state.overlay.lock().unwrap();
+            // Re-check open/breakit_matched -- the overlay could have closed
+            // or already been matched by a concurrent call while the DB
+            // round-trip above was in flight.
+            if overlay.open && !overlay.breakit_matched {
+                overlay.breakit_matched = true;
+            }
+        } else {
+            let mut overlay = state.overlay.lock().unwrap();
+            if overlay.open {
+                overlay.breakit_limit_reached = true;
+            }
         }
     }
+
     overlay::try_close_if_unlocked(&app);
-    state.overlay.lock().unwrap().clone()
+    Ok(state.overlay.lock().unwrap().clone())
 }
 
 #[tauri::command]

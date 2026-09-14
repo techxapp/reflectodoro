@@ -28,6 +28,13 @@ pub struct OverlayState {
     /// what's meant to be a last-resort escape from a DB that won't accept
     /// writes, not a casual way to skip reflecting -- see overlay page.
     pub save_failure_count: u32,
+    /// Whether today's `breakit_max_per_day` quota (app_setting, see
+    /// breakit.rs) was already used up as of when this overlay opened --
+    /// computed once at open time (generate_breakit_challenge, lib.rs), the
+    /// same "checked once, cached here" pattern breakit_challenge itself
+    /// uses. When true, the frontend hides the captcha input entirely
+    /// instead of offering a code that breakit_attempt would refuse anyway.
+    pub breakit_limit_reached: bool,
 }
 
 impl OverlayState {
@@ -40,10 +47,11 @@ impl OverlayState {
             time_expired: false,
             current_slot_start: String::new(),
             save_failure_count: 0,
+            breakit_limit_reached: false,
         }
     }
 
-    pub fn opened_for(slot_start_iso: String, breakit_challenge: String) -> Self {
+    pub fn opened_for(slot_start_iso: String, breakit_challenge: String, breakit_limit_reached: bool) -> Self {
         Self {
             open: true,
             reflection_entered: false,
@@ -52,6 +60,7 @@ impl OverlayState {
             time_expired: false,
             current_slot_start: slot_start_iso,
             save_failure_count: 0,
+            breakit_limit_reached,
         }
     }
 
@@ -65,6 +74,7 @@ impl OverlayState {
 pub struct BreakitConfig {
     pub length: u32,
     pub include_special: bool,
+    pub max_per_day: u32,
 }
 
 impl Default for BreakitConfig {
@@ -72,6 +82,7 @@ impl Default for BreakitConfig {
         Self {
             length: 15,
             include_special: false,
+            max_per_day: 5,
         }
     }
 }

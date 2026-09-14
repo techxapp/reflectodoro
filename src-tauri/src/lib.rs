@@ -201,6 +201,27 @@ fn generate_breakit_challenge(app: &AppHandle) -> String {
     challenge
 }
 
+/// Whether today's breakit early-exit quota (`breakit_config.max_per_day`)
+/// is already used up -- checked once whenever a fresh overlay opens (or its
+/// challenge is regenerated after the cold-start config race), same "check
+/// once, cache on OverlayState" treatment `generate_breakit_challenge` above
+/// gets. A DB read failure defaults to "not reached" (fail open) rather than
+/// locking the user out of the early-exit path over a transient DB error.
+async fn breakit_limit_reached_now(app: &AppHandle) -> bool {
+    let max_per_day = {
+        let app_state = app.state::<AppState>();
+        let max_per_day = app_state.breakit_config.lock().unwrap().max_per_day;
+        max_per_day
+    };
+    match breakit::uses_today(app).await {
+        Ok(used) => used >= max_per_day,
+        Err(e) => {
+            log::warn!("breakit_limit_reached_now: failed to read breakit_daily_use, defaulting to not reached: {e}");
+            false
+        }
+    }
+}
+
 /// Applies a Pomodoro mode on/off change and keeps every side effect (event
 /// emission, Android's foreground service + boot-recovery pref) in one place
 /// -- shared by `commands::set_enabled` (the main window's On/Off dropdown
@@ -335,10 +356,15 @@ async fn run_scheduler(app: AppHandle) {
                 match slot.phase {
                     Phase::Break => {
                         let this_slot_start = slot.start_iso();
+                        let limit_reached = breakit_limit_reached_now(&app).await;
                         {
                             let state = app.state::<AppState>();
                             let mut ov = state.overlay.lock().unwrap();
-                            *ov = OverlayState::opened_for(this_slot_start.clone(), generate_breakit_challenge(&app));
+                            *ov = OverlayState::opened_for(
+                                this_slot_start.clone(),
+                                generate_breakit_challenge(&app),
+                                limit_reached,
+                            );
                         }
                         // Guards against the startup webview blank-page race
                         // when the app boots straight into a live break --
@@ -383,10 +409,12 @@ async fn run_scheduler(app: AppHandle) {
                             // has given it a real chance to land, is free:
                             // the overlay hasn't been shown to anyone yet
                             // either way.
+                            let limit_reached = breakit_limit_reached_now(&app).await;
                             {
                                 let state = app.state::<AppState>();
                                 let mut ov = state.overlay.lock().unwrap();
                                 ov.breakit_challenge = generate_breakit_challenge(&app);
+                                ov.breakit_limit_reached = limit_reached;
                             }
                             overlay::spawn_or_update_overlay(&app).await;
                         } else {

@@ -404,6 +404,27 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 20,
+            // Caps how many times/day the breakit captcha can be used to
+            // exit a break early (commands::breakit_attempt) -- local
+            // device usage state, not user content, so deliberately never
+            // included in file export/import or P2P sync (unlike
+            // breakit_max_per_day itself, an app_setting seeded below).
+            // breakit_attempt keeps this table at exactly one row (today's)
+            // at all times -- see breakit::increment_daily_use -- so there's
+            // no history to retain and nothing to prune later.
+            description: "add breakit_daily_use table and breakit_max_per_day setting",
+            sql: r#"
+                CREATE TABLE breakit_daily_use (
+                    date TEXT PRIMARY KEY,
+                    count INTEGER NOT NULL DEFAULT 0
+                );
+
+                INSERT INTO app_setting (key, value) VALUES ('breakit_max_per_day', '5');
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

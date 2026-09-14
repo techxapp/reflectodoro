@@ -24,6 +24,7 @@
     reflection_entered: boolean;
     breakit_challenge: string;
     breakit_matched: boolean;
+    breakit_limit_reached: boolean;
     time_expired: boolean;
     current_slot_start: string;
   }
@@ -355,6 +356,8 @@
       <div class="breakit">
         {#if overlayState?.breakit_matched}
           <p class="hint ok">Code matched.</p>
+        {:else if overlayState?.breakit_limit_reached}
+          <p class="hint">Emergency exit limit reached for today. Please wait for the timer instead.</p>
         {:else}
           <label for="breakit-field">To close this window early, type this code and press Enter</label>
           <p class="challenge">{overlayState?.breakit_challenge ?? ""}</p>
