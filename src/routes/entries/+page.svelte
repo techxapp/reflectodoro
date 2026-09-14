@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import {
     clusterReflectionRows,
@@ -80,6 +80,52 @@
   let viewAllOpen = $state(false);
   let editingMockSlot = $state<string | null>(null);
   let editMockText = $state("");
+
+  // --- Reflection list auto-scroll-to-now ---
+  let dayListEl = $state<HTMLUListElement>();
+  let clusterListEl = $state<HTMLUListElement>();
+
+  // Floors "now" to the current 30-minute slot boundary, in the same
+  // Date(...).toISOString() shape getAllSlotStartsForDate/slot_start_at use.
+  function currentSlotStartIso(): string {
+    const now = new Date();
+    const flooredMin = Math.floor(now.getMinutes() / 30) * 30;
+    return new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      now.getHours(),
+      flooredMin,
+    ).toISOString();
+  }
+
+  // Scrolls the given list container so the row nearest the current time is
+  // centered -- only meaningful when viewing today, since "now" has no
+  // relevance to a past/future date's list.
+  async function scrollToNow(container: HTMLUListElement | undefined) {
+    if (!container || !isToday) return;
+    await tick();
+    const items = Array.from(container.querySelectorAll<HTMLElement>("li[data-slot]"));
+    if (items.length === 0) return;
+    const nowMs = new Date(currentSlotStartIso()).getTime();
+    let best = items[0];
+    let bestDiff = Infinity;
+    for (const el of items) {
+      const diff = Math.abs(new Date(el.dataset.slot!).getTime() - nowMs);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = el;
+      }
+    }
+    best.scrollIntoView({ block: "center" });
+  }
+
+  $effect(() => {
+    if (viewAllOpen) scrollToNow(dayListEl);
+  });
+  $effect(() => {
+    if (!viewAllOpen && clusters.length > 0) scrollToNow(clusterListEl);
+  });
 
   const selectedStamp = $derived(localDateStamp(selected));
   const isToday = $derived(selectedStamp === localDateStamp(new Date()));
@@ -639,9 +685,9 @@
       </div>
 
       {#if viewAllOpen}
-        <ul class="reflection-list day-slot-list">
+        <ul class="reflection-list day-slot-list" bind:this={dayListEl}>
           {#each daySlotRows as slot (slot.slotStartIso)}
-            <li class={slot.row ? undefined : "mock"}>
+            <li class={slot.row ? undefined : "mock"} data-slot={slot.slotStartIso}>
               <div class="meta">
                 <span class="time">{formatTime(slot.slotStartIso)}</span>
                 {#if slot.row}
@@ -680,10 +726,10 @@
       {:else if clusters.length === 0}
         <p class="hint">No reflections logged for this day.</p>
       {:else}
-        <ul class="reflection-list">
+        <ul class="reflection-list" bind:this={clusterListEl}>
           {#each clusters as cluster (cluster.rows[0].id)}
             {@const clusterKey = cluster.rows[0].id}
-            <li>
+            <li data-slot={cluster.rows[0].slot_start_at}>
               <div class="meta">
                 <span class="time">{formatTime(cluster.rows[0].slot_start_at)}</span>
                 {#if cluster.rows.length === 1}
@@ -1023,6 +1069,8 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
+    max-height: 65vh;
+    overflow-y: auto;
   }
 
   .reflection-list li {
