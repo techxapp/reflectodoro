@@ -197,6 +197,7 @@
       <div id="reflection-actions">
         <button id="submit-reflection" disabled>Submit reflection</button>
       </div>
+      <p id="coming-next" class="hint" style="display:none"></p>
       <p id="reflection-saved" class="hint ok" style="display:none">Saved. Waiting on the other condition to finish the break.</p>
 
       <div class="breakit">
@@ -238,6 +239,7 @@
       task_list_content: "",
       not_to_do_content: "",
       missed_slot_count: 1,
+      coming_next_text: "",
     };
     var pendingBreakitCheck = false;
     var taskSaveTimer = null;
@@ -246,6 +248,7 @@
     var reflectionEl = document.getElementById("reflection");
     var submitBtn = document.getElementById("submit-reflection");
     var reflectionSavedEl = document.getElementById("reflection-saved");
+    var comingNextEl = document.getElementById("coming-next");
     var breakitInputEl = document.getElementById("breakit-input");
     var breakitPendingEl = document.getElementById("breakit-pending");
     var breakitMatchedEl = document.getElementById("breakit-matched");
@@ -288,6 +291,13 @@
       reflectionEl.disabled = state.reflection_entered;
       submitBtn.style.display = state.reflection_entered ? "none" : "";
       reflectionSavedEl.style.display = state.reflection_entered ? "" : "none";
+
+      if (state.coming_next_text) {
+        comingNextEl.textContent = "Coming next: " + state.coming_next_text;
+        comingNextEl.style.display = "";
+      } else {
+        comingNextEl.style.display = "none";
+      }
 
       breakitPendingEl.style.display = state.breakit_matched ? "none" : "";
       breakitMatchedEl.style.display = state.breakit_matched ? "" : "none";

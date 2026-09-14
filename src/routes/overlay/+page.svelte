@@ -15,6 +15,8 @@
     listenForTaskListUpdates,
     listenForNotToDoListUpdates,
     precedingWorkSlotStartIso,
+    nextWorkSlotStartIso,
+    getReflectionTextForSlot,
   } from "$lib/db";
 
   interface OverlayState {
@@ -35,6 +37,7 @@
   let taskListContent = $state("");
   let notToDoContent = $state("");
   let missedSlots = $state<string[]>([]);
+  let comingNextText = $state<string | null>(null);
   let nowTick = $state(Date.now());
   // Submit-path state: guards against a double-submit racing two INSERTs for
   // the same slot, surfaces a save failure instead of leaving the user
@@ -82,6 +85,30 @@
   async function refreshCoverage() {
     if (!overlayState?.current_slot_start) return;
     missedSlots = await findMissedSlots(precedingWorkSlotStartIso(overlayState.current_slot_start));
+  }
+
+  /** "skip" (any case) or blank-after-trim reads the same as "nothing saved
+   * yet" for display purposes -- mirrors import.rs's is_ignorable_entry and
+   * native_overlay.rs's is_skip_only (Android's own copy of this same
+   * check). */
+  function isSkipOnlyText(text: string): boolean {
+    const t = text.trim();
+    return t.length === 0 || t.toLowerCase() === "skip";
+  }
+
+  /** Previews whatever's already saved (e.g. via the Entries page's bulk
+   * edit, entered ahead of time) for the work slot that begins the moment
+   * this break ends -- shown as "Coming next" below the submit button. Not
+   * something a normal reflection submit would ever create for a future
+   * slot, but nothing stops a row from existing there already. */
+  async function refreshComingNext() {
+    if (!overlayState?.current_slot_start) {
+      comingNextText = null;
+      return;
+    }
+    const next = nextWorkSlotStartIso(overlayState.current_slot_start);
+    const text = await getReflectionTextForSlot(next);
+    comingNextText = text !== null && !isSkipOnlyText(text) ? text : null;
   }
 
   /** Pre-fills (never saves) the reflection field with the last entry saved
@@ -243,6 +270,7 @@
         showEscapeHatch = false;
         await refreshCoverage();
         await prefillReflection();
+        await refreshComingNext();
       }
     });
 
@@ -252,6 +280,7 @@
     );
     await refreshCoverage();
     await prefillReflection();
+    await refreshComingNext();
     taskListContent = await getTaskList(localDateStamp());
     notToDoContent = await getNotToDoList(localDateStamp());
 
@@ -308,6 +337,9 @@
           <button type="submit" disabled={!reflectionText.trim() || isSubmitting}>
             {isSubmitting ? "Saving..." : "Submit reflection"}
           </button>
+          {#if comingNextText}
+            <p class="hint coming-next">Coming next: {comingNextText}</p>
+          {/if}
           {#if saveError}
             <p class="hint error">Couldn't save: {saveError}. You can try again.</p>
             {#if showEscapeHatch}

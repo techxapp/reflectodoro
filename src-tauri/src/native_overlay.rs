@@ -174,21 +174,77 @@ pub async fn refresh_missed_slot_count(app: &AppHandle) {
     *app.state::<AppState>().missed_slot_count.lock().unwrap() = count;
 }
 
+/// Mirrors db.ts's overlay-page "Coming next" preview and import.rs's
+/// `is_ignorable_entry` reasoning: a slot whose saved text is blank, or
+/// nothing but "skip" (case-insensitively), has nothing worth previewing.
+fn is_skip_only(text: &str) -> bool {
+    let t = text.trim();
+    t.is_empty() || t.eq_ignore_ascii_case("skip")
+}
+
+/// Refreshes `AppState.coming_next_text` from whatever's already saved for
+/// the work slot that begins the moment this break ends -- called right
+/// before the overlay is triggered (`overlay::spawn_or_update_overlay`'s
+/// Android arm), alongside `refresh_missed_slot_count` above. Computing it
+/// once here (rather than live) is safe for the same reason: nothing else can
+/// write to `reflection` while this overlay has the screen.
+pub async fn refresh_coming_next_text(app: &AppHandle) {
+    let current_slot_start = {
+        let state = app.state::<AppState>();
+        let overlay = state.overlay.lock().unwrap();
+        overlay.current_slot_start.clone()
+    };
+    let text = if current_slot_start.is_empty() {
+        String::new()
+    } else {
+        match crate::grid::next_work_slot_start_iso(&current_slot_start) {
+            Some(next) => sqlx::query_scalar::<_, String>(
+                "SELECT text FROM reflection WHERE slot_start_at = ?",
+            )
+            .bind(&next)
+            .fetch_optional(pool(app).await)
+            .await
+            .ok()
+            .flatten()
+            .filter(|t| !is_skip_only(t))
+            .unwrap_or_default(),
+            None => String::new(),
+        }
+    };
+    *app.state::<AppState>().coming_next_text.lock().unwrap() = text;
+}
+
 async fn save_reflection(pool: &SqlitePool, covered_slots: &[String], text: &str) {
     let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     for slot in covered_slots {
-        // updated_at = created_at on a fresh insert -- the P2P sync delta
-        // cursor (p2p_sync.rs) needs a non-null value from the start, same
-        // reasoning as db.ts's saveReflection.
-        let _ = sqlx::query(
-            "INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&created_at)
-        .bind(slot)
-        .bind(text)
-        .bind(&created_at)
-        .execute(pool)
-        .await;
+        // Upserts per slot -- mirrors db.ts's saveReflection exactly (see its doc comment):
+        // retrying a failed submit must not re-insert a slot that already succeeded before the
+        // failure, since slot_start_at has no UNIQUE constraint.
+        let existing = sqlx::query_scalar::<_, i64>("SELECT id FROM reflection WHERE slot_start_at = ?")
+            .bind(slot)
+            .fetch_optional(pool)
+            .await;
+        if matches!(existing, Ok(Some(_))) {
+            let _ = sqlx::query("UPDATE reflection SET text = ?, updated_at = ? WHERE slot_start_at = ?")
+                .bind(text)
+                .bind(&created_at)
+                .bind(slot)
+                .execute(pool)
+                .await;
+        } else {
+            // updated_at = created_at on a fresh insert -- the P2P sync delta
+            // cursor (p2p_sync.rs) needs a non-null value from the start, same
+            // reasoning as db.ts's saveReflection.
+            let _ = sqlx::query(
+                "INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES (?, ?, ?, ?)",
+            )
+            .bind(&created_at)
+            .bind(slot)
+            .bind(text)
+            .bind(&created_at)
+            .execute(pool)
+            .await;
+        }
     }
 }
 

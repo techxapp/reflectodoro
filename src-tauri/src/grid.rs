@@ -33,6 +33,19 @@ pub fn preceding_work_slot_start_iso(break_slot_start_iso: &str) -> Option<Strin
     Some((dt - ChronoDuration::minutes(25)).to_rfc3339())
 }
 
+/// Given the ISO start of a *break* slot, returns the ISO start of the *next*
+/// work slot -- the one that begins the moment this break ends. Every break
+/// is a fixed 5 minutes (`:25`-`:30`, `:55`-`:00`), so like
+/// `preceding_work_slot_start_iso` this is a fixed offset, not another
+/// `slot_for` recomputation. Used for the overlay's "Coming next" preview
+/// (whatever's already saved for the upcoming slot, e.g. via a bulk edit
+/// ahead of time) -- see native_overlay.rs's Android mirror and db.ts's
+/// `nextWorkSlotStartIso` for the desktop/frontend equivalent.
+pub fn next_work_slot_start_iso(break_slot_start_iso: &str) -> Option<String> {
+    let dt = DateTime::parse_from_rfc3339(break_slot_start_iso).ok()?;
+    Some((dt + ChronoDuration::minutes(5)).to_rfc3339())
+}
+
 /// Builds "today's wall-clock HH:mm:00" in the Local timezone, for `now`'s
 /// hour and the given `minute`. Deliberately does NOT go through
 /// `DateTime::<Local>::with_minute` (which routes through chrono's
@@ -154,6 +167,20 @@ mod tests {
         let break_start = slot_for(local(10, 58)).start_iso();
         let work_start = preceding_work_slot_start_iso(&break_start).unwrap();
         assert_eq!(work_start, local(10, 30).to_rfc3339());
+    }
+
+    #[test]
+    fn next_work_slot_start_maps_first_break_to_half_past() {
+        let break_start = slot_for(local(10, 27)).start_iso();
+        let work_start = next_work_slot_start_iso(&break_start).unwrap();
+        assert_eq!(work_start, local(10, 30).to_rfc3339());
+    }
+
+    #[test]
+    fn next_work_slot_start_maps_second_break_to_top_of_next_hour() {
+        let break_start = slot_for(local(10, 58)).start_iso();
+        let work_start = next_work_slot_start_iso(&break_start).unwrap();
+        assert_eq!(work_start, local(11, 0).to_rfc3339());
     }
 
     #[test]

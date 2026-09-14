@@ -14,6 +14,8 @@
     validateBulkEditRange,
     previewBulkEditSlots,
     bulkUpsertReflections,
+    saveReflection,
+    getAllSlotStartsForDate,
     type BulkEditSlotPreview,
     getScreenTimeForDate,
     getScreenTimeTrackingEnabled,
@@ -74,6 +76,11 @@
   // "Apply" act on stale (possibly no-longer-matching) slots.
   let bulkPreviewFor = $state("");
 
+  // --- "View all" full-day view ---
+  let viewAllOpen = $state(false);
+  let editingMockSlot = $state<string | null>(null);
+  let editMockText = $state("");
+
   const selectedStamp = $derived(localDateStamp(selected));
   const isToday = $derived(selectedStamp === localDateStamp(new Date()));
   // clusterReflectionRows needs its input in ascending slot order (it relies
@@ -86,6 +93,20 @@
       .map((cluster) => ({ rows: [...cluster.rows].reverse() }))
       .reverse(),
   );
+
+  // "View all" -- every slot for the day, ascending, real rows matched up
+  // against mock (unplanned) placeholders, with no clustering/collapsing.
+  interface DaySlotRow {
+    slotStartIso: string;
+    row: ReflectionRow | null;
+  }
+  const daySlotRows = $derived.by<DaySlotRow[]>(() => {
+    const bySlot = new Map(reflectionRows.map((r) => [r.slot_start_at, r]));
+    return getAllSlotStartsForDate(selectedStamp).map((slotStartIso) => ({
+      slotStartIso,
+      row: bySlot.get(slotStartIso) ?? null,
+    }));
+  });
 
   // Bumped on every load() call and captured per-call so a load for a day the
   // user has already navigated away from can't win a race against a load for
@@ -161,6 +182,8 @@
   }
 
   function startEdit(row: { id: number; text: string }) {
+    editingMockSlot = null;
+    editMockText = "";
     editingId = row.id;
     editText = row.text;
   }
@@ -177,6 +200,29 @@
     reflectionRows = reflectionRows.map((r) => (r.id === row.id ? { ...r, text } : r));
     editingId = null;
     editText = "";
+  }
+
+  function startMockEdit(slotStartIso: string) {
+    editingId = null;
+    editText = "";
+    editingMockSlot = slotStartIso;
+    editMockText = "";
+  }
+
+  function cancelMockEdit() {
+    editingMockSlot = null;
+    editMockText = "";
+  }
+
+  /** Straightforward per-slot upsert (saveReflection), not the import.rs
+   * merge path -- this is a fresh plan for a slot that had nothing before. */
+  async function saveMockEdit(slotStartIso: string) {
+    const text = editMockText.trim();
+    if (!text) return;
+    await saveReflection([slotStartIso], text);
+    editingMockSlot = null;
+    editMockText = "";
+    await load();
   }
 
   function resetBulkEdit() {
@@ -525,9 +571,10 @@
         {/if}
       {/snippet}
 
+      <div class="entry-toolbar">
       <div class="bulk-edit">
         {#if !bulkEditOpen}
-          <button class="bulk-toggle" onclick={() => (bulkEditOpen = true)}>+ Bulk edit reflections</button>
+          <button class="bulk-toggle" onclick={() => (bulkEditOpen = true)}>+ Bulk edit</button>
         {:else}
           <div class="bulk-form">
             <h3>Bulk edit reflections</h3>
@@ -586,7 +633,51 @@
         {/if}
       </div>
 
-      {#if clusters.length === 0}
+      <button class="bulk-toggle" onclick={() => (viewAllOpen = !viewAllOpen)}>
+        {viewAllOpen ? "− Hide full day view" : "+ View all"}
+      </button>
+      </div>
+
+      {#if viewAllOpen}
+        <ul class="reflection-list day-slot-list">
+          {#each daySlotRows as slot (slot.slotStartIso)}
+            <li class={slot.row ? undefined : "mock"}>
+              <div class="meta">
+                <span class="time">{formatTime(slot.slotStartIso)}</span>
+                {#if slot.row}
+                  {@render editButton(slot.row)}
+                {:else if editingMockSlot !== slot.slotStartIso}
+                  <button
+                    class="icon-btn"
+                    onclick={() => startMockEdit(slot.slotStartIso)}
+                    aria-label="Add plan"
+                    title="Add plan"
+                  >
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                    </svg>
+                  </button>
+                {/if}
+              </div>
+              {#if slot.row}
+                {@render reflectionRow(slot.row)}
+              {:else if editingMockSlot === slot.slotStartIso}
+                <div class="edit-row">
+                  <textarea bind:value={editMockText} rows="3" placeholder="What's planned for this slot?"></textarea>
+                  <div class="edit-actions">
+                    <button class="save" disabled={!editMockText.trim()} onclick={() => saveMockEdit(slot.slotStartIso)}>
+                      Save
+                    </button>
+                    <button class="cancel" onclick={cancelMockEdit}>Cancel</button>
+                  </div>
+                </div>
+              {:else}
+                <p class="mock-placeholder">No plan yet</p>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {:else if clusters.length === 0}
         <p class="hint">No reflections logged for this day.</p>
       {:else}
         <ul class="reflection-list">
@@ -842,8 +933,16 @@
     resize: vertical;
   }
 
-  .bulk-edit {
+  .entry-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px;
     margin-bottom: 16px;
+  }
+
+  .entry-toolbar .bulk-edit {
+    flex: 1 1 auto;
   }
 
   .bulk-toggle {
@@ -930,6 +1029,18 @@
     background: var(--surface-2);
     border-radius: 10px;
     padding: 12px 14px;
+  }
+
+  .day-slot-list li.mock {
+    background: transparent;
+    border: 1px dashed var(--border);
+    opacity: 0.75;
+  }
+
+  .mock-placeholder {
+    font-style: italic;
+    color: var(--text-dim);
+    margin: 0;
   }
 
   .meta {

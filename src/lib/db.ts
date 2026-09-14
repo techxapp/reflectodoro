@@ -89,6 +89,19 @@ export function precedingWorkSlotStartIso(breakSlotStartIso: string): string {
   return new Date(new Date(breakSlotStartIso).getTime() - 25 * 60 * 1000).toISOString();
 }
 
+/**
+ * Mirror of `precedingWorkSlotStartIso` in the other direction: the work slot
+ * that begins the moment the current break ends (every break is a fixed 5
+ * minutes -- `:25`-`:30`, `:55`-`:00`). Used for the overlay's "Coming next"
+ * preview of whatever's already saved for the upcoming slot (e.g. entered
+ * ahead of time via the Entries page's bulk edit) -- see
+ * grid::next_work_slot_start_iso for the Rust-side equivalent used by the
+ * Android native overlay.
+ */
+export function nextWorkSlotStartIso(breakSlotStartIso: string): string {
+  return new Date(new Date(breakSlotStartIso).getTime() + 5 * 60 * 1000).toISOString();
+}
+
 /** Was the given slot (by its canonical ISO start timestamp) already reflected on? */
 export async function isSlotCovered(slotStartIso: string): Promise<boolean> {
   const db = await getDb();
@@ -97,6 +110,23 @@ export async function isSlotCovered(slotStartIso: string): Promise<boolean> {
     [slotStartIso],
   );
   return (rows[0]?.n ?? 0) > 0;
+}
+
+/**
+ * Text already saved for a given slot (by its canonical ISO start), or `null`
+ * if no row exists -- used by the overlay's "Coming next" preview to look up
+ * the upcoming work slot rather than just checking whether it's covered
+ * (`isSlotCovered`). Blank/"skip"-only text is treated the same as no row at
+ * all by the caller (see overlay/+page.svelte's `isSkipOnlyText`), not here,
+ * so this stays a plain lookup with no display-filtering opinion of its own.
+ */
+export async function getReflectionTextForSlot(slotStartIso: string): Promise<string | null> {
+  const db = await getDb();
+  const rows = await db.select<{ text: string }[]>(
+    `SELECT text FROM reflection WHERE slot_start_at = $1 LIMIT 1`,
+    [slotStartIso],
+  );
+  return rows[0]?.text ?? null;
 }
 
 /**
@@ -178,15 +208,32 @@ export async function findMissedSlots(currentSlotIso: string): Promise<string[]>
   return slots;
 }
 
-/** One DB row per covered slot (same created_at/text) -- so "missed" pomodoros are individually recorded, not bundled into one array field. */
+/** One DB row per covered slot (same created_at/text) -- so "missed" pomodoros are individually
+ * recorded, not bundled into one array field. Upserts per slot (same pattern as
+ * bulkUpsertReflections) rather than blindly inserting: retrying a failed submit -- the overlay's
+ * documented "Close break screen anyway" escape-hatch path exists for exactly this -- would
+ * otherwise re-insert the slots that already succeeded before the failure, since slot_start_at
+ * has no UNIQUE constraint. An update leaves the original created_at alone. */
 export async function saveReflection(coveredSlots: string[], text: string): Promise<void> {
   const db = await getDb();
   const createdAt = new Date().toISOString();
   for (const slot of coveredSlots) {
-    await db.execute(
-      `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
-      [createdAt, slot, text, createdAt],
+    const existing = await db.select<{ id: number }[]>(
+      `SELECT id FROM reflection WHERE slot_start_at = $1`,
+      [slot],
     );
+    if (existing.length > 0) {
+      await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE slot_start_at = $3`, [
+        text,
+        createdAt,
+        slot,
+      ]);
+    } else {
+      await db.execute(
+        `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
+        [createdAt, slot, text, createdAt],
+      );
+    }
   }
 }
 
@@ -398,6 +445,21 @@ export function computeBulkEditSlots(dateStamp: string, startTime: string, endTi
   const lastSlotMinute = Math.floor((endMin - 30) / 30) * 30;
   const slots: string[] = [];
   for (let m = firstSlotMinute; m <= lastSlotMinute; m += 30) {
+    slots.push(new Date(y, mo - 1, d, Math.floor(m / 60), m % 60).toISOString());
+  }
+  return slots;
+}
+
+/**
+ * Every 30-minute work-slot start (:00 and :30, 00:00-23:30 -- 48 total) for
+ * a local calendar date, unfiltered by whether a reflection exists yet.
+ * Same Date-construction pattern as computeBulkEditSlots, just unbounded to
+ * the whole day -- used by the Entries page's "View all" full-day view.
+ */
+export function getAllSlotStartsForDate(dateStamp: string): string[] {
+  const [y, mo, d] = dateStamp.split("-").map(Number);
+  const slots: string[] = [];
+  for (let m = 0; m < 24 * 60; m += 30) {
     slots.push(new Date(y, mo - 1, d, Math.floor(m / 60), m % 60).toISOString());
   }
   return slots;

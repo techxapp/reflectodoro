@@ -196,6 +196,7 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
         crate::native_overlay::refresh_task_list_cache(app).await;
         crate::native_overlay::refresh_not_to_do_list_cache(app).await;
         crate::native_overlay::refresh_missed_slot_count(app).await;
+        crate::native_overlay::refresh_coming_next_text(app).await;
         let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
         let persistent = crate::BREAK_NOTIFICATION_PERSISTENT_ENABLED.load(Ordering::SeqCst);
         let state_json = overlay_state_json_for_android(app);
@@ -230,6 +231,10 @@ fn overlay_state_json_for_android(app: &AppHandle) -> serde_json::Value {
         map.insert(
             "missed_slot_count".into(),
             serde_json::json!(*state.missed_slot_count.lock().unwrap()),
+        );
+        map.insert(
+            "coming_next_text".into(),
+            serde_json::json!(state.coming_next_text.lock().unwrap().clone()),
         );
     }
     json

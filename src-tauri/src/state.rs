@@ -125,6 +125,17 @@ pub struct AppState {
     /// slot: nothing else writes to `reflection` while this overlay -- which
     /// captures all touch input -- is the only thing on screen.
     pub missed_slot_count: Mutex<usize>,
+    /// Preview text of whatever's already saved (e.g. via a bulk edit done
+    /// ahead of time) for the *upcoming* work slot -- the one that starts the
+    /// moment this break ends -- Android only. Mirrors `missed_slot_count`
+    /// above: computed once in Rust right before the overlay is shown
+    /// (`native_overlay::refresh_coming_next_text`) since the native
+    /// WindowManager overlay has no DB access of its own, then read
+    /// synchronously from `overlay_state_json_for_android`. Empty when there
+    /// is no such row, or its text is blank/only "skip" lines -- the
+    /// "Coming next" line is hidden entirely in that case rather than shown
+    /// empty (see native_overlay.html's render()).
+    pub coming_next_text: Mutex<String>,
 }
 
 impl AppState {
@@ -139,6 +150,7 @@ impl AppState {
             not_to_do_list: Mutex::new(String::new()),
             task_list_date: Mutex::new(String::new()),
             missed_slot_count: Mutex::new(1),
+            coming_next_text: Mutex::new(String::new()),
         }
     }
 }
