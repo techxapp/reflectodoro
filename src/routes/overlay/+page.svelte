@@ -371,6 +371,9 @@
         ></textarea>
         {#if overlayState?.reflection_entered}
           <p class="hint ok">Saved. Waiting on the other condition to finish the break.</p>
+          {#if comingNextText}
+            <p class="hint coming-next">Coming next: {comingNextText}</p>
+          {/if}
         {:else}
           {#if hasPrefill}
             <p class="hint">Pre-filled with your last entry -- edit it or write a new one.</p>
@@ -628,6 +631,13 @@
   .hint.error {
     color: #f2a3a3;
     opacity: 1;
+  }
+
+  .hint.coming-next {
+    color: #f3f3f7;
+    font-size: 14px;
+    opacity: 0.85;
+    margin-top: 20px;
   }
 
   .escape-hatch {
