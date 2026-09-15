@@ -237,14 +237,23 @@ export async function saveReflection(coveredSlots: string[], text: string): Prom
   }
 }
 
-/** Text of the most recently saved reflection row, across all slots -- used
- * to pre-populate (never auto-save) the overlay's reflection textarea so the
- * user can see/tweak what they wrote last time instead of starting blank.
- * Returns null when no reflection has ever been saved (fresh install). */
-export async function getLastReflectionText(): Promise<string | null> {
+/** Text of the most recently saved reflection row for a slot strictly before
+ * `beforeSlotStartIso`, used to pre-populate (never auto-save) the overlay's
+ * reflection textarea so the user can see/tweak what they wrote last time
+ * instead of starting blank. Ordered by `slot_start_at` (the slot the
+ * reflection is *about*), not `id`/`created_at` (when it was *written*) --
+ * the Entries page's bulk edit and "View all" mock-slot editor can both
+ * insert/update a row for a slot far in the future relative to when it's
+ * saved, and an id-ordered query would then surface that future entry as the
+ * "last" one even while sitting inside an earlier break. Returns null when no
+ * such reflection exists (fresh install, or the very first slot of all). */
+export async function getLastReflectionText(
+  beforeSlotStartIso: string,
+): Promise<string | null> {
   const db = await getDb();
   const rows = await db.select<{ text: string }[]>(
-    `SELECT text FROM reflection ORDER BY id DESC LIMIT 1`,
+    `SELECT text FROM reflection WHERE slot_start_at < $1 ORDER BY slot_start_at DESC LIMIT 1`,
+    [beforeSlotStartIso],
   );
   return rows[0]?.text ?? null;
 }

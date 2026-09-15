@@ -139,7 +139,9 @@
    * this slot, since the textarea goes read-only at that point anyway. */
   async function prefillReflection() {
     if (!overlayState || overlayState.reflection_entered) return;
-    const last = await getLastReflectionText();
+    const last = await getLastReflectionText(
+      precedingWorkSlotStartIso(overlayState.current_slot_start),
+    );
     reflectionText = last ?? "";
     hasPrefill = last !== null;
   }
