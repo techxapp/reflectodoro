@@ -293,6 +293,15 @@
         breakitInput = "";
         saveError = null;
         showEscapeHatch = false;
+        // The overlay window sits `hidden` between breaks (up to 25 minutes),
+        // during which Chromium/WebKit can throttle this component's
+        // setInterval-driven `nowTick` (background timer throttling) --
+        // resyncing here the instant a break actually opens means the clock
+        // and countdown are never left showing a stale value from before the
+        // window was shown, regardless of how throttled the interval was.
+        if (overlayState.open) {
+          nowTick = Date.now();
+        }
         await refreshCoverage();
         await prefillReflection();
         await refreshComingNext();
@@ -313,6 +322,17 @@
     void logInfo(
       `[overlay] fallback invoke: open=${overlayState.open} slot=${overlayState.current_slot_start} challenge=${JSON.stringify(overlayState.breakit_challenge)}`,
     );
+    // Started immediately after the fallback invoke resolves -- deliberately
+    // *before* refreshQuote below, which hits an external, user-configured
+    // endpoint with a 5s timeout. This only runs once per app process
+    // (onMount fires once; the overlay window is precreated and reused for
+    // every break), but if that one run happens to land inside an
+    // already-open break (e.g. app relaunched mid-break), a slow/unreachable
+    // quote endpoint used to delay this interval's very first tick by up to
+    // 5s, leaving the clock/countdown frozen that whole time.
+    nowTick = Date.now();
+    tickInterval = setInterval(() => (nowTick = Date.now()), 1000);
+
     await refreshCoverage();
     await prefillReflection();
     await refreshComingNext();
@@ -333,8 +353,6 @@
     unlistenNotToDo = await listenForNotToDoListUpdates((content) => {
       notToDoContent = content;
     });
-
-    tickInterval = setInterval(() => (nowTick = Date.now()), 1000);
 
     window.visualViewport?.addEventListener("resize", updateKeyboardInset);
     updateKeyboardInset();
