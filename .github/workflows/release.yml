@@ -357,6 +357,50 @@ jobs:
           done
           gh release upload "$TAG_NAME" "${apks[@]}" --clobber
 
+      # Play Store requires an .aab, not the .apk built above -- a separate
+      # bundleRelease build (not derivable from the split APKs), deliberately
+      # *not* --split-per-abi: Play's own dynamic delivery does the per-device
+      # ABI splitting from one universal bundle, so doing it again here would
+      # just bloat the bundle with duplicated shared assets across modules.
+      # Uploaded as a GitHub release asset alongside the APKs for now -- actual
+      # Play Console submission is a separate, manual step (or a future CI job
+      # with its own service-account credentials).
+      - name: Build Android App Bundle (AAB)
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          export ANDROID_NDK_HOME="$NDK_HOME"
+          npm run tauri android build -- --aab --target aarch64 armv7
+
+      - name: Upload AAB to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # See the release job's release-notes steps for why this goes
+          # through env rather than direct "${{ github.ref_name }}"
+          # interpolation.
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          aabs=(src-tauri/gen/android/app/build/outputs/bundle/*Release*/*.aab)
+          if [ ${#aabs[@]} -eq 0 ]; then
+            echo "::error::no AAB found under build/outputs/bundle -- build step must have failed silently"
+            exit 1
+          fi
+          # Unlike the APK task, Gradle's bundle task doesn't name an
+          # unsigned output differently -- verify the signature directly
+          # rather than trusting the filename.
+          for aab in "${aabs[@]}"; do
+            if ! jarsigner -verify "$aab" >/dev/null 2>&1; then
+              echo "::error::refusing to upload unsigned/invalid AAB: $aab"
+              exit 1
+            fi
+          done
+          gh release upload "$TAG_NAME" "${aabs[@]}" --clobber
+
   # Un-drafts the release (see the `release` job's `releaseDraft: true`
   # comment) only once every asset and manifest across the whole workflow is
   # in its final state -- both the Linux AppImage re-sign/latest.json patch
