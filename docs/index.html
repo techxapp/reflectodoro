@@ -1577,6 +1577,21 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
+              <p class="timeline-date">Tuesday, Sep 15, 2026</p>
+              <ul class="timeline-items">
+                <li>Added a configurable quote panel to the break screen, pulling short text from a user-set API endpoint, and polished how the &ldquo;Coming next&rdquo; preview looks and stays visible after saving</li>
+                <li>Fixed the overlay clock/countdown showing stale time right when a break opens, and the reflection field pre-filling from the wrong slot instead of your last entry</li>
+                <li>Added the Google Play Store listing identifier</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Monday, Sep 14, 2026</p>
+              <ul class="timeline-items">
+                <li>Added a daily cap on emergency-exit (breakit) code uses, a &ldquo;Coming next&rdquo; preview and bulk-edit/full-day view for reflections, an auto-scrolling reflection list, and newest-first sorting on the Entries page</li>
+                <li>Fixed the macOS break screen getting hidden behind fullscreen apps, plus related media-pause bugs</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
               <p class="timeline-date">Sunday, Sep 13, 2026</p>
               <ul class="timeline-items">
                 <li>Fixed Android's snooze-and-resume Pomodoro state getting wiped if the process was killed while paused</li>
@@ -1616,25 +1631,16 @@
                 <li>Added an FAQ entry on why Reflectodoro is free, and an &ldquo;all releases&rdquo; link on the download page</li>
               </ul>
             </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Tuesday, Sep 8, 2026</p>
-              <ul class="timeline-items">
-                <li>Added full macOS break-screen enforcement: Cmd+Tab blocking, following you across every Space, and an opt-in menu bar/Dock hiding option</li>
-                <li>Fixed the app's tray/dock icon not reopening the window on macOS</li>
-                <li>Fixed reflections on the Entries page being grouped by save time instead of the day they were actually about</li>
-                <li>Fixed the emergency-exit challenge showing a stale value when settings synced in late</li>
-              </ul>
-            </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Monday, Sep 7, 2026</p>
-              <ul class="timeline-items">
-                <li>Added an FAQ section to the landing page</li>
-                <li>Fixed the emergency-exit challenge (breakit) not accepting Enter to submit in common overlay on Android, and added diagnostics for the challenge flow</li>
-                <li>Fixed the emergency-exit challenge sometimes using default settings instead of your saved length/character-set on a cold start</li>
-                <li>Fixed reflections being timestamped to the break slot instead of the work slot they were actually about</li>
-              </ul>
-            </div>
             <p class="timeline-tier reveal">Previous 3 weeks</p>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Week of Sep 7 &ndash; 13, 2026</p>
+              <ul class="timeline-items">
+                <li>Added full macOS break-screen enforcement (Cmd+Tab blocking, following you across every Space, opt-in menu bar/Dock hiding) and an FAQ section on the landing page</li>
+                <li>Fixed several emergency-exit (breakit) challenge bugs: not accepting Enter to submit on Android, using default settings instead of your saved length/character set on a cold start, and showing a stale value when settings synced in late</li>
+                <li>Fixed reflections being timestamped to the break slot instead of the work slot they were actually about, and being grouped on the Entries page by save time instead of the day they were about</li>
+                <li>Fixed the app's tray/dock icon not reopening the window on macOS</li>
+              </ul>
+            </div>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Aug 31 &ndash; Sep 6, 2026</p>
               <ul class="timeline-items">
@@ -1659,8 +1665,9 @@
                 <li>Fixed the app not returning to the foreground after the native break overlay closes, a hibernation edge case spanning overlay closure, and the on-screen keyboard covering the task list on Android's Timer tab</li>
               </ul>
             </div>
+            <p class="timeline-tier reveal">Earlier</p>
             <div class="timeline-entry reveal">
-              <p class="timeline-date">Week of Aug 17 &ndash; 23, 2026</p>
+              <p class="timeline-date">August 2026</p>
               <ul class="timeline-items">
                 <li>Initial commit: Reflectodoro Windows MVP</li>
                 <li>Added the auto-updater, GitHub Actions release workflow, and the first landing page</li>
