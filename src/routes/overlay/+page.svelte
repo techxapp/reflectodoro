@@ -17,6 +17,7 @@
     precedingWorkSlotStartIso,
     nextWorkSlotStartIso,
     getReflectionTextForSlot,
+    getQuoteApiUrl,
   } from "$lib/db";
 
   interface OverlayState {
@@ -39,6 +40,8 @@
   let notToDoContent = $state("");
   let missedSlots = $state<string[]>([]);
   let comingNextText = $state<string | null>(null);
+  let quoteApiUrl = $state<string | null>(null);
+  let quoteText = $state<string | null>(null);
   let nowTick = $state(Date.now());
   // Submit-path state: guards against a double-submit racing two INSERTs for
   // the same slot, surfaces a save failure instead of leaving the user
@@ -110,6 +113,24 @@
     const next = nextWorkSlotStartIso(overlayState.current_slot_start);
     const text = await getReflectionTextForSlot(next);
     comingNextText = text !== null && !isSkipOnlyText(text) ? text : null;
+  }
+
+  /** Fetches a fresh quote from the user-configured Settings endpoint
+   * (app_setting.quote_api_url) whenever a new break starts -- a blank URL
+   * (feature off) or any fetch failure both just leave quoteText null, so
+   * the panel stays hidden rather than showing an error on the break screen.
+   * The fetch itself runs in Rust (fetch_quote, commands.rs), not a webview
+   * fetch(), to sidestep third-party CORS -- see that command's doc comment. */
+  async function refreshQuote() {
+    if (!quoteApiUrl) {
+      quoteText = null;
+      return;
+    }
+    try {
+      quoteText = await invoke<string>("fetch_quote", { url: quoteApiUrl });
+    } catch {
+      quoteText = null;
+    }
   }
 
   /** Pre-fills (never saves) the reflection field with the last entry saved
@@ -245,6 +266,7 @@
 
   onMount(async () => {
     devMode = await invoke<boolean>("is_dev_mode");
+    quoteApiUrl = (await getQuoteApiUrl()) || null;
 
     // Listener attached BEFORE the fallback invoke below -- mirrors
     // checkin/+page.svelte's fix for the identical race (see its own
@@ -272,6 +294,16 @@
         await refreshCoverage();
         await prefillReflection();
         await refreshComingNext();
+        // Unlike the three calls above (cheap local DB reads, harmless to
+        // re-run on every slot-start change including the close-triggered
+        // one back to ""), this hits an external network API -- only worth
+        // doing when a break is actually opening, not also when it closes
+        // (current_slot_start resets to "" then too, via close_overlay's
+        // OverlayState::closed()). Firing on both used to double the
+        // request rate against whatever quote API the user configured.
+        if (overlayState.open) {
+          await refreshQuote();
+        }
       }
     });
 
@@ -282,6 +314,14 @@
     await refreshCoverage();
     await prefillReflection();
     await refreshComingNext();
+    // Same reasoning as the listener above: the overlay window is
+    // precreated hidden at app startup regardless of break state (see
+    // overlay.rs's precreate_windows), so this mount-time fallback runs on
+    // every app boot, not just when a break is actually open -- only fetch
+    // when it is.
+    if (overlayState.open) {
+      await refreshQuote();
+    }
     taskListContent = await getTaskList(localDateStamp());
     notToDoContent = await getNotToDoList(localDateStamp());
 
@@ -405,6 +445,12 @@
         ></textarea>
         <p class="hint">Auto-saves as you type.</p>
       </section>
+
+      {#if quoteText}
+        <section class="panel side quote-panel">
+          <p class="quote-text">{quoteText}</p>
+        </section>
+      {/if}
     </div>
   </div>
 </div>
@@ -487,6 +533,13 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
+  }
+
+  .quote-text {
+    margin: 0;
+    font-style: italic;
+    line-height: 1.5;
+    opacity: 0.85;
   }
 
   @media (max-width: 600px) {

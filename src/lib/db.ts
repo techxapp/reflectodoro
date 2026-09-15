@@ -1749,3 +1749,34 @@ export async function forgetPairedDevice(deviceId: string): Promise<void> {
 export async function syncWithDevice(deviceId: string): Promise<SyncResult> {
   return invoke<SyncResult>("sync_with_device", { deviceId });
 }
+
+// --- Quote API (end-of-break overlay panel) ------------------------------
+//
+// Blank URL = feature off. Defaults to zenquotes.io's random-quote endpoint,
+// seeded as a real app_setting row by db.rs's migration 21 -- not a
+// read-side fallback here, so clearing the field in Settings genuinely
+// disables it (an explicit saved "" is never overridden). The URL itself is
+// stored here (plain app_setting, read by the overlay page), but the actual
+// fetch happens in Rust via the fetch_quote command -- see commands.rs's doc
+// comment for why (CORS, and this being the app's first arbitrary-
+// third-party outbound call).
+
+const QUOTE_API_URL_KEY = "quote_api_url";
+
+export async function getQuoteApiUrl(): Promise<string> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [QUOTE_API_URL_KEY],
+  );
+  return rows[0]?.value ?? "";
+}
+
+export async function saveQuoteApiUrl(url: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [QUOTE_API_URL_KEY, url],
+  );
+}

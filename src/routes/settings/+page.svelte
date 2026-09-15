@@ -32,6 +32,8 @@
     saveScreenTimeAppThresholdMinutes,
     getDeviceName,
     saveDeviceName,
+    getQuoteApiUrl,
+    saveQuoteApiUrl,
     startPairing,
     cancelPairing,
     browsePairingCandidates,
@@ -101,6 +103,10 @@
   let deviceName = $state("");
   let deviceNameLoaded = $state(false);
   let deviceNameSaved = $state(false);
+
+  let quoteApiUrl = $state("");
+  let quoteApiUrlLoaded = $state(false);
+  let quoteApiUrlSaved = $state(false);
 
   let overlayGranted = $state(false);
   let overlayChecked = $state(false);
@@ -343,6 +349,11 @@
     deviceNameLoaded = true;
   });
 
+  onMount(async () => {
+    quoteApiUrl = await getQuoteApiUrl();
+    quoteApiUrlLoaded = true;
+  });
+
   async function refreshOverlayPermission() {
     overlayGranted = await invoke<boolean>("can_draw_overlays");
     overlayChecked = true;
@@ -535,6 +546,13 @@
     setTimeout(() => (deviceNameSaved = false), 2000);
   }
 
+  async function saveQuoteApiUrlSetting(e: Event) {
+    e.preventDefault();
+    await saveQuoteApiUrl(quoteApiUrl.trim());
+    quoteApiUrlSaved = true;
+    setTimeout(() => (quoteApiUrlSaved = false), 2000);
+  }
+
   async function saveWellnessExclusions(e: Event) {
     e.preventDefault();
     await saveWellnessTextExclusions(wellnessExclusions);
@@ -719,6 +737,29 @@
           <span class="hint saved">Saved</span>
         {/if}
       </form>
+    {/if}
+
+    {#if !isAndroid && quoteApiUrlLoaded}
+      <form onsubmit={saveQuoteApiUrlSetting}>
+        <label class="grow">
+          Quote API URL
+          <input
+            type="text"
+            bind:value={quoteApiUrl}
+            placeholder="https://api.example.com/quote"
+          />
+        </label>
+        <button type="submit">Save</button>
+        {#if quoteApiUrlSaved}
+          <span class="hint saved">Saved</span>
+        {/if}
+      </form>
+      <p class="hint">
+        Shown at the end of the break screen. Leave blank to disable. Expects a JSON response with
+        a quote field (e.g. <code>quote</code>/<code>content</code>/<code>text</code>, optionally
+        <code>author</code>) &mdash; falls back to showing the raw response text otherwise. Not yet
+        supported on Android.
+      </p>
     {/if}
 
     {#if isAndroid && overlayChecked}

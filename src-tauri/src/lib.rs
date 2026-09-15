@@ -774,6 +774,7 @@ pub fn run() {
             commands::request_schedule_exact_alarm_permission,
             commands::can_query_usage_stats,
             commands::request_usage_stats_permission,
+            commands::fetch_quote,
             import::import_data,
             log_export::export_last_log_file,
             log_export::export_log_archive,

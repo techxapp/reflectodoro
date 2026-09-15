@@ -64,6 +64,14 @@ snow = "0.9"
 # (not just Android) since import.rs runs on every platform; SQLite handles
 # multiple connections to one file fine at this app's write volume.
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+# Backs commands::fetch_quote (the configurable break-screen quote API, see
+# CLAUDE.md's "Quote API" section) -- used directly rather than through
+# tauri-plugin-http, since that plugin's capability model expects a fixed URL
+# allowlist in capabilities/*.json and this feature's URL is user-supplied and
+# arbitrary. default-features=false drops reqwest's own TLS-backend default
+# (native-tls) in favor of rustls, avoiding a second TLS stack alongside
+# whatever else in the dependency tree already pulls one in.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"

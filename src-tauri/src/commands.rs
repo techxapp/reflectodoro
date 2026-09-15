@@ -1,6 +1,8 @@
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use chrono::TimeZone;
+use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 #[cfg(target_os = "android")]
 use tauri::Manager;
@@ -675,4 +677,101 @@ pub fn dev_force_close(app: AppHandle, state: State<AppState>) -> Result<(), Str
     }
     overlay::close_overlay(&app);
     Ok(())
+}
+
+/// The end-of-break "quote" panel's endpoint fetch. `url` is whatever the
+/// user configured in Settings (app_setting.quote_api_url) -- arbitrary and
+/// third-party, this app's first such outbound call (see CLAUDE.md's "Quote
+/// API" section for why this goes through reqwest directly rather than
+/// tauri-plugin-http). The parse is best-effort: most public quote APIs
+/// return JSON under one of a handful of common field names, or an array
+/// wrapping one such object (e.g. zenquotes.io's `[{"q": ..., "a": ...}]`);
+/// anything else falls back to the raw trimmed text so a non-quote endpoint
+/// still shows *something* rather than nothing. Errors are returned for the
+/// caller to fail silently on (no quote panel shown) -- never surfaced as a
+/// visible error on the break screen.
+#[tauri::command]
+pub async fn fetch_quote(url: String) -> Result<String, String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("quote API URL must be http(s)".into());
+    }
+
+    const MAX_BODY_BYTES: usize = 64 * 1024;
+    const MAX_QUOTE_CHARS: usize = 500;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client.get(&url).send().await.map_err(|e| {
+        log::warn!("fetch_quote: request to configured quote API failed: {e}");
+        "request failed".to_string()
+    })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        log::warn!("fetch_quote: quote API returned status {status}");
+        return Err(format!("quote API returned status {status}"));
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| {
+        log::warn!("fetch_quote: failed reading quote API response body: {e}");
+        "failed reading response".to_string()
+    })?;
+    let truncated = &bytes[..bytes.len().min(MAX_BODY_BYTES)];
+    let body = String::from_utf8_lossy(truncated);
+
+    let text = extract_quote_text(&body).unwrap_or_else(|| body.trim().to_string());
+    if text.is_empty() {
+        return Err("quote API returned no text".into());
+    }
+
+    Ok(truncate_chars(&text, MAX_QUOTE_CHARS))
+}
+
+/// Tries to parse `body` as JSON and pull a quote (+ optional author) out of
+/// a handful of common field-name conventions used by public quote APIs.
+/// Accepts either a bare object or an array wrapping one (the latter covers
+/// e.g. zenquotes.io's `[{"q": ..., "a": ...}]`). Returns None -- letting the
+/// caller fall back to raw text -- for anything that isn't JSON or doesn't
+/// match a known field.
+fn extract_quote_text(body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(body.trim()).ok()?;
+    let obj = match &value {
+        Value::Array(arr) => arr.first()?,
+        _ => &value,
+    };
+
+    const QUOTE_FIELDS: [&str; 5] = ["quote", "content", "text", "message", "q"];
+    const AUTHOR_FIELDS: [&str; 3] = ["author", "by", "a"];
+
+    let quote = QUOTE_FIELDS
+        .iter()
+        .find_map(|field| obj.get(*field).and_then(Value::as_str))?
+        .trim();
+    if quote.is_empty() {
+        return None;
+    }
+
+    let author = AUTHOR_FIELDS
+        .iter()
+        .find_map(|field| obj.get(*field).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|a| !a.is_empty());
+
+    Some(match author {
+        Some(author) => format!("\"{quote}\" — {author}"),
+        None => quote.to_string(),
+    })
+}
+
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_string()
+    } else {
+        let mut truncated: String = s.chars().take(max_chars).collect();
+        truncated.push('…');
+        truncated
+    }
 }

@@ -425,6 +425,22 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 21,
+            // Seeds a real, editable default rather than hardcoding one as a
+            // read-side fallback in db.ts -- Settings' quoteApiUrl field can
+            // then delete this row's value down to "" to genuinely disable
+            // the panel, the same as any other app_setting toggle here,
+            // without a code-level default fighting that choice on the next
+            // read. zenquotes.io's response shape ([{"q": ..., "a": ...}])
+            // is one of the field conventions fetch_quote/extract_quote_text
+            // already parse (commands.rs).
+            description: "seed default quote_api_url setting",
+            sql: r#"
+                INSERT INTO app_setting (key, value) VALUES ('quote_api_url', 'https://zenquotes.io/api/random');
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
