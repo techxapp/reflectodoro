@@ -8,7 +8,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [profile.release]
-strip = true
+strip = "debuginfo" # keeps the symbol table for Play Console native crash symbolication -- see CLAUDE.md "Known gotchas"
 lto = true
 codegen-units = 1
 panic = "abort"

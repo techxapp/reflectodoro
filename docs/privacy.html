@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy Policy &mdash; Reflectodoro</title>
+  <meta name="description" content="What Reflectodoro collects, stores, and shares &mdash; and what it doesn't. Fully local by default, with details on the optional P2P sync and quote-panel features." />
+  <link rel="icon" href="favicon.ico" />
+  <meta name="theme-color" content="#0a0c11" id="metaThemeColor" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Reflectodoro &mdash; Privacy Policy" />
+  <meta property="og:description" content="What Reflectodoro collects, stores, and shares &mdash; and what it doesn't." />
+  <meta property="og:url" content="https://reflectodoro.droplee.com/privacy.html" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="Reflectodoro &mdash; Privacy Policy" />
+  <meta name="robots" content="index, follow" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@500;700&amp;display=swap" />
+  <style>
+    /* ============ design tokens (matches index.html) ============ */
+    :root {
+      color-scheme: light;
+      --bg: #fbfaf9;
+      --surface: #ffffff;
+      --surface-2: #f4f1ee;
+      --glass: rgba(251, 250, 249, 0.72);
+      --border: rgba(22, 20, 18, 0.10);
+      --border-strong: rgba(22, 20, 18, 0.20);
+      --text: #16181d;
+      --text-dim: #5d6472;
+      --text-faint: #8b93a1;
+      --brand: #dc4f2c;
+      --brand-2: #ea8c1c;
+      --brand-ink: #ffffff;
+      --brand-soft: rgba(220, 79, 44, 0.10);
+      --brand-line: rgba(220, 79, 44, 0.30);
+      --neutral-x: #a9b0bd;
+      --shadow-sm: 0 1px 2px rgba(16, 18, 22, 0.05), 0 6px 16px -10px rgba(16, 18, 22, 0.18);
+      --shadow-md: 0 12px 34px -18px rgba(16, 18, 22, 0.32);
+      --r-sm: 10px; --r: 16px; --r-lg: 22px;
+      --maxw: 1140px;
+      --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --bg: #0a0c11;
+        --surface: #12151c;
+        --surface-2: #191d26;
+        --glass: rgba(10, 12, 17, 0.72);
+        --border: rgba(255, 255, 255, 0.09);
+        --border-strong: rgba(255, 255, 255, 0.19);
+        --text: #eef1f6;
+        --text-dim: #98a1b2;
+        --text-faint: #6f7889;
+        --brand: #ff8a5c;
+        --brand-2: #ffc267;
+        --brand-ink: #16181d;
+        --brand-soft: rgba(255, 138, 92, 0.14);
+        --brand-line: rgba(255, 138, 92, 0.34);
+        --neutral-x: #4d5566;
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40), 0 6px 16px -10px rgba(0, 0, 0, 0.60);
+        --shadow-md: 0 12px 34px -18px rgba(0, 0, 0, 0.75);
+      }
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0a0c11;
+      --surface: #12151c;
+      --surface-2: #191d26;
+      --glass: rgba(10, 12, 17, 0.72);
+      --border: rgba(255, 255, 255, 0.09);
+      --border-strong: rgba(255, 255, 255, 0.19);
+      --text: #eef1f6;
+      --text-dim: #98a1b2;
+      --text-faint: #6f7889;
+      --brand: #ff8a5c;
+      --brand-2: #ffc267;
+      --brand-ink: #16181d;
+      --brand-soft: rgba(255, 138, 92, 0.14);
+      --brand-line: rgba(255, 138, 92, 0.34);
+      --neutral-x: #4d5566;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40), 0 6px 16px -10px rgba(0, 0, 0, 0.60);
+      --shadow-md: 0 12px 34px -18px rgba(0, 0, 0, 0.75);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 16px; line-height: 1.65; -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    :focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; border-radius: 6px; }
+    .mono, code { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    code {
+      font-size: 0.87em; background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 6px; padding: 1px 6px;
+    }
+    .wrap { width: 88%; max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+    section { scroll-margin-top: 84px; }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+    /* ============ nav (matches index.html) ============ */
+    .nav {
+      position: sticky; top: 0; z-index: 50;
+      background: var(--glass);
+      -webkit-backdrop-filter: saturate(180%) blur(14px);
+      backdrop-filter: saturate(180%) blur(14px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner { height: 64px; display: flex; align-items: center; gap: 14px; }
+    .brand {
+      display: inline-flex; align-items: center; gap: 10px;
+      font-weight: 800; letter-spacing: -0.02em; font-size: 16px;
+      color: var(--text); text-decoration: none; margin-right: auto;
+    }
+    .brand:hover { text-decoration: none; }
+    .brand-mark {
+      width: 27px; height: 27px; border-radius: 9px; flex: none;
+      background: linear-gradient(140deg, var(--brand), var(--brand-2));
+      display: grid; place-items: center; color: var(--brand-ink); font-size: 13px;
+    }
+    .icon-btn {
+      width: 36px; height: 36px; flex: none; display: grid; place-items: center;
+      border-radius: 10px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text-dim);
+      cursor: pointer; font-size: 15px; line-height: 1; padding: 0;
+    }
+    .icon-btn:hover { color: var(--text); border-color: var(--border-strong); }
+    .back-link { font-size: 14px; font-weight: 500; color: var(--text-dim); }
+    .back-link:hover { color: var(--brand); text-decoration: none; }
+
+    /* ============ masthead ============ */
+    .masthead { max-width: 720px; margin: 56px auto 44px; }
+    .eyebrow {
+      display: flex; align-items: center; gap: 10px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase;
+      color: var(--brand); margin-bottom: 16px; font-weight: 700;
+    }
+    .grid-strip { display: flex; gap: 3px; height: 9px; border-radius: 5px; overflow: hidden; margin: 0 0 22px; border: 1px solid var(--border); }
+    .grid-strip span { display: block; height: 100%; }
+    .grid-strip .work { background: var(--surface-2); flex: 5; }
+    .grid-strip .brk { background: linear-gradient(135deg, var(--brand), var(--brand-2)); flex: 1; }
+    h1.title { font-size: clamp(2rem, 4vw, 2.7rem); line-height: 1.1; letter-spacing: -0.03em; font-weight: 800; margin: 0 0 14px; }
+    .subhead { color: var(--text-dim); font-size: 1.05rem; max-width: 60ch; margin: 0 0 22px; }
+    .meta-row {
+      display: flex; flex-wrap: wrap; gap: 10px 22px;
+      font-size: 13px; color: var(--text-faint);
+      font-family: "JetBrains Mono", monospace;
+      border-top: 1px solid var(--border); padding-top: 16px;
+    }
+    .meta-row b { color: var(--text-dim); font-weight: 600; }
+
+    /* ============ at-a-glance ============ */
+    .glance {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--r);
+      box-shadow: var(--shadow-sm); padding: 24px 26px; margin: 0 0 48px;
+      max-width: 720px; margin-inline: auto;
+    }
+    .glance h2 { font-size: 1.1rem; margin: 0 0 16px; }
+    .glance-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 22px; }
+    .glance-item { display: flex; gap: 11px; align-items: flex-start; font-size: 14px; padding: 8px 0; }
+    .glance-item .icon {
+      flex: none; width: 20px; height: 20px; margin-top: 1px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700;
+    }
+    .glance-item .icon.yes { background: var(--brand-soft); color: var(--brand); }
+    .glance-item .icon.no { background: var(--surface-2); color: var(--neutral-x); }
+    .glance-item b { display: block; color: var(--text); font-weight: 700; }
+    .glance-item span.label { color: var(--text-dim); }
+
+    /* ============ layout: toc + content ============ */
+    .layout { display: grid; grid-template-columns: 210px minmax(0, 720px); gap: 54px; justify-content: center; align-items: start; }
+    nav.toc {
+      position: sticky; top: 84px; font-size: 13.5px; padding: 18px 16px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm);
+      box-shadow: var(--shadow-sm);
+    }
+    nav.toc .toc-label { font-family: "JetBrains Mono", monospace; text-transform: uppercase; letter-spacing: 0.07em; font-size: 10.5px; color: var(--text-faint); margin-bottom: 10px; font-weight: 700; }
+    nav.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; counter-reset: toc; }
+    nav.toc li { counter-increment: toc; }
+    nav.toc a { color: var(--text-dim); text-decoration: none; display: flex; gap: 8px; padding: 3px 0; }
+    nav.toc a::before { content: counter(toc, decimal-leading-zero); font-family: "JetBrains Mono", monospace; color: var(--brand); font-size: 11.5px; flex: none; }
+    nav.toc a:hover { color: var(--text); }
+
+    main { min-width: 0; }
+    .doc-section { margin-bottom: 46px; }
+    .doc-section h2 {
+      font-size: 1.4rem; letter-spacing: -0.02em; font-weight: 800;
+      display: flex; align-items: baseline; gap: 12px; margin: 0 0 16px;
+      padding-bottom: 10px; border-bottom: 1px solid var(--border);
+    }
+    .doc-section h2 .num { font-family: "JetBrains Mono", monospace; font-size: 0.6em; font-weight: 600; color: var(--brand); }
+    .doc-section h3 { font-size: 1.02rem; margin: 22px 0 8px; letter-spacing: -0.01em; }
+    .doc-section p { margin: 0 0 14px; }
+    .doc-section p.dim { color: var(--text-dim); }
+    .doc-section ul, .doc-section ol { margin: 0 0 14px; padding-left: 1.3em; }
+    .doc-section li { margin-bottom: 6px; }
+    .doc-section li::marker { color: var(--brand); }
+
+    .table-wrap { overflow-x: auto; margin: 0 0 18px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); box-shadow: var(--shadow-sm); }
+    table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+    thead th {
+      text-align: left; font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 0.05em;
+      text-transform: uppercase; color: var(--text-faint); background: var(--surface-2);
+      padding: 10px 14px; border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    tbody td { padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--text-dim); vertical-align: top; }
+    tbody tr:last-child td { border-bottom: none; }
+    td.item { color: var(--text); font-weight: 600; }
+    .tag { display: inline-flex; align-items: center; gap: 5px; font-family: "JetBrains Mono", monospace; font-size: 11px; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+    .tag.local { background: var(--brand-soft); color: var(--brand); }
+    .tag.never { background: var(--surface-2); color: var(--text-faint); }
+    .tag.conditional { background: var(--surface-2); color: var(--text-dim); border: 1px dashed var(--border); }
+
+    .callout {
+      background: var(--brand-soft); border-left: 3px solid var(--brand); border-radius: 0 var(--r-sm) var(--r-sm) 0;
+      padding: 14px 18px; font-size: 14px; color: var(--text-dim); margin: 0 0 18px;
+    }
+    .callout b { color: var(--text); }
+
+    hr.rule { border: none; border-top: 1px solid var(--border); margin: 56px auto; max-width: 720px; }
+
+    footer { border-top: 1px solid var(--border); padding: 34px 0 44px; }
+    .foot-inner { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--text-faint); }
+    .foot-links { display: flex; gap: 18px; flex-wrap: wrap; }
+    .foot-links a { color: var(--text-dim); }
+    .foot-links a:hover { color: var(--brand); }
+    .contact-card {
+      max-width: 720px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--r); box-shadow: var(--shadow-sm); padding: 24px 26px;
+      display: flex; flex-wrap: wrap; gap: 20px; justify-content: space-between; align-items: center;
+    }
+    .contact-card .who b { display: block; font-size: 1rem; color: var(--text); }
+    .contact-card .who span { color: var(--text-faint); font-size: 13.5px; }
+    .contact-card a.mail {
+      font-family: "JetBrains Mono", monospace; font-size: 13.5px;
+      background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: var(--brand-ink);
+      padding: 10px 18px; border-radius: var(--r-sm); text-decoration: none; white-space: nowrap; font-weight: 600;
+    }
+    .contact-card a.mail:hover { text-decoration: none; opacity: 0.92; }
+
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: minmax(0, 720px); }
+      nav.toc { position: static; margin: 0 auto 32px; max-width: 720px; }
+      nav.toc ol { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 16px; }
+    }
+    @media (max-width: 620px) {
+      .wrap { padding: 0 18px; }
+      .glance-grid { grid-template-columns: 1fr; }
+      nav.toc ol { grid-template-columns: 1fr; }
+      .contact-card { flex-direction: column; align-items: flex-start; }
+      .masthead { margin-top: 36px; }
+    }
+  </style>
+</head>
+<body>
+  <script>
+    try {
+      var t = localStorage.getItem('rd-theme');
+      if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
+      var dark = t ? t === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var m = document.getElementById('metaThemeColor');
+      if (m) m.setAttribute('content', dark ? '#0a0c11' : '#fbfaf9');
+    } catch (e) {}
+  </script>
+
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="index.html">
+        <span class="brand-mark" aria-hidden="true">&#9679;</span>
+        Reflectodoro
+      </a>
+      <a class="back-link" href="index.html">&larr; Back to home</a>
+      <button class="icon-btn" id="themeToggle" type="button" aria-label="Toggle color theme" title="Toggle theme">
+        <span id="themeIcon" aria-hidden="true">&#9789;</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="wrap">
+
+    <div class="masthead">
+      <div class="eyebrow"><span aria-hidden="true">&#128274;</span> Reflectodoro &middot; Legal</div>
+      <div class="grid-strip" aria-hidden="true">
+        <span class="work"></span><span class="brk"></span><span class="work"></span><span class="brk"></span>
+      </div>
+      <h1 class="title">Privacy Policy</h1>
+      <p class="subhead">Reflectodoro is a Pomodoro timer that asks you to briefly reflect after every break. This page explains, plainly, what the app does and doesn't do with your information.</p>
+      <div class="meta-row">
+        <span><b>Effective</b> September 16, 2026</span>
+        <span><b>Applies to</b> Windows, macOS, Linux &amp; Android builds</span>
+        <span><b>Publisher</b> Droplee Solutions</span>
+      </div>
+    </div>
+
+    <div class="glance">
+      <h2>Privacy at a glance</h2>
+      <div class="glance-grid">
+        <div class="glance-item"><span class="icon no">&times;</span><span><b>No account, ever</b><span class="label">Nothing to sign up for, no login, no password.</span></span></div>
+        <div class="glance-item"><span class="icon no">&times;</span><span><b>No ads, no analytics, no trackers</b><span class="label">This build contains no third-party ad or analytics SDK.</span></span></div>
+        <div class="glance-item"><span class="icon yes">&#10003;</span><span><b>Everything lives on your device</b><span class="label">One local SQLite file per device &mdash; nothing is sent to us, because we don't run a server.</span></span></div>
+        <div class="glance-item"><span class="icon yes">&#10003;</span><span><b>Sync is direct, device-to-device</b><span class="label">Optional Wi-Fi sync goes straight to a device you personally pair with &mdash; never through a relay.</span></span></div>
+        <div class="glance-item"><span class="icon no">&times;</span><span><b>Backups are off by default</b><span class="label">Android's auto cloud-backup is explicitly disabled for this app.</span></span></div>
+        <div class="glance-item"><span class="icon yes">&#10003;</span><span><b>One optional outbound call</b><span class="label">A quote-of-the-day fetch, only if you turn it on &mdash; see &sect;5.</span></span></div>
+      </div>
+    </div>
+
+    <div class="layout">
+      <nav class="toc" aria-label="Table of contents">
+        <div class="toc-label">On this page</div>
+        <ol>
+          <li><a href="#overview">Overview</a></li>
+          <li><a href="#data-we-collect">Data we collect</a></li>
+          <li><a href="#how-we-use">How it's used</a></li>
+          <li><a href="#storage-security">Storage &amp; security</a></li>
+          <li><a href="#sharing">Sharing &amp; third parties</a></li>
+          <li><a href="#permissions">App permissions</a></li>
+          <li><a href="#your-choices">Your choices</a></li>
+          <li><a href="#retention">Retention &amp; deletion</a></li>
+          <li><a href="#children">Children's privacy</a></li>
+          <li><a href="#international">International use</a></li>
+          <li><a href="#changes">Changes to this policy</a></li>
+          <li><a href="#contact">Contact us</a></li>
+        </ol>
+      </nav>
+
+      <main>
+
+        <section class="doc-section" id="overview">
+          <h2><span class="num">01</span> Overview</h2>
+          <p>Reflectodoro ("the app", "we") is built around a simple idea: no reflection, no skipping the break. There's no account system and no backend of any kind &mdash; every reflection, check-in, and setting you enter is written to a single SQLite database file that lives on your own device.</p>
+          <p class="dim">This policy exists to satisfy Google Play's privacy policy requirement and to tell you, honestly, exactly what the app touches. It covers the Windows, macOS, Linux, and Android builds. It does not cover any third-party service you separately choose to connect the app to (see &sect;5).</p>
+        </section>
+
+        <section class="doc-section" id="data-we-collect">
+          <h2><span class="num">02</span> Data we collect</h2>
+          <p>"Collect" here means <em>stored somewhere</em> &mdash; almost all of it never leaves your device. The table below lists every category, mapped to how Google Play's Data safety section groups things.</p>
+
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>What</th><th>Examples</th><th>Where it goes</th><th>Why</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td class="item">Reflection entries</td>
+                  <td>The free-text "what did I do" answer you type at the end of each break</td>
+                  <td><span class="tag local">On-device only</span></td>
+                  <td>The app's core function</td>
+                </tr>
+                <tr>
+                  <td class="item">Wellness check-ins</td>
+                  <td>Yes/no answers about eyes, movement, water, breaks</td>
+                  <td><span class="tag local">On-device only</span></td>
+                  <td>Optional post-break check-in feature</td>
+                </tr>
+                <tr>
+                  <td class="item">Task lists</td>
+                  <td>"Most Important Tasks" and "Not-to-do" list text</td>
+                  <td><span class="tag local">On-device only</span></td>
+                  <td>Planning feature shown on the overlay</td>
+                </tr>
+                <tr>
+                  <td class="item">Screen-time / app usage</td>
+                  <td>Which app had focus and for how long (Windows &amp; Android only) &mdash; <strong>app name only</strong>, never a window title, URL, or anything typed</td>
+                  <td><span class="tag local">On-device only</span></td>
+                  <td>The optional "where your day went" breakdown on the Entries tab</td>
+                </tr>
+                <tr>
+                  <td class="item">Settings</td>
+                  <td>Device name, break-timer preferences, thresholds you configure</td>
+                  <td><span class="tag local">On-device only</span></td>
+                  <td>Remembering your preferences</td>
+                </tr>
+                <tr>
+                  <td class="item">Pairing identifier</td>
+                  <td>A random 128-bit ID generated on your device (no personal meaning)</td>
+                  <td><span class="tag conditional">Shown only to a device you pair with</span></td>
+                  <td>Lets a paired device recognize yours for direct sync</td>
+                </tr>
+                <tr>
+                  <td class="item">Diagnostic log file</td>
+                  <td>Timestamps and technical event names (window shown/hidden, phase changes, errors)</td>
+                  <td><span class="tag local">On-device only</span></td>
+                  <td>Troubleshooting, if you choose to export and send it to us</td>
+                </tr>
+                <tr>
+                  <td class="item">Name, email, phone, location, contacts, photos, payment info</td>
+                  <td>&mdash;</td>
+                  <td><span class="tag never">Never collected</span></td>
+                  <td>The app has no feature that asks for any of these</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout"><b>What we, the developer, actually receive:</b> nothing, by default. There is no server this app reports to. The only ways any of the data above could reach anyone other than you are the ones you deliberately trigger &mdash; pairing and syncing with your own second device, or manually exporting a file to send us for support.</div>
+        </section>
+
+        <section class="doc-section" id="how-we-use">
+          <h2><span class="num">03</span> How your information is used</h2>
+          <ul>
+            <li><strong>Running the app.</strong> Reflections, check-ins, and task lists exist to be shown back to you &mdash; in the Entries tab, in the "coming next" preview, in the overlay's pre-fill.</li>
+            <li><strong>The screen-time breakdown.</strong> App-usage sessions are aggregated, on-device, into the per-app totals shown on the Entries tab.</li>
+            <li><strong>Enforcing the break screen.</strong> A random "breakit" challenge string is generated locally to let you skip a break early, within a daily limit; it's just a typing challenge and isn't derived from anything you've entered.</li>
+            <li><strong>Nothing here is used for advertising, profiling, or sold to anyone</strong> &mdash; there's no mechanism in the app that could do that, since there's no server to run it from.</li>
+          </ul>
+        </section>
+
+        <section class="doc-section" id="storage-security">
+          <h2><span class="num">04</span> Storage &amp; security</h2>
+          <p>All app data lives in one local SQLite database file, in the OS-standard app data folder for the current platform. On Android, automatic cloud backup of app data is explicitly turned off (<code>allowBackup="false"</code>) &mdash; Reflectodoro's data is deliberately excluded from Google's Auto Backup rather than left to the platform default, specifically so <code>pomodoro.db</code> is never silently uploaded to your Google account's Drive backup.</p>
+          <h3>Log files</h3>
+          <p>The app also writes a rotating local log file for troubleshooting (kept to roughly the last 1&ndash;2 weeks, then automatically deleted). <strong>None of your actual content is ever written to it</strong> &mdash; not reflection text, not check-in answers, not task-list content, and not the "breakit" emergency-exit code either.</p>
+          <h3>Sync encryption</h3>
+          <p>If you use the optional device-to-device sync (&sect;5), the pairing handshake and every synced record are encrypted end-to-end between the two devices using a PIN-authenticated key exchange (SPAKE2) followed by the Noise protocol &mdash; the 6-digit PIN itself is never transmitted or usable to derive the encryption key by an eavesdropper.</p>
+        </section>
+
+        <section class="doc-section" id="sharing">
+          <h2><span class="num">05</span> Sharing &amp; third parties</h2>
+
+          <h3>Device-to-device sync (P2P LAN sync)</h3>
+          <p>An entirely optional, opt-in feature under Settings &rarr; Paired devices. It connects two of your own devices directly over the same Wi-Fi network &mdash; no server, no relay, no third party is ever involved. Pairing is PIN-based; discovery on the local network briefly broadcasts your device's name, a random pairing ID, and platform (never reflection content, never the encryption key) so a paired device can find yours. You control exactly which devices are paired, and can unpair at any time.</p>
+
+          <h3>Optional quote panel (third-party call)</h3>
+          <p>The break screen can show a short quote fetched from an HTTP endpoint you configure in Settings, defaulting to a public quote API (<code>zenquotes.io</code>). This is, by design, the app's only outbound call to an arbitrary third party. When it fires, that endpoint receives a plain web request from your device (which, like any web request, exposes your IP address to that service per normal internet operation) &mdash; no reflection text, settings, or other app content is included in it. You can disable this entirely by clearing the endpoint field, or the app never sends it if you never set one.</p>
+
+          <div class="callout"><b>What we don't do:</b> we don't sell data (there is none of yours in our possession to sell), we don't share with advertisers, we don't share with data brokers, and we don't use any third-party analytics or crash-reporting SDK that phones home on our behalf.</div>
+        </section>
+
+        <section class="doc-section" id="permissions">
+          <h2><span class="num">06</span> App permissions (Android)</h2>
+          <p>Android requires the app to explicitly ask for a few special-access permissions. Every one of them is used purely to make the timer/overlay behave correctly on your own device &mdash; none of them causes data to leave it.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Permission</th><th>What it's for</th><th>Leaves the device?</th></tr></thead>
+              <tbody>
+                <tr><td class="item">Display over other apps</td><td>Shows the full-screen break/reflection overlay above whatever you're using</td><td><span class="tag never">No</span></td></tr>
+                <tr><td class="item">Schedule exact alarms</td><td>Wakes the app precisely on each 25/5-minute work/break boundary</td><td><span class="tag never">No</span></td></tr>
+                <tr><td class="item">Notifications</td><td>Alerts you a break has started when the overlay can't be drawn</td><td><span class="tag never">No</span></td></tr>
+                <tr><td class="item">Usage access</td><td>Powers the optional on-device screen-time breakdown</td><td><span class="tag never">No &mdash; stored only in your local database</span></td></tr>
+                <tr><td class="item">Wi-Fi state / multicast</td><td>Finds a paired device on your own Wi-Fi for direct sync</td><td><span class="tag conditional">Only broadcasts name/ID on your own LAN</span></td></tr>
+                <tr><td class="item">Foreground service</td><td>Keeps the break scheduler running reliably in the background</td><td><span class="tag never">No</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="dim">Every special-access permission above is optional in the sense that the app tells you what's disabled without it and never blocks core use of the timer if you decline.</p>
+        </section>
+
+        <section class="doc-section" id="your-choices">
+          <h2><span class="num">07</span> Your choices</h2>
+          <ul>
+            <li><strong>Turn off screen-time tracking</strong> anytime in Settings &mdash; existing sessions stay until you delete them, but no new ones are recorded.</li>
+            <li><strong>Turn off the quote panel</strong> by clearing the endpoint URL in Settings.</li>
+            <li><strong>Export your data</strong> to a plain JSON file at any time (Settings &rarr; Data), and re-import it later or on another device.</li>
+            <li><strong>Unpair a synced device</strong> at any time from Settings &rarr; Paired devices.</li>
+            <li><strong>Delete everything</strong> by uninstalling the app, or by clearing app data/storage from your OS's app settings &mdash; since nothing is kept anywhere but your device, this removes it completely.</li>
+          </ul>
+        </section>
+
+        <section class="doc-section" id="retention">
+          <h2><span class="num">08</span> Data retention &amp; deletion</h2>
+          <p>Your reflections, check-ins, task lists, and screen-time sessions are kept until you edit or delete them yourself, or until you uninstall the app. There's currently no automatic pruning of older screen-time data, so that table will grow over time unless you manage it manually via export/delete &mdash; we're noting this plainly rather than implying a retention limit that doesn't exist yet.</p>
+          <p>Log files are capped and rotate automatically, so old ones are deleted on their own after roughly 1&ndash;2 weeks; the daily "breakit" usage counter resets and discards the previous day's count every day and is never included in export or sync.</p>
+        </section>
+
+        <section class="doc-section" id="children">
+          <h2><span class="num">09</span> Children's privacy</h2>
+          <p>Reflectodoro is a general-audience productivity tool and is not directed at children. It has no account system, no ads, and no social or communication features that would specifically target children. We don't knowingly collect data about children &mdash; and since the app collects nothing at all outside your own device by default, there's no server-side data of a child's to be aware of. If you believe a child has used a paired-sync or quote-endpoint feature in a way that concerns you, contact us at the address in &sect;12 and we'll help.</p>
+        </section>
+
+        <section class="doc-section" id="international">
+          <h2><span class="num">10</span> International use</h2>
+          <p>Because your data is stored only on your own device and, at most, sent directly to a second device you personally pair over local Wi-Fi, there is no cross-border transfer of your content initiated by us &mdash; we simply have no infrastructure to move it anywhere. The one exception is the optional quote panel (&sect;5), which contacts whatever endpoint you configure, wherever that service happens to be hosted.</p>
+        </section>
+
+        <section class="doc-section" id="changes">
+          <h2><span class="num">11</span> Changes to this policy</h2>
+          <p>If Reflectodoro's data practices change &mdash; a new platform capability, a new optional integration &mdash; we'll update this page and its effective date above. Material changes (anything that adds a new way data could leave your device) will also be called out in the app's release notes.</p>
+        </section>
+
+      </main>
+    </div>
+
+    <hr class="rule" />
+
+    <div class="contact-card" id="contact">
+      <div class="who">
+        <b>Droplee Solutions</b>
+        <span>Publisher of Reflectodoro &mdash; questions, deletion requests, or support</span>
+      </div>
+      <a class="mail" href="mailto:project.droplee@gmail.com">project.droplee@gmail.com</a>
+    </div>
+  </div>
+
+  <footer>
+    <div class="wrap foot-inner">
+      <span>
+        <strong style="color:var(--text-dim)">Reflectodoro</strong>
+        &mdash; breaks and self-reflection you can't skip.
+      </span>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="index.html">Home</a>
+        <a href="https://github.com/techxapp/reflectodoro">GitHub</a>
+        <a href="https://github.com/techxapp/reflectodoro/releases/latest">Releases</a>
+        <a href="https://discord.gg/AXEFB5UT">Discord community</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      var root = document.documentElement;
+      var btn = document.getElementById('themeToggle');
+      var icon = document.getElementById('themeIcon');
+      var metaTheme = document.getElementById('metaThemeColor');
+      var mql = window.matchMedia('(prefers-color-scheme: dark)');
+
+      function isDark() {
+        var set = root.getAttribute('data-theme');
+        if (set === 'dark') return true;
+        if (set === 'light') return false;
+        return mql.matches;
+      }
+      function paint() {
+        var dark = isDark();
+        icon.innerHTML = dark ? '&#9728;' : '&#9789;';
+        if (metaTheme) metaTheme.setAttribute('content', dark ? '#0a0c11' : '#fbfaf9');
+      }
+      paint();
+      btn.addEventListener('click', function () {
+        var next = isDark() ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        try { localStorage.setItem('rd-theme', next); } catch (e) {}
+        paint();
+      });
+      mql.addEventListener('change', function () {
+        if (!root.getAttribute('data-theme')) paint();
+      });
+    })();
+  </script>
+</body>
+</html>

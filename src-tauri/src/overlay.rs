@@ -244,11 +244,9 @@ pub fn emit_state(app: &AppHandle) {
     let state = app.state::<AppState>();
     let snapshot = state.overlay.lock().unwrap().clone();
     log::info!(
-        "emit_state: open={} slot={} challenge_len={} challenge={:?}",
+        "emit_state: open={} slot={}",
         snapshot.open,
-        snapshot.current_slot_start,
-        snapshot.breakit_challenge.chars().count(),
-        snapshot.breakit_challenge
+        snapshot.current_slot_start
     );
 
     // Keeps the native WindowManager overlay (if it's currently showing --

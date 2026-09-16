@@ -192,11 +192,9 @@ fn generate_breakit_challenge(app: &AppHandle) -> String {
     let cfg = app_state.breakit_config.lock().unwrap();
     let challenge = breakit::generate_challenge(cfg.length, cfg.include_special);
     log::info!(
-        "generate_breakit_challenge: cfg.length={} include_special={} generated_len={} value={:?}",
+        "generate_breakit_challenge: cfg.length={} include_special={}",
         cfg.length,
-        cfg.include_special,
-        challenge.chars().count(),
-        challenge
+        cfg.include_special
     );
     challenge
 }
