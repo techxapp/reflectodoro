@@ -247,15 +247,77 @@ export async function findMissedSlots(currentSlotIso: string): Promise<string[]>
   return slots;
 }
 
-/** One DB row per covered slot (same created_at/text) -- so "missed" pomodoros are individually
- * recorded, not bundled into one array field. Upserts per slot (same pattern as
- * bulkUpsertReflections) rather than blindly inserting: retrying a failed submit -- the overlay's
- * documented "Close break screen anyway" escape-hatch path exists for exactly this -- would
- * otherwise re-insert the slots that already succeeded before the failure, since slot_start_at
- * has no UNIQUE constraint. An update leaves the original created_at alone. */
+/**
+ * When there's more than one covered (missed) slot and `text` splits into
+ * exactly as many non-blank lines as there are slots, returns those lines in
+ * slot order (index 0 = oldest slot, matching `findMissedSlots`'s own
+ * oldest-first ordering) so each pomodoro gets its own line instead of every
+ * slot sharing the same full text. Returns `null` on any mismatch -- caller
+ * then falls back to writing the same complete text into every slot, same as
+ * before this existed. Blank lines don't count as rows (they're filtered
+ * before the length check), so a deliberately-skipped pomodoro in a split
+ * needs the existing `"skip"` convention (see `isSkipOnlyText`) as its line's
+ * content rather than an empty line.
+ */
+export function splitReflectionForSlots(text: string, coveredSlots: string[]): string[] | null {
+  if (coveredSlots.length <= 1) return null;
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length !== coveredSlots.length) return null;
+  return lines;
+}
+
+async function upsertReflectionRow(
+  db: Database,
+  slot: string,
+  storedText: string,
+  createdAt: string,
+): Promise<void> {
+  const existing = await db.select<{ id: number }[]>(
+    `SELECT id FROM reflection WHERE slot_start_at = $1`,
+    [slot],
+  );
+  if (existing.length > 0) {
+    await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE slot_start_at = $3`, [
+      storedText,
+      createdAt,
+      slot,
+    ]);
+  } else {
+    await db.execute(
+      `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
+      [createdAt, slot, storedText, createdAt],
+    );
+  }
+}
+
+/** One DB row per covered slot -- so "missed" pomodoros are individually recorded, not bundled
+ * into one array field. Upserts per slot (same pattern as bulkUpsertReflections) rather than
+ * blindly inserting: retrying a failed submit -- the overlay's documented "Close break screen
+ * anyway" escape-hatch path exists for exactly this -- would otherwise re-insert the slots that
+ * already succeeded before the failure, since slot_start_at has no UNIQUE constraint. An update
+ * leaves the original created_at alone.
+ *
+ * If `text` cleanly splits into one line per covered slot (see `splitReflectionForSlots`), each
+ * slot gets its own line instead of the full text -- otherwise (the common case: one slot, or a
+ * line count that doesn't match) every slot gets the identical complete text, same as always. */
 export async function saveReflection(coveredSlots: string[], text: string): Promise<void> {
   const db = await getDb();
   const createdAt = new Date().toISOString();
+  const perSlotLines = splitReflectionForSlots(text, coveredSlots);
+  if (perSlotLines) {
+    // Each slot gets genuinely different plaintext now, so each needs its own
+    // fresh nonce -- encryptFields (batched) gives every value its own
+    // encrypt call under the hood, unlike the single shared-ciphertext path
+    // below where one nonce/plaintext pair is legitimately reused verbatim.
+    const encrypted = await encryptFields(perSlotLines);
+    for (let i = 0; i < coveredSlots.length; i++) {
+      await upsertReflectionRow(db, coveredSlots[i], encrypted[i], createdAt);
+    }
+    return;
+  }
   // Encrypted once and the same ciphertext written to every covered slot,
   // rather than encrypting per slot. This is not nonce reuse: one nonce
   // encrypted one plaintext, and copying that result into several rows never
@@ -264,22 +326,7 @@ export async function saveReflection(coveredSlots: string[], text: string): Prom
   // which the merge already makes explicit anyway.
   const stored = await encryptField(text);
   for (const slot of coveredSlots) {
-    const existing = await db.select<{ id: number }[]>(
-      `SELECT id FROM reflection WHERE slot_start_at = $1`,
-      [slot],
-    );
-    if (existing.length > 0) {
-      await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE slot_start_at = $3`, [
-        stored,
-        createdAt,
-        slot,
-      ]);
-    } else {
-      await db.execute(
-        `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
-        [createdAt, slot, stored, createdAt],
-      );
-    }
+    await upsertReflectionRow(db, slot, stored, createdAt);
   }
 }
 

@@ -192,6 +192,7 @@
     <section class="panel">
       <p class="timer" id="timer">--:--</p>
       <h1 id="prompt-heading">What did I do in the last 1 pomodoro?</h1>
+      <p id="split-hint" class="hint" style="display:none"></p>
 
       <textarea id="reflection" rows="5" placeholder="Write a couple of bullet points or type 'Skip' to skip it."></textarea>
       <div id="reflection-actions">
@@ -250,6 +251,7 @@
     var reflectionEl = document.getElementById("reflection");
     var submitBtn = document.getElementById("submit-reflection");
     var reflectionSavedEl = document.getElementById("reflection-saved");
+    var splitHintEl = document.getElementById("split-hint");
     var comingNextEl = document.getElementById("coming-next");
     var breakitInputEl = document.getElementById("breakit-input");
     var breakitPendingEl = document.getElementById("breakit-pending");
@@ -283,6 +285,35 @@
     setInterval(renderClock, 1000);
     renderClock();
 
+    // Mirrors db.ts's `splitReflectionForSlots` / native_overlay.rs's
+    // `split_reflection_for_slots`: previews, before submit, whether the
+    // typed text will save as one line per missed pomodoro or (the fallback,
+    // whenever the line count doesn't match) as one summary written into
+    // every one of them.
+    function splitHintText(missedCount, text) {
+      if (missedCount <= 1) return null;
+      var lines = text
+        .split("\n")
+        .map(function (l) { return l.trim(); })
+        .filter(function (l) { return l.length > 0; });
+      if (lines.length === missedCount) {
+        return "Will save as " + missedCount + " separate entries, oldest first.";
+      }
+      return "Tip: write " + missedCount + " lines (one per pomodoro, oldest first) to log each " +
+        "separately -- otherwise this saves as one summary for all " + missedCount + ".";
+    }
+
+    function updateSplitHint() {
+      var missedCount = state.missed_slot_count || 1;
+      var text = state.reflection_entered ? null : splitHintText(missedCount, reflectionEl.value);
+      if (text) {
+        splitHintEl.textContent = text;
+        splitHintEl.style.display = "";
+      } else {
+        splitHintEl.style.display = "none";
+      }
+    }
+
     function render() {
       devCloseEl.style.display = state.dev_mode ? "" : "none";
       challengeEl.textContent = state.breakit_challenge;
@@ -294,6 +325,7 @@
       reflectionEl.disabled = state.reflection_entered;
       submitBtn.style.display = state.reflection_entered ? "none" : "";
       reflectionSavedEl.style.display = state.reflection_entered ? "" : "none";
+      updateSplitHint();
 
       if (state.coming_next_text) {
         comingNextEl.textContent = "Coming next: " + state.coming_next_text;
@@ -347,6 +379,7 @@
 
     reflectionEl.addEventListener("input", function () {
       submitBtn.disabled = reflectionEl.value.trim().length === 0;
+      updateSplitHint();
     });
 
     submitBtn.addEventListener("click", function () {

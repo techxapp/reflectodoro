@@ -232,6 +232,56 @@ pub async fn refresh_coming_next_text(app: &AppHandle) {
     *app.state::<AppState>().coming_next_text.lock().unwrap() = text;
 }
 
+/// Mirrors db.ts's `splitReflectionForSlots` exactly: when there's more than one covered
+/// (missed) slot and `text` splits into exactly as many non-blank lines as there are slots,
+/// returns those lines in slot order (index 0 = oldest slot). `None` on any mismatch -- caller
+/// falls back to writing the same complete text into every slot, same as before this existed.
+fn split_reflection_for_slots(text: &str, covered_slots: &[String]) -> Option<Vec<String>> {
+    if covered_slots.len() <= 1 {
+        return None;
+    }
+    let lines: Vec<String> = text
+        .split('\n')
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.len() != covered_slots.len() {
+        return None;
+    }
+    Some(lines)
+}
+
+/// Upserts one slot's already-encrypted text -- mirrors db.ts's `upsertReflectionRow` exactly
+/// (see its doc comment): retrying a failed submit must not re-insert a slot that already
+/// succeeded before the failure, since slot_start_at has no UNIQUE constraint.
+async fn upsert_reflection_row(pool: &SqlitePool, slot: &str, stored_text: &str, created_at: &str) {
+    let existing = sqlx::query_scalar::<_, i64>("SELECT id FROM reflection WHERE slot_start_at = ?")
+        .bind(slot)
+        .fetch_optional(pool)
+        .await;
+    if matches!(existing, Ok(Some(_))) {
+        let _ = sqlx::query("UPDATE reflection SET text = ?, updated_at = ? WHERE slot_start_at = ?")
+            .bind(stored_text)
+            .bind(created_at)
+            .bind(slot)
+            .execute(pool)
+            .await;
+    } else {
+        // updated_at = created_at on a fresh insert -- the P2P sync delta
+        // cursor (p2p_sync.rs) needs a non-null value from the start, same
+        // reasoning as db.ts's saveReflection.
+        let _ = sqlx::query(
+            "INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(created_at)
+        .bind(slot)
+        .bind(stored_text)
+        .bind(created_at)
+        .execute(pool)
+        .await;
+    }
+}
+
 /// `Err` means nothing was written. Encryption failing must not fall back to
 /// writing plaintext: the rest of the app (and the user, who upgraded into a
 /// build that says its entries are encrypted) would have no way to tell that
@@ -239,6 +289,10 @@ pub async fn refresh_coming_next_text(app: &AppHandle) {
 /// for a retry, and `handle_submit_reflection` deliberately does not mark the
 /// reflection as entered when this fails, so the overlay stays open rather
 /// than closing over a save that didn't happen.
+///
+/// If `text` cleanly splits into one line per covered slot (`split_reflection_for_slots`), each
+/// slot gets its own line -- otherwise every slot gets the identical complete text, same as
+/// before this existed.
 async fn save_reflection(
     pool: &SqlitePool,
     cipher: &FieldCipher,
@@ -246,41 +300,66 @@ async fn save_reflection(
     text: &str,
 ) -> Result<(), String> {
     let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    if let Some(lines) = split_reflection_for_slots(text, covered_slots) {
+        // Each slot gets genuinely different plaintext now, so each needs its
+        // own fresh nonce -- unlike the shared-ciphertext path below, where
+        // one nonce/plaintext pair is legitimately reused verbatim.
+        for (slot, line) in covered_slots.iter().zip(lines.iter()) {
+            let stored = cipher.encrypt(line).await?;
+            upsert_reflection_row(pool, slot, &stored, &created_at).await;
+        }
+        return Ok(());
+    }
     // One encryption reused across every covered slot -- see db.ts's
     // saveReflection for why that isn't nonce reuse.
     let stored = cipher.encrypt(text).await?;
-    let text = stored.as_str();
     for slot in covered_slots {
-        // Upserts per slot -- mirrors db.ts's saveReflection exactly (see its doc comment):
-        // retrying a failed submit must not re-insert a slot that already succeeded before the
-        // failure, since slot_start_at has no UNIQUE constraint.
-        let existing = sqlx::query_scalar::<_, i64>("SELECT id FROM reflection WHERE slot_start_at = ?")
-            .bind(slot)
-            .fetch_optional(pool)
-            .await;
-        if matches!(existing, Ok(Some(_))) {
-            let _ = sqlx::query("UPDATE reflection SET text = ?, updated_at = ? WHERE slot_start_at = ?")
-                .bind(text)
-                .bind(&created_at)
-                .bind(slot)
-                .execute(pool)
-                .await;
-        } else {
-            // updated_at = created_at on a fresh insert -- the P2P sync delta
-            // cursor (p2p_sync.rs) needs a non-null value from the start, same
-            // reasoning as db.ts's saveReflection.
-            let _ = sqlx::query(
-                "INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES (?, ?, ?, ?)",
-            )
-            .bind(&created_at)
-            .bind(slot)
-            .bind(text)
-            .bind(&created_at)
-            .execute(pool)
-            .await;
-        }
+        upsert_reflection_row(pool, slot, &stored, &created_at).await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slots(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("slot-{i}")).collect()
+    }
+
+    #[test]
+    fn single_slot_never_splits() {
+        assert_eq!(split_reflection_for_slots("line one\nline two", &slots(1)), None);
+    }
+
+    #[test]
+    fn matching_line_count_splits_in_order() {
+        let covered = slots(3);
+        assert_eq!(
+            split_reflection_for_slots("first\nsecond\nthird", &covered),
+            Some(vec!["first".to_string(), "second".to_string(), "third".to_string()]),
+        );
+    }
+
+    #[test]
+    fn blank_lines_are_not_counted_as_rows() {
+        let covered = slots(2);
+        assert_eq!(
+            split_reflection_for_slots("first\n\nsecond\n", &covered),
+            Some(vec!["first".to_string(), "second".to_string()]),
+        );
+    }
+
+    #[test]
+    fn mismatched_line_count_falls_back_to_none() {
+        let covered = slots(3);
+        assert_eq!(split_reflection_for_slots("only one line", &covered), None);
+        assert_eq!(split_reflection_for_slots("one\ntwo", &covered), None);
+        assert_eq!(
+            split_reflection_for_slots("one\ntwo\nthree\nfour", &covered),
+            None,
+        );
+    }
 }
 
 /// Mirrors db.ts's `localDateStamp()` exactly (local calendar date, zero
