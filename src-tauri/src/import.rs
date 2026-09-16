@@ -431,8 +431,16 @@ pub(crate) async fn import_screen_time_sessions(
 /// `wellness_check.reflection_id` specifically so this dedupe wouldn't need
 /// to remap anything through an id map. Returns how many incoming rows were
 /// skipped (lost the collapse to something else for their slot).
+///
+/// The dedupe itself never reads the four boolean values (only
+/// `created_at`), so encryption only touches the `incoming_wins` insert
+/// branch: `cipher` encrypts the incoming survivor's four values before they
+/// land in the DB (see CLAUDE.md's "Encryption at rest"). The
+/// existing-survivor branch never rewrites a row, so already-encrypted data
+/// at rest is left untouched.
 pub(crate) async fn import_wellness_checks(
     tx: &mut Transaction<'_, Sqlite>,
+    cipher: &FieldCipher,
     rows: &[ImportWellnessCheckRow],
     mode: ImportMode,
 ) -> Result<usize, String> {
@@ -488,15 +496,26 @@ pub(crate) async fn import_wellness_checks(
         };
 
         if incoming_wins {
+            // Incoming rows are always plaintext (a JSON import or a
+            // P2P-decrypted payload) -- encrypt on the way in, same as
+            // import_reflections does for `text`.
+            let plaintexts = [
+                incoming_survivor.relaxed_eyes.to_string(),
+                incoming_survivor.exercise.to_string(),
+                incoming_survivor.drank_water.to_string(),
+                incoming_survivor.washroom.to_string(),
+            ];
+            let ciphertexts = cipher.encrypt_many(&plaintexts).await?;
+
             sqlx::query(
                 "INSERT INTO wellness_check (slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at)
                  VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(&slot)
-            .bind(incoming_survivor.relaxed_eyes)
-            .bind(incoming_survivor.exercise)
-            .bind(incoming_survivor.drank_water)
-            .bind(incoming_survivor.washroom)
+            .bind(&ciphertexts[0])
+            .bind(&ciphertexts[1])
+            .bind(&ciphertexts[2])
+            .bind(&ciphertexts[3])
             .bind(&incoming_survivor.created_at)
             .execute(&mut **tx)
             .await
@@ -630,7 +649,7 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
     }
 
     let merged_slot_count = import_reflections(&mut tx, &cipher, &data.reflection, mode).await?;
-    let wellness_check_duplicate_count = import_wellness_checks(&mut tx, &data.wellness_check, mode).await?;
+    let wellness_check_duplicate_count = import_wellness_checks(&mut tx, &cipher, &data.wellness_check, mode).await?;
 
     let daily_task_rows: Vec<(&str, &str, &str)> = data
         .daily_task_list
@@ -801,13 +820,15 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
+            // TEXT columns (migration 23) so they can hold 'enc1:' ciphertext
+            // -- see crypto.rs's ENCRYPTED_COLUMNS.
             "CREATE TABLE wellness_check (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 slot_start_at TEXT NOT NULL DEFAULT '',
-                relaxed_eyes INTEGER NOT NULL DEFAULT 1,
-                exercise INTEGER NOT NULL DEFAULT 1,
-                drank_water INTEGER NOT NULL DEFAULT 1,
-                washroom INTEGER NOT NULL DEFAULT 0,
+                relaxed_eyes TEXT NOT NULL DEFAULT '1',
+                exercise TEXT NOT NULL DEFAULT '1',
+                drank_water TEXT NOT NULL DEFAULT '1',
+                washroom TEXT NOT NULL DEFAULT '0',
                 created_at TEXT NOT NULL
             )",
         )
@@ -1165,7 +1186,7 @@ mod tests {
         let imported = vec![wellness_row("2026-01-01T00:00:00.000Z", "2026-01-01T00:10:00.000Z")];
 
         let mut tx = pool.begin().await.unwrap();
-        let duplicate_count = import_wellness_checks(&mut tx, &imported, ImportMode::Merge).await.unwrap();
+        let duplicate_count = import_wellness_checks(&mut tx, &cipher(), &imported, ImportMode::Merge).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(duplicate_count, 1);
@@ -1194,16 +1215,30 @@ mod tests {
         let imported = vec![wellness_row("2026-01-01T00:00:00.000Z", "2026-01-01T00:05:00.000Z")];
 
         let mut tx = pool.begin().await.unwrap();
-        let duplicate_count = import_wellness_checks(&mut tx, &imported, ImportMode::Merge).await.unwrap();
+        let duplicate_count = import_wellness_checks(&mut tx, &cipher(), &imported, ImportMode::Merge).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(duplicate_count, 0);
-        let rows = sqlx::query("SELECT id, created_at FROM wellness_check").fetch_all(&pool).await.unwrap();
+        let rows = sqlx::query("SELECT id, created_at, relaxed_eyes, exercise, drank_water, washroom FROM wellness_check")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 1, "the superseded existing row must have been deleted");
         let id: i64 = rows[0].try_get("id").unwrap();
         let created_at: String = rows[0].try_get("created_at").unwrap();
         assert_ne!(id, 1, "a fresh row was inserted, not the old id reused");
         assert_eq!(created_at, "2026-01-01T00:05:00.000Z");
+
+        // The incoming survivor's booleans must be encrypted at rest, not
+        // written as plaintext.
+        for column in ["relaxed_eyes", "exercise", "drank_water", "washroom"] {
+            let stored: String = rows[0].try_get(column).unwrap();
+            assert!(stored.starts_with("enc1:"), "{column} should have been stored encrypted, got: {stored}");
+        }
+        assert_eq!(cipher().decrypt(rows[0].try_get::<String, _>("relaxed_eyes").unwrap().as_str()).await.unwrap(), "1");
+        assert_eq!(cipher().decrypt(rows[0].try_get::<String, _>("exercise").unwrap().as_str()).await.unwrap(), "1");
+        assert_eq!(cipher().decrypt(rows[0].try_get::<String, _>("drank_water").unwrap().as_str()).await.unwrap(), "1");
+        assert_eq!(cipher().decrypt(rows[0].try_get::<String, _>("washroom").unwrap().as_str()).await.unwrap(), "0");
     }
 
     #[tokio::test]
@@ -1234,7 +1269,7 @@ mod tests {
         let imported = vec![wellness_row("2026-01-01T00:00:00.000Z", "2026-01-01T00:10:00.000Z")];
 
         let mut tx = pool.begin().await.unwrap();
-        let duplicate_count = import_wellness_checks(&mut tx, &imported, ImportMode::Merge).await.unwrap();
+        let duplicate_count = import_wellness_checks(&mut tx, &cipher(), &imported, ImportMode::Merge).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(duplicate_count, 1, "the one incoming row lost and was skipped");
@@ -1255,14 +1290,17 @@ mod tests {
         ];
 
         let mut tx = pool.begin().await.unwrap();
-        let duplicate_count = import_wellness_checks(&mut tx, &imported, ImportMode::Merge).await.unwrap();
+        let duplicate_count = import_wellness_checks(&mut tx, &cipher(), &imported, ImportMode::Merge).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(duplicate_count, 2);
-        let rows = sqlx::query("SELECT created_at FROM wellness_check").fetch_all(&pool).await.unwrap();
+        let rows = sqlx::query("SELECT created_at, relaxed_eyes FROM wellness_check").fetch_all(&pool).await.unwrap();
         assert_eq!(rows.len(), 1);
         let created_at: String = rows[0].try_get("created_at").unwrap();
         assert_eq!(created_at, "2026-02-01T00:05:00.000Z", "the earliest of the three incoming rows wins");
+        let relaxed_eyes: String = rows[0].try_get("relaxed_eyes").unwrap();
+        assert!(relaxed_eyes.starts_with("enc1:"), "should have been stored encrypted, got: {relaxed_eyes}");
+        assert_eq!(cipher().decrypt(&relaxed_eyes).await.unwrap(), "1");
     }
 
     #[tokio::test]
@@ -1280,7 +1318,7 @@ mod tests {
         let imported = vec![wellness_row("2026-01-01T00:00:00.000Z", "2026-01-01T00:05:00.000Z")];
 
         let mut tx = pool.begin().await.unwrap();
-        let duplicate_count = import_wellness_checks(&mut tx, &imported, ImportMode::Merge).await.unwrap();
+        let duplicate_count = import_wellness_checks(&mut tx, &cipher(), &imported, ImportMode::Merge).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(duplicate_count, 1);

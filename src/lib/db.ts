@@ -338,17 +338,16 @@ export async function saveWellnessCheck(
   if (!existing[0]) throw new Error(`no reflection row found for slot ${slotStartIso}`);
 
   const createdAt = new Date().toISOString();
+  const [relaxedEyes, exercise, drankWater, washroom] = await encryptFields([
+    values.relaxedEyes ? "1" : "0",
+    values.exercise ? "1" : "0",
+    values.drankWater ? "1" : "0",
+    values.washroom ? "1" : "0",
+  ]);
   await db.execute(
     `INSERT INTO wellness_check (slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at)
      VALUES ($1, $2, $3, $4, $5, $6)`,
-    [
-      slotStartIso,
-      values.relaxedEyes ? 1 : 0,
-      values.exercise ? 1 : 0,
-      values.drankWater ? 1 : 0,
-      values.washroom ? 1 : 0,
-      createdAt,
-    ],
+    [slotStartIso, relaxedEyes, exercise, drankWater, washroom, createdAt],
   );
 }
 
@@ -366,35 +365,34 @@ export interface WellnessSummary {
  * after midnight stays filed under the pomodoro it was actually about
  * instead of leaking onto the next day and disagreeing with the reflections
  * shown beside it on the Entries page. No longer needs a JOIN to reflection
- * for this -- see CLAUDE.md's "Data model" on migration 17. */
+ * for this -- see CLAUDE.md's "Data model" on migration 17.
+ *
+ * The four boolean columns are ciphertext at rest (see "Encryption at
+ * rest" above), so this can no longer let SQLite do the summing with
+ * `SUM`/`COUNT` -- it fetches every matching row's four values, decrypts
+ * them in one batched call, and sums client-side instead. A day is at most
+ * 48 rows, so this stays cheap. */
 export async function getWellnessSummaryForDate(dateStamp: string): Promise<WellnessSummary> {
   const db = await getDb();
   const rows = await db.select<
-    {
-      total: number;
-      relaxed_eyes: number | null;
-      exercise: number | null;
-      drank_water: number | null;
-      washroom: number | null;
-    }[]
+    { relaxed_eyes: string; exercise: string; drank_water: string; washroom: string }[]
   >(
-    `SELECT COUNT(*) as total,
-            SUM(relaxed_eyes) as relaxed_eyes,
-            SUM(exercise) as exercise,
-            SUM(drank_water) as drank_water,
-            SUM(washroom) as washroom
+    `SELECT relaxed_eyes, exercise, drank_water, washroom
      FROM wellness_check
      WHERE date(slot_start_at, 'localtime') = $1`,
     [dateStamp],
   );
-  const row = rows[0];
-  return {
-    total: row?.total ?? 0,
-    relaxedEyes: row?.relaxed_eyes ?? 0,
-    exercise: row?.exercise ?? 0,
-    drankWater: row?.drank_water ?? 0,
-    washroom: row?.washroom ?? 0,
-  };
+  const flat = rows.flatMap((r) => [r.relaxed_eyes, r.exercise, r.drank_water, r.washroom]);
+  const decrypted = await decryptFields(flat);
+
+  const summary: WellnessSummary = { total: rows.length, relaxedEyes: 0, exercise: 0, drankWater: 0, washroom: 0 };
+  for (let i = 0; i < rows.length; i++) {
+    summary.relaxedEyes += Number(decrypted[i * 4]);
+    summary.exercise += Number(decrypted[i * 4 + 1]);
+    summary.drankWater += Number(decrypted[i * 4 + 2]);
+    summary.washroom += Number(decrypted[i * 4 + 3]);
+  }
+  return summary;
 }
 
 /**
@@ -1441,7 +1439,7 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
     includeSettings
       ? db.select<SettingRow[]>(`SELECT key, value FROM app_setting`)
       : Promise.resolve([]),
-    db.select<WellnessCheckRow[]>(
+    db.select<{ slot_start_at: string; relaxed_eyes: string; exercise: string; drank_water: string; washroom: string; created_at: string }[]>(
       `SELECT slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at FROM wellness_check`,
     ),
     db.select<ScreenTimeSessionRow[]>(
@@ -1454,10 +1452,11 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
   // entirely unrelated key, so shipping ciphertext would make it unreadable
   // everywhere including here. Encryption protects the live pomodoro.db, not
   // a file the user explicitly chose to write somewhere of their choosing.
-  const [reflectionTexts, taskContents, notToDoContents] = await Promise.all([
+  const [reflectionTexts, taskContents, notToDoContents, wellnessValues] = await Promise.all([
     decryptFields(reflection.map((r) => r.text)),
     decryptFields(daily_task_list.map((r) => r.content)),
     decryptFields(not_to_do_list.map((r) => r.content)),
+    decryptFields(wellness_check.flatMap((r) => [r.relaxed_eyes, r.exercise, r.drank_water, r.washroom])),
   ]);
   return {
     app: "reflectodoro",
@@ -1468,7 +1467,14 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
       daily_task_list: daily_task_list.map((row, i) => ({ ...row, content: taskContents[i] })),
       not_to_do_list: not_to_do_list.map((row, i) => ({ ...row, content: notToDoContents[i] })),
       app_setting,
-      wellness_check,
+      wellness_check: wellness_check.map((row, i) => ({
+        slot_start_at: row.slot_start_at,
+        relaxed_eyes: Number(wellnessValues[i * 4]),
+        exercise: Number(wellnessValues[i * 4 + 1]),
+        drank_water: Number(wellnessValues[i * 4 + 2]),
+        washroom: Number(wellnessValues[i * 4 + 3]),
+        created_at: row.created_at,
+      })),
       screen_time_session,
     },
   };

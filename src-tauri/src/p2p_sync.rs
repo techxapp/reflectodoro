@@ -614,14 +614,15 @@ async fn update_last_sync_at(app: &AppHandle, peer_device_id: &str, sync_started
 async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<SyncPayload, String> {
     let pool = db::open_direct_pool(app).await?;
     let since = since.unwrap_or("");
-    // The three text columns are ciphertext at rest (crypto.rs), and the two
-    // devices in a pair hold entirely unrelated keys -- each one's key is
-    // local to it and never exchanged, by design. So the sending side
-    // decrypts here and the payload travels as plaintext *inside* the Noise
-    // session that already encrypts and authenticates the whole transfer
-    // (see this module's doc comment), and the receiving side re-encrypts
-    // under its own key via import.rs. Shipping raw ciphertext instead would
-    // be unreadable garbage on the far end.
+    // The three text columns and wellness_check's four boolean columns are
+    // all ciphertext at rest (crypto.rs), and the two devices in a pair hold
+    // entirely unrelated keys -- each one's key is local to it and never
+    // exchanged, by design. So the sending side decrypts here and the
+    // payload travels as plaintext *inside* the Noise session that already
+    // encrypts and authenticates the whole transfer (see this module's doc
+    // comment), and the receiving side re-encrypts under its own key via
+    // import.rs. Shipping raw ciphertext instead would be unreadable garbage
+    // on the far end.
     let cipher = crate::crypto::FieldCipher::resolve(app).await?;
 
     let reflection_rows = sqlx::query_as::<_, (String, String, String, String)>(
@@ -675,24 +676,39 @@ async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<Syn
         .map(|((date, _, updated_at), content)| import::ImportNotToDoRow { date, content, updated_at })
         .collect();
 
-    let wellness_check = sqlx::query_as::<_, (String, i64, i64, i64, i64, String)>(
+    let wellness_rows = sqlx::query_as::<_, (String, String, String, String, String, String)>(
         "SELECT slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at
          FROM wellness_check WHERE created_at > ?",
     )
     .bind(since)
     .fetch_all(&pool)
     .await
-    .map_err(|e| e.to_string())?
-    .into_iter()
-    .map(|(slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at)| import::ImportWellnessCheckRow {
-        slot_start_at,
-        relaxed_eyes,
-        exercise,
-        drank_water,
-        washroom,
-        created_at,
-    })
-    .collect();
+    .map_err(|e| e.to_string())?;
+    // Same decrypt-before-send treatment as the three text columns above --
+    // flatten the four booleans across every row into one batch so a day's
+    // worth of check-ins costs one decrypt_many call, not four.
+    let wellness_values: Vec<String> = wellness_rows
+        .iter()
+        .flat_map(|(_, relaxed_eyes, exercise, drank_water, washroom, _)| {
+            [relaxed_eyes.clone(), exercise.clone(), drank_water.clone(), washroom.clone()]
+        })
+        .collect();
+    let wellness_values = cipher.decrypt_many(&wellness_values).await?;
+    let wellness_check = wellness_rows
+        .into_iter()
+        .zip(wellness_values.chunks_exact(4))
+        .map(|((slot_start_at, _, _, _, _, created_at), values)| {
+            let parse = |s: &str| s.parse::<i64>().map_err(|e| format!("wellness_check value {s:?} isn't a valid boolean: {e}"));
+            Ok::<_, String>(import::ImportWellnessCheckRow {
+                slot_start_at,
+                relaxed_eyes: parse(&values[0])?,
+                exercise: parse(&values[1])?,
+                drank_water: parse(&values[2])?,
+                washroom: parse(&values[3])?,
+                created_at,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
 
     let screen_time_session = sqlx::query_as::<_, (String, String, String, String, String, String)>(
         "SELECT app_id, display_name, platform, device_name, started_at, ended_at
@@ -727,7 +743,7 @@ async fn apply_payload(app: &AppHandle, payload: &SyncPayload) -> Result<SyncRes
     let merged_slot_count =
         import::import_reflections(&mut tx, &cipher, &payload.reflection, import::ImportMode::Merge).await?;
     let wellness_check_duplicate_count =
-        import::import_wellness_checks(&mut tx, &payload.wellness_check, import::ImportMode::Merge).await?;
+        import::import_wellness_checks(&mut tx, &cipher, &payload.wellness_check, import::ImportMode::Merge).await?;
 
     let daily_task_rows: Vec<(&str, &str, &str)> =
         payload.daily_task_list.iter().map(|r| (r.date.as_str(), r.content.as_str(), r.updated_at.as_str())).collect();

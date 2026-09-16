@@ -465,6 +465,48 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 23,
+            // Changes wellness_check's four boolean columns from INTEGER to
+            // TEXT so they can hold crypto.rs's 'enc1:'-prefixed ciphertext --
+            // see CLAUDE.md's "Encryption at rest". This migration only
+            // changes storage type; it does not itself encrypt anything.
+            // Existing values are cast to their plain-text '0'/'1' string
+            // form here, and crypto::run_encryption_migration_after_db_ready
+            // (via the four new wellness_check entries in crypto.rs's
+            // ENCRYPTED_COLUMNS) picks them up on next launch, same as any
+            // other pre-existing plaintext row.
+            //
+            // Same rebuild-the-table technique migration 17 already used on
+            // this table (SQLite has no ALTER COLUMN TYPE): create the final
+            // shape, copy data across with an explicit CAST, drop the old
+            // table, rename the new one into place. Explicit `id` values in
+            // the INSERT keep the AUTOINCREMENT sequence continuous.
+            description: "change wellness_check boolean columns from INTEGER to TEXT for encryption at rest",
+            sql: r#"
+                CREATE TABLE wellness_check_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    slot_start_at TEXT NOT NULL DEFAULT '',
+                    relaxed_eyes TEXT NOT NULL DEFAULT '1',
+                    exercise TEXT NOT NULL DEFAULT '1',
+                    drank_water TEXT NOT NULL DEFAULT '1',
+                    washroom TEXT NOT NULL DEFAULT '0',
+                    created_at TEXT NOT NULL
+                );
+
+                INSERT INTO wellness_check_new (id, slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at)
+                SELECT id, slot_start_at,
+                       CAST(relaxed_eyes AS TEXT), CAST(exercise AS TEXT), CAST(drank_water AS TEXT), CAST(washroom AS TEXT),
+                       created_at
+                FROM wellness_check;
+
+                DROP TABLE wellness_check;
+                ALTER TABLE wellness_check_new RENAME TO wellness_check;
+
+                CREATE INDEX idx_wellness_check_slot_start_at ON wellness_check(slot_start_at);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -578,5 +620,70 @@ mod tests {
             .await
             .unwrap();
         assert!(result.last_insert_rowid() > 11);
+    }
+
+    /// Runs migration 23's actual SQL against a post-migration-17
+    /// `wellness_check` (INTEGER booleans) seeded with real rows, to confirm
+    /// the rebuild casts existing 1/0 integers to the '1'/'0' text form
+    /// `crypto.rs`'s encryption migration expects, without losing any other
+    /// column or the AUTOINCREMENT sequence.
+    #[tokio::test]
+    async fn migration_23_changes_wellness_check_booleans_to_text() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+
+        // Post-migration-17 shape (INTEGER booleans, slot_start_at already in
+        // place).
+        sqlx::query(
+            "CREATE TABLE wellness_check (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slot_start_at TEXT NOT NULL DEFAULT '',
+                relaxed_eyes INTEGER NOT NULL DEFAULT 1,
+                exercise INTEGER NOT NULL DEFAULT 1,
+                drank_water INTEGER NOT NULL DEFAULT 1,
+                washroom INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO wellness_check (id, slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at)
+             VALUES (5, '2026-01-01T00:00:00.000Z', 0, 1, 0, 1, '2026-01-01T00:05:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::raw_sql(&migration_sql(23)).execute(&pool).await.unwrap();
+
+        let columns = sqlx::query("PRAGMA table_info(wellness_check)").fetch_all(&pool).await.unwrap();
+        for column in ["relaxed_eyes", "exercise", "drank_water", "washroom"] {
+            let decltype: String =
+                columns.iter().find(|r| r.get::<String, _>("name") == column).unwrap().get("type");
+            assert_eq!(decltype, "TEXT", "{column} should now be TEXT-typed");
+        }
+
+        let row = sqlx::query(
+            "SELECT id, slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at FROM wellness_check WHERE id = 5",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>("slot_start_at"), "2026-01-01T00:00:00.000Z");
+        assert_eq!(row.get::<String, _>("relaxed_eyes"), "0");
+        assert_eq!(row.get::<String, _>("exercise"), "1");
+        assert_eq!(row.get::<String, _>("drank_water"), "0");
+        assert_eq!(row.get::<String, _>("washroom"), "1");
+        assert_eq!(row.get::<String, _>("created_at"), "2026-01-01T00:05:00.000Z");
+
+        // A fresh insert continues the AUTOINCREMENT sequence past the max
+        // explicit id (5) rather than colliding with or reusing it.
+        let result =
+            sqlx::query("INSERT INTO wellness_check (slot_start_at, created_at) VALUES ('x', 'y')")
+                .execute(&pool)
+                .await
+                .unwrap();
+        assert!(result.last_insert_rowid() > 5);
     }
 }

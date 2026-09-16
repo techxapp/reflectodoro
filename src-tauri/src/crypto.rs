@@ -357,14 +357,22 @@ fn decode_key(encoded: &str) -> Result<[u8; KEY_LEN], String> {
 /// from re-scanning every row on every launch.
 const MIGRATED_KEY: &str = "data_encryption_migrated";
 
-/// The three columns holding user-typed text, as (table, primary key column,
-/// value column). `wellness_check` is deliberately absent: its four booleans
-/// are aggregated in SQL (`getWellnessSummaryForDate`'s `SUM`/`COUNT`), which
-/// ciphertext would break -- see CLAUDE.md.
-const ENCRYPTED_COLUMNS: [(&str, &str, &str); 3] = [
+/// The encrypted columns, as (table, primary key column, value column). The
+/// three user-typed-text columns store prose; `wellness_check`'s four
+/// boolean columns each store the plain string `"1"`/`"0"` instead --
+/// `getWellnessSummaryForDate` used to aggregate these in SQL (`SUM`/`COUNT`),
+/// which is why they were excluded for a while, but that aggregation now
+/// happens app-side (decrypt-then-sum) instead -- see CLAUDE.md.
+/// wellness_check's columns are `TEXT` (migration 23) specifically so they
+/// can round-trip through this same generic string-based helper.
+const ENCRYPTED_COLUMNS: [(&str, &str, &str); 7] = [
     ("reflection", "id", "text"),
     ("daily_task_list", "date", "content"),
     ("not_to_do_list", "date", "content"),
+    ("wellness_check", "id", "relaxed_eyes"),
+    ("wellness_check", "id", "exercise"),
+    ("wellness_check", "id", "drank_water"),
+    ("wellness_check", "id", "washroom"),
 ];
 
 /// Spawned from `lib.rs`'s `setup()`. Retries on the same cold-start race
@@ -589,6 +597,22 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            // TEXT columns (migration 23), same as production -- see this
+            // module's ENCRYPTED_COLUMNS.
+            "CREATE TABLE wellness_check (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slot_start_at TEXT NOT NULL DEFAULT '',
+                relaxed_eyes TEXT NOT NULL DEFAULT '1',
+                exercise TEXT NOT NULL DEFAULT '1',
+                drank_water TEXT NOT NULL DEFAULT '1',
+                washroom TEXT NOT NULL DEFAULT '0',
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         pool
     }
 
@@ -712,6 +736,41 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(cipher.decrypt(&stored).await.unwrap(), "Write report\nCall dentist");
+    }
+
+    /// `wellness_check` is the one table with four encrypted columns sharing
+    /// a single `id`-keyed row (every other encrypted table has exactly one
+    /// value column) -- confirms `ENCRYPTED_COLUMNS`' four separate
+    /// (table, "id", column) entries each migrate their own column
+    /// independently, without disturbing the other three.
+    #[tokio::test]
+    async fn migration_handles_wellness_checks_four_columns() {
+        let pool = migration_test_pool().await;
+        let cipher = FieldCipher::test_fixed();
+        sqlx::query(
+            "INSERT INTO wellness_check (id, slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at)
+             VALUES (1, '2026-01-01T00:00:00.000Z', '1', '0', '1', '0', '2026-01-01T00:05:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        for column in ["relaxed_eyes", "exercise", "drank_water", "washroom"] {
+            encrypt_existing_rows(&mut tx, &cipher, "wellness_check", "id", column).await.unwrap();
+        }
+        tx.commit().await.unwrap();
+
+        let row = sqlx::query("SELECT relaxed_eyes, exercise, drank_water, washroom FROM wellness_check WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let expected = [("relaxed_eyes", "1"), ("exercise", "0"), ("drank_water", "1"), ("washroom", "0")];
+        for (column, plaintext) in expected {
+            let stored: String = row.try_get(column).unwrap();
+            assert!(stored.starts_with(MARKER), "{column} should have been stored encrypted, got: {stored}");
+            assert_eq!(cipher.decrypt(&stored).await.unwrap(), plaintext, "{column} must survive the migration verbatim");
+        }
     }
 
     /// A batch mixing already-migrated and not-yet-migrated rows is exactly
