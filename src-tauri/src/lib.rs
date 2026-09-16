@@ -823,6 +823,20 @@ pub fn run() {
                         }
                     });
                 }
+
+                // Diagnostic only, for cross-checking reports of the main
+                // window rendering the wrong light/dark theme on macOS
+                // (app.css's `prefers-color-scheme` is expected to track
+                // this live with no app code involved -- see CLAUDE.md).
+                // Logging it once at cold start makes a future report
+                // provable from the log file instead of anecdotal.
+                #[cfg(target_os = "macos")]
+                if let Some(mtm) = objc2::MainThreadMarker::new() {
+                    let appearance = objc2_app_kit::NSApplication::sharedApplication(mtm)
+                        .effectiveAppearance()
+                        .name();
+                    log::info!("setup: NSApp.effectiveAppearance = {appearance}");
+                }
             }
 
             // POMODORO_ENABLED defaults to true and isn't persisted on any
