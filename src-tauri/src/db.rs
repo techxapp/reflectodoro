@@ -441,6 +441,20 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 22,
+            // Lowers the default breakit challenge length from 15 to 12.
+            // Guarded like migrations 7/8 (checkin_auto_close_minutes): only
+            // flips a db that still holds the old default value, so a user
+            // who already customized breakit_length via Settings keeps their
+            // own value rather than having it silently overwritten.
+            description: "lower default breakit_length to 12",
+            sql: r#"
+                UPDATE app_setting SET value = '12'
+                WHERE key = 'breakit_length' AND value = '15';
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

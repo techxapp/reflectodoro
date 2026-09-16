@@ -665,7 +665,7 @@ export interface BreakitSettings {
   maxPerDay: number;
 }
 
-const DEFAULT_BREAKIT: BreakitSettings = { length: 15, includeSpecial: false, maxPerDay: 5 };
+const DEFAULT_BREAKIT: BreakitSettings = { length: 12, includeSpecial: false, maxPerDay: 5 };
 
 export async function getBreakitSettings(): Promise<BreakitSettings> {
   const db = await getDb();

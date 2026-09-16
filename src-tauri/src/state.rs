@@ -80,7 +80,7 @@ pub struct BreakitConfig {
 impl Default for BreakitConfig {
     fn default() -> Self {
         Self {
-            length: 15,
+            length: 12,
             include_special: false,
             max_per_day: 5,
         }
