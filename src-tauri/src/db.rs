@@ -441,6 +441,30 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 22,
+            // Marks whether crypto.rs's one-time pass over pre-existing
+            // plaintext rows (reflection.text, daily_task_list.content,
+            // not_to_do_list.content) has run -- see
+            // crypto::run_encryption_migration_after_db_ready. Seeded 'false'
+            // for every db, new or upgrading: a brand-new db has no rows to
+            // encrypt, so its migration pass is a no-op that just flips this
+            // to 'true'.
+            //
+            // This is only a "don't rescan every launch" shortcut, NOT the
+            // actual safety mechanism -- that's the per-row 'enc1:' marker
+            // check, which is what makes the pass idempotent even if this
+            // value is lost, wrong, or wiped by a settings import.
+            //
+            // OR IGNORE like migrations 5/13/15: an import from a newer
+            // export could already carry this key, and a plain INSERT would
+            // hit the PRIMARY KEY and abort every later migration on that db.
+            description: "seed data_encryption_migrated flag",
+            sql: r#"
+                INSERT OR IGNORE INTO app_setting (key, value) VALUES ('data_encryption_migrated', 'false');
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

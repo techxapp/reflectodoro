@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, Sqlite, Transaction};
 use tauri::AppHandle;
 
+use crate::crypto::FieldCipher;
 use crate::db;
 
 // Serialize (as well as Deserialize) on the five row types below: p2p_sync.rs
@@ -222,8 +223,19 @@ fn merge_reflection_lines(existing: &[String], incoming: &[String]) -> Vec<Strin
 /// `slot_start_at` directly -- see `import_wellness_checks`), so unlike the
 /// old version of this function there's no id map to build or FK to repoint
 /// before deleting a collapsed duplicate.
+///
+/// **Encryption boundary** (see crypto.rs): `reflection.text` is ciphertext
+/// at rest, but the line merge below is inherently content-aware -- it can't
+/// compare or combine lines it can't read -- so existing rows are decrypted
+/// on the way in and the merged result is re-encrypted on the way out.
+/// `rows` (the incoming side) is always plaintext whichever caller this is:
+/// a file import's JSON is plaintext by design (the export deliberately
+/// stays readable), and a P2P payload was decrypted by the *sending* device
+/// before it went on the wire (see p2p_sync::build_delta_payload), where
+/// Noise already encrypts the whole transfer.
 pub(crate) async fn import_reflections(
     tx: &mut Transaction<'_, Sqlite>,
+    cipher: &FieldCipher,
     rows: &[ImportReflectionRow],
     mode: ImportMode,
 ) -> Result<usize, String> {
@@ -253,13 +265,16 @@ pub(crate) async fn import_reflections(
                 .fetch_all(&mut **tx)
                 .await
                 .map_err(|e| e.to_string())?;
-            let mut out = Vec::with_capacity(db_rows.len());
+            let mut ids = Vec::with_capacity(db_rows.len());
+            let mut stored = Vec::with_capacity(db_rows.len());
             for row in &db_rows {
-                let id: i64 = row.try_get("id").map_err(|e| e.to_string())?;
-                let text: String = row.try_get("text").map_err(|e| e.to_string())?;
-                out.push((id, text));
+                ids.push(row.try_get::<i64, _>("id").map_err(|e| e.to_string())?);
+                stored.push(row.try_get::<String, _>("text").map_err(|e| e.to_string())?);
             }
-            out
+            // One batch rather than per row: on Android each decrypt is a
+            // JNI hop into the Keystore.
+            let decrypted = cipher.decrypt_many(&stored).await?;
+            ids.into_iter().zip(decrypted).collect()
         } else {
             Vec::new()
         };
@@ -276,6 +291,7 @@ pub(crate) async fn import_reflections(
         }
 
         let final_text = merge_reflection_lines(&existing_baseline, &incoming_lines).join("\n");
+        let final_text_stored = cipher.encrypt(&final_text).await?;
 
         // The delta-sync cursor (p2p_sync.rs): the latest of every incoming
         // row's updated_at (falling back to its created_at when a legacy
@@ -295,7 +311,7 @@ pub(crate) async fn import_reflections(
         if let Some((first_id, _)) = existing_rows.first() {
             let survivor_id = *first_id;
             sqlx::query("UPDATE reflection SET text = ?, updated_at = ? WHERE id = ?")
-                .bind(&final_text)
+                .bind(&final_text_stored)
                 .bind(&final_updated_at)
                 .bind(survivor_id)
                 .execute(&mut **tx)
@@ -330,7 +346,7 @@ pub(crate) async fn import_reflections(
             sqlx::query("INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES (?, ?, ?, ?)")
                 .bind(&created_at)
                 .bind(&slot)
-                .bind(&final_text)
+                .bind(&final_text_stored)
                 .bind(&final_updated_at)
                 .execute(&mut **tx)
                 .await
@@ -537,8 +553,13 @@ pub(crate) async fn import_wellness_checks(
 /// call sites pass (never external/user input), so interpolating it
 /// directly into the SQL string is safe here -- sqlx has no way to bind an
 /// identifier as a query parameter.
+///
+/// Same encryption boundary as `import_reflections`: the stored `content` is
+/// decrypted before the line merge (which needs to read it) and the result is
+/// re-encrypted before the upsert; `rows` arrives plaintext from both callers.
 pub(crate) async fn merge_import_day_rows(
     tx: &mut Transaction<'_, Sqlite>,
+    cipher: &FieldCipher,
     table: &str,
     rows: &[(&str, &str, &str)],
     mode: ImportMode,
@@ -552,7 +573,8 @@ pub(crate) async fn merge_import_day_rows(
                     .await
                     .map_err(|e| e.to_string())?;
             match existing {
-                Some(existing_content) => {
+                Some(existing_stored) => {
+                    let existing_content = cipher.decrypt(&existing_stored).await?;
                     let baseline = dedupe_first_seen_ci(line_split_trim(&existing_content));
                     let incoming_lines = line_split_trim(content);
                     append_unique_lines_ci(&baseline, &incoming_lines).join("\n")
@@ -562,6 +584,7 @@ pub(crate) async fn merge_import_day_rows(
         } else {
             content.to_string()
         };
+        let merged_content = cipher.encrypt(&merged_content).await?;
 
         let sql = if mode == ImportMode::Merge {
             format!(
@@ -585,6 +608,11 @@ pub(crate) async fn merge_import_day_rows(
 #[tauri::command]
 pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, include_settings: bool) -> Result<ImportResult, String> {
     let pool = db::open_direct_pool(&app).await?;
+    // Resolved once for the whole import rather than per row -- see
+    // crypto::FieldCipher. Deliberately before the transaction opens: if the
+    // key can't be resolved at all, fail before touching the database rather
+    // than partway through a replace-mode wipe.
+    let cipher = FieldCipher::resolve(&app).await?;
     let mut tx = pool.begin().await.map_err(|e| format!("failed to start import transaction: {e}"))?;
 
     if mode == ImportMode::Replace {
@@ -601,7 +629,7 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
         }
     }
 
-    let merged_slot_count = import_reflections(&mut tx, &data.reflection, mode).await?;
+    let merged_slot_count = import_reflections(&mut tx, &cipher, &data.reflection, mode).await?;
     let wellness_check_duplicate_count = import_wellness_checks(&mut tx, &data.wellness_check, mode).await?;
 
     let daily_task_rows: Vec<(&str, &str, &str)> = data
@@ -609,14 +637,14 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
         .iter()
         .map(|r| (r.date.as_str(), r.content.as_str(), r.updated_at.as_str()))
         .collect();
-    merge_import_day_rows(&mut tx, "daily_task_list", &daily_task_rows, mode).await?;
+    merge_import_day_rows(&mut tx, &cipher, "daily_task_list", &daily_task_rows, mode).await?;
 
     let not_to_do_rows: Vec<(&str, &str, &str)> = data
         .not_to_do_list
         .iter()
         .map(|r| (r.date.as_str(), r.content.as_str(), r.updated_at.as_str()))
         .collect();
-    merge_import_day_rows(&mut tx, "not_to_do_list", &not_to_do_rows, mode).await?;
+    merge_import_day_rows(&mut tx, &cipher, "not_to_do_list", &not_to_do_rows, mode).await?;
 
     let screen_time_duplicate_count = import_screen_time_sessions(&mut tx, &data.screen_time_session).await?;
 
@@ -658,6 +686,20 @@ mod tests {
 
     fn lines(strs: &[&str]) -> Vec<String> {
         strs.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Fixed-key cipher so these tests never touch the real OS credential
+    /// store (and don't need an `AppHandle` to get one).
+    fn cipher() -> FieldCipher {
+        FieldCipher::test_fixed()
+    }
+
+    /// Every `text`/`content` value these tests assert on is ciphertext at
+    /// rest now, so reading one back means decrypting it (see crypto.rs).
+    async fn read_decrypted(pool: &sqlx::SqlitePool, sql: &str) -> String {
+        let stored: String = sqlx::query_scalar(sql).fetch_one(pool).await.unwrap();
+        assert!(stored.starts_with("enc1:"), "value should have been stored encrypted, got: {stored}");
+        cipher().decrypt(&stored).await.unwrap()
     }
 
     #[test]
@@ -838,7 +880,7 @@ mod tests {
         }];
 
         let mut tx = pool.begin().await.unwrap();
-        let merged_slot_count = import_reflections(&mut tx, &imported, ImportMode::Merge).await.unwrap();
+        let merged_slot_count = import_reflections(&mut tx, &cipher(), &imported, ImportMode::Merge).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(merged_slot_count, 1);
@@ -849,12 +891,47 @@ mod tests {
             .unwrap();
         assert_eq!(remaining.len(), 1, "duplicate row (id 2) should have been deleted");
         let id: i64 = remaining[0].try_get("id").unwrap();
-        let text: String = remaining[0].try_get("text").unwrap();
         assert_eq!(id, 1, "the earliest existing id survives");
+        let text = read_decrypted(&pool, "SELECT text FROM reflection WHERE id = 1").await;
         // Rule 2 fired ("Went for a walk" is non-skip) so existing "Skip" was
         // dropped; "Did laundry" survived from the other duplicate row; the
         // incoming line was appended last.
         assert_eq!(text, "Did laundry\nWent for a walk");
+    }
+
+    /// The steady-state path once the one-time migration has run: the
+    /// existing row is already ciphertext, so the merge only works at all if
+    /// it decrypts on the way in and re-encrypts on the way out. The tests
+    /// above seed plaintext, which exercises crypto.rs's passthrough for
+    /// not-yet-migrated rows instead -- both paths need covering, since a
+    /// database can be in either state.
+    #[tokio::test]
+    async fn merges_against_an_already_encrypted_existing_row() {
+        let pool = test_pool().await;
+
+        let stored = cipher().encrypt("Did laundry").await.unwrap();
+        sqlx::query(
+            "INSERT INTO reflection (id, created_at, slot_start_at, text)
+             VALUES (1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', ?)",
+        )
+        .bind(&stored)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let imported = vec![ImportReflectionRow {
+            created_at: "2026-01-01T00:10:00.000Z".to_string(),
+            slot_start_at: "2026-01-01T00:00:00.000Z".to_string(),
+            text: "Went for a walk".to_string(),
+            updated_at: None,
+        }];
+
+        let mut tx = pool.begin().await.unwrap();
+        import_reflections(&mut tx, &cipher(), &imported, ImportMode::Merge).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let text = read_decrypted(&pool, "SELECT text FROM reflection WHERE id = 1").await;
+        assert_eq!(text, "Did laundry\nWent for a walk", "the encrypted existing line must survive the merge");
     }
 
     #[tokio::test]
@@ -869,19 +946,19 @@ mod tests {
         }];
 
         let mut tx = pool.begin().await.unwrap();
-        let merged_slot_count = import_reflections(&mut tx, &imported, ImportMode::Merge).await.unwrap();
+        let merged_slot_count = import_reflections(&mut tx, &cipher(), &imported, ImportMode::Merge).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(merged_slot_count, 0, "a single fresh row with nothing to merge against shouldn't count as merged");
 
-        let row = sqlx::query("SELECT created_at, text FROM reflection WHERE slot_start_at = ?")
-            .bind("2026-02-01T00:00:00.000Z")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        let created_at: String = row.try_get("created_at").unwrap();
-        let text: String = row.try_get("text").unwrap();
+        let created_at: String =
+            sqlx::query_scalar("SELECT created_at FROM reflection WHERE slot_start_at = '2026-02-01T00:00:00.000Z'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(created_at, "2026-02-01T00:00:00.000Z");
+        let text =
+            read_decrypted(&pool, "SELECT text FROM reflection WHERE slot_start_at = '2026-02-01T00:00:00.000Z'").await;
         assert_eq!(text, "Fresh slot");
     }
 
@@ -897,7 +974,7 @@ mod tests {
         }];
 
         let mut tx = pool.begin().await.unwrap();
-        let merged_slot_count = import_reflections(&mut tx, &imported, ImportMode::Merge).await.unwrap();
+        let merged_slot_count = import_reflections(&mut tx, &cipher(), &imported, ImportMode::Merge).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(merged_slot_count, 0);
@@ -937,13 +1014,15 @@ mod tests {
         ];
 
         let mut tx = pool.begin().await.unwrap();
-        let merged_slot_count = import_reflections(&mut tx, &imported, ImportMode::Merge).await.unwrap();
+        let merged_slot_count = import_reflections(&mut tx, &cipher(), &imported, ImportMode::Merge).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(merged_slot_count, 0);
 
-        let row = sqlx::query("SELECT text FROM reflection WHERE id = 1").fetch_one(&pool).await.unwrap();
-        let text: String = row.try_get("text").unwrap();
+        // Untouched means untouched -- still the original plaintext, not
+        // re-encrypted, since the merge never ran for this slot at all.
+        let text: String =
+            sqlx::query_scalar("SELECT text FROM reflection WHERE id = 1").fetch_one(&pool).await.unwrap();
         assert_eq!(text, "Did yoga", "existing row must be left exactly as it was");
     }
 
@@ -1226,15 +1305,15 @@ mod tests {
         let rows: Vec<(&str, &str, &str)> = vec![("2026-01-01", "Call dentist\nBuy groceries", "2026-01-01T09:00:00.000Z")];
 
         let mut tx = pool.begin().await.unwrap();
-        merge_import_day_rows(&mut tx, "daily_task_list", &rows, ImportMode::Merge).await.unwrap();
+        merge_import_day_rows(&mut tx, &cipher(), "daily_task_list", &rows, ImportMode::Merge).await.unwrap();
         tx.commit().await.unwrap();
 
-        let row = sqlx::query("SELECT content, updated_at FROM daily_task_list WHERE date = '2026-01-01'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        let content: String = row.try_get("content").unwrap();
-        let updated_at: String = row.try_get("updated_at").unwrap();
+        let content = read_decrypted(&pool, "SELECT content FROM daily_task_list WHERE date = '2026-01-01'").await;
+        let updated_at: String =
+            sqlx::query_scalar("SELECT updated_at FROM daily_task_list WHERE date = '2026-01-01'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         // Existing lines kept in place; "Call dentist" (case-sensitively
         // identical, already present) isn't duplicated; the genuinely new
         // "Buy groceries" is appended.
@@ -1257,13 +1336,10 @@ mod tests {
         let rows: Vec<(&str, &str, &str)> = vec![("2026-01-01", "check email before 10am", "2026-01-01T09:00:00.000Z")];
 
         let mut tx = pool.begin().await.unwrap();
-        merge_import_day_rows(&mut tx, "not_to_do_list", &rows, ImportMode::Merge).await.unwrap();
+        merge_import_day_rows(&mut tx, &cipher(), "not_to_do_list", &rows, ImportMode::Merge).await.unwrap();
         tx.commit().await.unwrap();
 
-        let content: String = sqlx::query_scalar("SELECT content FROM not_to_do_list WHERE date = '2026-01-01'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let content = read_decrypted(&pool, "SELECT content FROM not_to_do_list WHERE date = '2026-01-01'").await;
         assert_eq!(content, "Check email before 10am", "the case-insensitively-identical incoming line adds nothing");
     }
 
@@ -1274,13 +1350,10 @@ mod tests {
         let rows: Vec<(&str, &str, &str)> = vec![("2026-03-01", "Plan trip", "2026-03-01T08:00:00.000Z")];
 
         let mut tx = pool.begin().await.unwrap();
-        merge_import_day_rows(&mut tx, "daily_task_list", &rows, ImportMode::Merge).await.unwrap();
+        merge_import_day_rows(&mut tx, &cipher(), "daily_task_list", &rows, ImportMode::Merge).await.unwrap();
         tx.commit().await.unwrap();
 
-        let content: String = sqlx::query_scalar("SELECT content FROM daily_task_list WHERE date = '2026-03-01'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let content = read_decrypted(&pool, "SELECT content FROM daily_task_list WHERE date = '2026-03-01'").await;
         assert_eq!(content, "Plan trip");
     }
 
@@ -1303,13 +1376,10 @@ mod tests {
         let rows: Vec<(&str, &str, &str)> = vec![("2026-01-01", "New task", "2026-01-01T09:00:00.000Z")];
 
         let mut tx = pool.begin().await.unwrap();
-        merge_import_day_rows(&mut tx, "daily_task_list", &rows, ImportMode::Replace).await.unwrap();
+        merge_import_day_rows(&mut tx, &cipher(), "daily_task_list", &rows, ImportMode::Replace).await.unwrap();
         tx.commit().await.unwrap();
 
-        let content: String = sqlx::query_scalar("SELECT content FROM daily_task_list WHERE date = '2026-01-01'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let content = read_decrypted(&pool, "SELECT content FROM daily_task_list WHERE date = '2026-01-01'").await;
         assert_eq!(content, "New task");
     }
 }

@@ -1576,6 +1576,14 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
+              <p class="timeline-date">Wednesday, Sep 16, 2026</p>
+              <ul class="timeline-items">
+                <li>Added encryption at rest: your reflections and task lists are now stored encrypted on disk, with the key held in your operating system's own secure storage (Windows Credential Manager, macOS Keychain, Linux Secret Service, Android Keystore). Existing entries are encrypted automatically on first launch, and exports stay readable so you can still move your data between devices</li>
+                <li>Added a privacy policy page, and stopped writing the emergency-exit challenge value to the log file, so logs stay safe to share when reporting a bug</li>
+                <li>Kept Android debug symbols for crash reports, and improved macOS startup diagnostics</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
               <p class="timeline-date">Tuesday, Sep 15, 2026</p>
               <ul class="timeline-items">
                 <li>Added a configurable quote panel to the break screen, pulling short text from a user-set API endpoint, and polished how the &ldquo;Coming next&rdquo; preview looks and stays visible after saving</li>
@@ -1620,16 +1628,6 @@
                 <li>Polished the Entries page layout</li>
               </ul>
             </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Wednesday, Sep 9, 2026</p>
-              <ul class="timeline-items">
-                <li>Fixed the macOS break screen sometimes not appearing at all due to a window/Space display conflict, and added diagnostic logging to track down similar window-display issues</li>
-                <li>Fixed the main window's timer freezing after a break or check-in ended on Windows</li>
-                <li>Fixed log files being silently deleted on rotation instead of archived, and added a way to export logs from the About page</li>
-                <li>Refactored the Settings page UI</li>
-                <li>Added an FAQ entry on why Reflectodoro is free, and an &ldquo;all releases&rdquo; link on the download page</li>
-              </ul>
-            </div>
             <p class="timeline-tier reveal">Previous 3 weeks</p>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Sep 7 &ndash; 13, 2026</p>
@@ -1637,7 +1635,9 @@
                 <li>Added full macOS break-screen enforcement (Cmd+Tab blocking, following you across every Space, opt-in menu bar/Dock hiding) and an FAQ section on the landing page</li>
                 <li>Fixed several emergency-exit (breakit) challenge bugs: not accepting Enter to submit on Android, using default settings instead of your saved length/character set on a cold start, and showing a stale value when settings synced in late</li>
                 <li>Fixed reflections being timestamped to the break slot instead of the work slot they were actually about, and being grouped on the Entries page by save time instead of the day they were about</li>
-                <li>Fixed the app's tray/dock icon not reopening the window on macOS</li>
+                <li>Fixed the macOS break screen sometimes not appearing at all due to a window/Space display conflict, the main window's timer freezing after a break ended on Windows, and the tray/dock icon not reopening the window on macOS</li>
+                <li>Fixed log files being silently deleted on rotation instead of archived, and added a way to export logs from the About page</li>
+                <li>Refactored the Settings page UI, and added an FAQ entry on why Reflectodoro is free plus an &ldquo;all releases&rdquo; link on the download page</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">

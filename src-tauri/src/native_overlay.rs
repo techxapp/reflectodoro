@@ -26,6 +26,7 @@ use tokio::sync::OnceCell;
 
 use crate::android_bridge::AndroidBridge;
 use crate::commands;
+use crate::crypto::FieldCipher;
 use crate::state::AppState;
 
 static POOL: OnceCell<SqlitePool> = OnceCell::const_new();
@@ -198,24 +199,57 @@ pub async fn refresh_coming_next_text(app: &AppHandle) {
         String::new()
     } else {
         match crate::grid::next_work_slot_start_iso(&current_slot_start) {
-            Some(next) => sqlx::query_scalar::<_, String>(
-                "SELECT text FROM reflection WHERE slot_start_at = ?",
-            )
-            .bind(&next)
-            .fetch_optional(pool(app).await)
-            .await
-            .ok()
-            .flatten()
-            .filter(|t| !is_skip_only(t))
-            .unwrap_or_default(),
+            Some(next) => {
+                let stored = sqlx::query_scalar::<_, String>(
+                    "SELECT text FROM reflection WHERE slot_start_at = ?",
+                )
+                .bind(&next)
+                .fetch_optional(pool(app).await)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+                // Decrypted before the skip/blank check, not after: that test
+                // reads the actual words ("skip"), which ciphertext would
+                // never match -- every stored value would look like real
+                // content worth previewing.
+                let plaintext = match FieldCipher::resolve(app).await {
+                    Ok(cipher) => decrypt_or_log(&cipher, &stored, "reflection.text").await,
+                    Err(e) => {
+                        log::error!("native_overlay: couldn't resolve the encryption key for the preview: {e}");
+                        String::new()
+                    }
+                };
+                if is_skip_only(&plaintext) {
+                    String::new()
+                } else {
+                    plaintext
+                }
+            }
             None => String::new(),
         }
     };
     *app.state::<AppState>().coming_next_text.lock().unwrap() = text;
 }
 
-async fn save_reflection(pool: &SqlitePool, covered_slots: &[String], text: &str) {
+/// `Err` means nothing was written. Encryption failing must not fall back to
+/// writing plaintext: the rest of the app (and the user, who upgraded into a
+/// build that says its entries are encrypted) would have no way to tell that
+/// this one row isn't. The text is still sitting in the overlay's textarea
+/// for a retry, and `handle_submit_reflection` deliberately does not mark the
+/// reflection as entered when this fails, so the overlay stays open rather
+/// than closing over a save that didn't happen.
+async fn save_reflection(
+    pool: &SqlitePool,
+    cipher: &FieldCipher,
+    covered_slots: &[String],
+    text: &str,
+) -> Result<(), String> {
     let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    // One encryption reused across every covered slot -- see db.ts's
+    // saveReflection for why that isn't nonce reuse.
+    let stored = cipher.encrypt(text).await?;
+    let text = stored.as_str();
     for slot in covered_slots {
         // Upserts per slot -- mirrors db.ts's saveReflection exactly (see its doc comment):
         // retrying a failed submit must not re-insert a slot that already succeeded before the
@@ -246,6 +280,7 @@ async fn save_reflection(pool: &SqlitePool, covered_slots: &[String], text: &str
             .await;
         }
     }
+    Ok(())
 }
 
 /// Mirrors db.ts's `localDateStamp()` exactly (local calendar date, zero
@@ -266,29 +301,56 @@ fn local_date_stamp() -> String {
     Local::now().format("%Y-%m-%d").to_string()
 }
 
-async fn load_task_list(pool: &SqlitePool, date: &str) -> String {
-    sqlx::query_scalar::<_, String>("SELECT content FROM daily_task_list WHERE date = ?")
+async fn load_task_list(pool: &SqlitePool, cipher: &FieldCipher, date: &str) -> String {
+    let stored = sqlx::query_scalar::<_, String>("SELECT content FROM daily_task_list WHERE date = ?")
         .bind(date)
         .fetch_optional(pool)
         .await
         .ok()
         .flatten()
-        .unwrap_or_default()
+        .unwrap_or_default();
+    decrypt_or_log(cipher, &stored, "daily_task_list.content").await
+}
+
+/// Shared read-side failure handling for the three encrypted columns. An
+/// empty string on failure matches what these callers already do for a failed
+/// query (`.ok().flatten().unwrap_or_default()`), but the error is logged
+/// rather than swallowed -- it's the difference between "the user wrote
+/// nothing today" and "this device can no longer read what they wrote", and
+/// only the log can tell those apart after the fact.
+async fn decrypt_or_log(cipher: &FieldCipher, stored: &str, what: &str) -> String {
+    match cipher.decrypt(stored).await {
+        Ok(plaintext) => plaintext,
+        Err(e) => {
+            log::error!("native_overlay: couldn't decrypt {what}: {e}");
+            String::new()
+        }
+    }
 }
 
 /// Mirrors db.ts's `saveTaskList` upsert exactly (see that function's own
 /// comment for why the `sourceLabel` broadcast below matters).
-async fn persist_task_list(pool: &SqlitePool, date: &str, content: &str) {
+///
+/// `Err` means nothing was written -- same reasoning as `save_reflection`:
+/// never silently degrade to writing plaintext.
+async fn persist_task_list(
+    pool: &SqlitePool,
+    cipher: &FieldCipher,
+    date: &str,
+    content: &str,
+) -> Result<(), String> {
     let updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let stored = cipher.encrypt(content).await?;
     let _ = sqlx::query(
         "INSERT INTO daily_task_list (date, content, updated_at) VALUES (?, ?, ?)
          ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
     )
     .bind(date)
-    .bind(content)
+    .bind(&stored)
     .bind(&updated_at)
     .execute(pool)
     .await;
+    Ok(())
 }
 
 /// Refreshes `AppState.task_list` from SQLite -- called right before the
@@ -307,7 +369,13 @@ async fn persist_task_list(pool: &SqlitePool, date: &str, content: &str) {
 /// `refresh_not_to_do_list_cache`.
 pub async fn refresh_task_list_cache(app: &AppHandle) {
     let date = local_date_stamp();
-    let content = load_task_list(pool(app).await, &date).await;
+    let content = match FieldCipher::resolve(app).await {
+        Ok(cipher) => load_task_list(pool(app).await, &cipher, &date).await,
+        Err(e) => {
+            log::error!("native_overlay: couldn't resolve the encryption key for the task list: {e}");
+            String::new()
+        }
+    };
     *app.state::<AppState>().task_list.lock().unwrap() = content;
     *app.state::<AppState>().task_list_date.lock().unwrap() = date;
 }
@@ -326,28 +394,37 @@ fn active_task_list_date(app: &AppHandle) -> String {
     }
 }
 
-async fn load_not_to_do_list(pool: &SqlitePool, date: &str) -> String {
-    sqlx::query_scalar::<_, String>("SELECT content FROM not_to_do_list WHERE date = ?")
+async fn load_not_to_do_list(pool: &SqlitePool, cipher: &FieldCipher, date: &str) -> String {
+    let stored = sqlx::query_scalar::<_, String>("SELECT content FROM not_to_do_list WHERE date = ?")
         .bind(date)
         .fetch_optional(pool)
         .await
         .ok()
         .flatten()
-        .unwrap_or_default()
+        .unwrap_or_default();
+    decrypt_or_log(cipher, &stored, "not_to_do_list.content").await
 }
 
-/// Mirrors db.ts's `saveNotToDoList` upsert exactly.
-async fn persist_not_to_do_list(pool: &SqlitePool, date: &str, content: &str) {
+/// Mirrors db.ts's `saveNotToDoList` upsert exactly. `Err` means nothing was
+/// written -- see `persist_task_list`.
+async fn persist_not_to_do_list(
+    pool: &SqlitePool,
+    cipher: &FieldCipher,
+    date: &str,
+    content: &str,
+) -> Result<(), String> {
     let updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let stored = cipher.encrypt(content).await?;
     let _ = sqlx::query(
         "INSERT INTO not_to_do_list (date, content, updated_at) VALUES (?, ?, ?)
          ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
     )
     .bind(date)
-    .bind(content)
+    .bind(&stored)
     .bind(&updated_at)
     .execute(pool)
     .await;
+    Ok(())
 }
 
 /// Mirrors `refresh_task_list_cache` above for `AppState.not_to_do_list` --
@@ -358,13 +435,29 @@ async fn persist_not_to_do_list(pool: &SqlitePool, date: &str, content: &str) {
 /// Android arm already calls them in that order.
 pub async fn refresh_not_to_do_list_cache(app: &AppHandle) {
     let date = active_task_list_date(app);
-    let content = load_not_to_do_list(pool(app).await, &date).await;
+    let content = match FieldCipher::resolve(app).await {
+        Ok(cipher) => load_not_to_do_list(pool(app).await, &cipher, &date).await,
+        Err(e) => {
+            log::error!("native_overlay: couldn't resolve the encryption key for the not-to-do list: {e}");
+            String::new()
+        }
+    };
     *app.state::<AppState>().not_to_do_list.lock().unwrap() = content;
 }
 
 async fn handle_save_task_list(app: AppHandle, content: String) {
     let date = active_task_list_date(&app);
-    persist_task_list(pool(&app).await, &date, &content).await;
+    let cipher = match FieldCipher::resolve(&app).await {
+        Ok(cipher) => cipher,
+        Err(e) => {
+            log::error!("native_overlay: task list not saved, couldn't resolve the encryption key: {e}");
+            return;
+        }
+    };
+    if let Err(e) = persist_task_list(pool(&app).await, &cipher, &date, &content).await {
+        log::error!("native_overlay: task list not saved: {e}");
+        return;
+    }
     *app.state::<AppState>().task_list.lock().unwrap() = content.clone();
     // Keeps the main Activity's own webview in sync in the (rare but
     // possible) case it's still mounted on a task-list-showing route behind
@@ -383,7 +476,17 @@ async fn handle_save_task_list(app: AppHandle, content: String) {
 
 async fn handle_save_not_to_do_list(app: AppHandle, content: String) {
     let date = active_task_list_date(&app);
-    persist_not_to_do_list(pool(&app).await, &date, &content).await;
+    let cipher = match FieldCipher::resolve(&app).await {
+        Ok(cipher) => cipher,
+        Err(e) => {
+            log::error!("native_overlay: not-to-do list not saved, couldn't resolve the encryption key: {e}");
+            return;
+        }
+    };
+    if let Err(e) = persist_not_to_do_list(pool(&app).await, &cipher, &date, &content).await {
+        log::error!("native_overlay: not-to-do list not saved: {e}");
+        return;
+    }
     *app.state::<AppState>().not_to_do_list.lock().unwrap() = content.clone();
     let _ = app.emit(
         "nottodolist://updated",
@@ -437,8 +540,21 @@ async fn handle_submit_reflection(app: AppHandle, text: String) {
     let reflection_slot_start = crate::grid::preceding_work_slot_start_iso(&current_slot_start)
         .unwrap_or(current_slot_start);
     let db = pool(&app).await;
+    let cipher = match FieldCipher::resolve(&app).await {
+        Ok(cipher) => cipher,
+        Err(e) => {
+            log::error!("native_overlay: couldn't resolve the encryption key, reflection not saved: {e}");
+            return;
+        }
+    };
     let covered = find_missed_slots(db, &reflection_slot_start).await;
-    save_reflection(db, &covered, &text).await;
+    if let Err(e) = save_reflection(db, &cipher, &covered, &text).await {
+        // Deliberately does NOT mark the reflection as entered: that's what
+        // unlocks the overlay, and unlocking over a save that didn't happen
+        // would lose the entry silently.
+        log::error!("native_overlay: reflection not saved: {e}");
+        return;
+    }
 
     let state = app.state::<AppState>();
     commands::mark_reflection_entered(app.clone(), state);

@@ -614,45 +614,66 @@ async fn update_last_sync_at(app: &AppHandle, peer_device_id: &str, sync_started
 async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<SyncPayload, String> {
     let pool = db::open_direct_pool(app).await?;
     let since = since.unwrap_or("");
+    // The three text columns are ciphertext at rest (crypto.rs), and the two
+    // devices in a pair hold entirely unrelated keys -- each one's key is
+    // local to it and never exchanged, by design. So the sending side
+    // decrypts here and the payload travels as plaintext *inside* the Noise
+    // session that already encrypts and authenticates the whole transfer
+    // (see this module's doc comment), and the receiving side re-encrypts
+    // under its own key via import.rs. Shipping raw ciphertext instead would
+    // be unreadable garbage on the far end.
+    let cipher = crate::crypto::FieldCipher::resolve(app).await?;
 
-    let reflection = sqlx::query_as::<_, (String, String, String, String)>(
+    let reflection_rows = sqlx::query_as::<_, (String, String, String, String)>(
         "SELECT created_at, slot_start_at, text, COALESCE(updated_at, created_at)
          FROM reflection WHERE COALESCE(updated_at, created_at) > ?",
     )
     .bind(since)
     .fetch_all(&pool)
     .await
-    .map_err(|e| e.to_string())?
-    .into_iter()
-    .map(|(created_at, slot_start_at, text, updated_at)| import::ImportReflectionRow {
-        created_at,
-        slot_start_at,
-        text,
-        updated_at: Some(updated_at),
-    })
-    .collect();
+    .map_err(|e| e.to_string())?;
+    let reflection_texts: Vec<String> = reflection_rows.iter().map(|(_, _, text, _)| text.clone()).collect();
+    let reflection_texts = cipher.decrypt_many(&reflection_texts).await?;
+    let reflection = reflection_rows
+        .into_iter()
+        .zip(reflection_texts)
+        .map(|((created_at, slot_start_at, _, updated_at), text)| import::ImportReflectionRow {
+            created_at,
+            slot_start_at,
+            text,
+            updated_at: Some(updated_at),
+        })
+        .collect();
 
-    let daily_task_list = sqlx::query_as::<_, (String, String, String)>(
+    let task_rows = sqlx::query_as::<_, (String, String, String)>(
         "SELECT date, content, updated_at FROM daily_task_list WHERE updated_at > ?",
     )
     .bind(since)
     .fetch_all(&pool)
     .await
-    .map_err(|e| e.to_string())?
-    .into_iter()
-    .map(|(date, content, updated_at)| import::ImportTaskListRow { date, content, updated_at })
-    .collect();
+    .map_err(|e| e.to_string())?;
+    let task_contents: Vec<String> = task_rows.iter().map(|(_, content, _)| content.clone()).collect();
+    let task_contents = cipher.decrypt_many(&task_contents).await?;
+    let daily_task_list = task_rows
+        .into_iter()
+        .zip(task_contents)
+        .map(|((date, _, updated_at), content)| import::ImportTaskListRow { date, content, updated_at })
+        .collect();
 
-    let not_to_do_list = sqlx::query_as::<_, (String, String, String)>(
+    let not_to_do_rows = sqlx::query_as::<_, (String, String, String)>(
         "SELECT date, content, updated_at FROM not_to_do_list WHERE updated_at > ?",
     )
     .bind(since)
     .fetch_all(&pool)
     .await
-    .map_err(|e| e.to_string())?
-    .into_iter()
-    .map(|(date, content, updated_at)| import::ImportNotToDoRow { date, content, updated_at })
-    .collect();
+    .map_err(|e| e.to_string())?;
+    let not_to_do_contents: Vec<String> = not_to_do_rows.iter().map(|(_, content, _)| content.clone()).collect();
+    let not_to_do_contents = cipher.decrypt_many(&not_to_do_contents).await?;
+    let not_to_do_list = not_to_do_rows
+        .into_iter()
+        .zip(not_to_do_contents)
+        .map(|((date, _, updated_at), content)| import::ImportNotToDoRow { date, content, updated_at })
+        .collect();
 
     let wellness_check = sqlx::query_as::<_, (String, i64, i64, i64, i64, String)>(
         "SELECT slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at
@@ -697,19 +718,26 @@ async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<Syn
 
 async fn apply_payload(app: &AppHandle, payload: &SyncPayload) -> Result<SyncResult, String> {
     let pool = db::open_direct_pool(app).await?;
+    // Incoming rows are plaintext (the peer decrypted them before sending --
+    // see build_delta_payload); import.rs re-encrypts them under *this*
+    // device's own key on the way into the database.
+    let cipher = crate::crypto::FieldCipher::resolve(app).await?;
     let mut tx = pool.begin().await.map_err(|e| format!("failed to start sync-apply transaction: {e}"))?;
 
-    let merged_slot_count = import::import_reflections(&mut tx, &payload.reflection, import::ImportMode::Merge).await?;
+    let merged_slot_count =
+        import::import_reflections(&mut tx, &cipher, &payload.reflection, import::ImportMode::Merge).await?;
     let wellness_check_duplicate_count =
         import::import_wellness_checks(&mut tx, &payload.wellness_check, import::ImportMode::Merge).await?;
 
     let daily_task_rows: Vec<(&str, &str, &str)> =
         payload.daily_task_list.iter().map(|r| (r.date.as_str(), r.content.as_str(), r.updated_at.as_str())).collect();
-    import::merge_import_day_rows(&mut tx, "daily_task_list", &daily_task_rows, import::ImportMode::Merge).await?;
+    import::merge_import_day_rows(&mut tx, &cipher, "daily_task_list", &daily_task_rows, import::ImportMode::Merge)
+        .await?;
 
     let not_to_do_rows: Vec<(&str, &str, &str)> =
         payload.not_to_do_list.iter().map(|r| (r.date.as_str(), r.content.as_str(), r.updated_at.as_str())).collect();
-    import::merge_import_day_rows(&mut tx, "not_to_do_list", &not_to_do_rows, import::ImportMode::Merge).await?;
+    import::merge_import_day_rows(&mut tx, &cipher, "not_to_do_list", &not_to_do_rows, import::ImportMode::Merge)
+        .await?;
 
     let screen_time_duplicate_count = import::import_screen_time_sessions(&mut tx, &payload.screen_time_session).await?;
 

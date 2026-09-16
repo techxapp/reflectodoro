@@ -38,6 +38,44 @@ function getDb() {
   return dbPromise;
 }
 
+// --- Encryption at rest -------------------------------------------------
+//
+// `reflection.text`, `daily_task_list.content` and `not_to_do_list.content`
+// are stored encrypted (see src-tauri/src/crypto.rs for the format, key
+// storage and threat model). Every write through this module encrypts on the
+// way in and every read decrypts on the way out, so the rest of the app --
+// and every Svelte component -- keeps working in plaintext and never sees a
+// ciphertext blob.
+//
+// All key material and cipher work stays in Rust (and, on Android, inside the
+// OS Keystore): the webview only ever hands plaintext across and gets
+// ciphertext back, never a key.
+//
+// Batched deliberately. The read side is list-shaped (a day's Entries view
+// decrypts up to 48 rows, an export decrypts the whole history) and each
+// `invoke` is its own IPC round trip, so doing these one value at a time
+// would turn one call into dozens.
+
+async function encryptFields(values: string[]): Promise<string[]> {
+  if (values.length === 0) return [];
+  return invoke<string[]>("encrypt_fields", { values });
+}
+
+async function decryptFields(values: string[]): Promise<string[]> {
+  if (values.length === 0) return [];
+  return invoke<string[]>("decrypt_fields", { values });
+}
+
+async function encryptField(value: string): Promise<string> {
+  return (await encryptFields([value]))[0];
+}
+
+/** Values stored before the one-time migration ran come back unchanged
+ * rather than throwing -- see crypto.rs's `enc1:` marker passthrough. */
+async function decryptField(value: string): Promise<string> {
+  return (await decryptFields([value]))[0];
+}
+
 export interface ReflectionRow {
   id: number;
   created_at: string;
@@ -126,7 +164,8 @@ export async function getReflectionTextForSlot(slotStartIso: string): Promise<st
     `SELECT text FROM reflection WHERE slot_start_at = $1 LIMIT 1`,
     [slotStartIso],
   );
-  return rows[0]?.text ?? null;
+  if (rows[0]?.text === undefined) return null;
+  return decryptField(rows[0].text);
 }
 
 /**
@@ -217,6 +256,13 @@ export async function findMissedSlots(currentSlotIso: string): Promise<string[]>
 export async function saveReflection(coveredSlots: string[], text: string): Promise<void> {
   const db = await getDb();
   const createdAt = new Date().toISOString();
+  // Encrypted once and the same ciphertext written to every covered slot,
+  // rather than encrypting per slot. This is not nonce reuse: one nonce
+  // encrypted one plaintext, and copying that result into several rows never
+  // pairs that nonce with *different* plaintext (the property that actually
+  // matters -- see crypto.rs). All it reveals is that these rows share text,
+  // which the merge already makes explicit anyway.
+  const stored = await encryptField(text);
   for (const slot of coveredSlots) {
     const existing = await db.select<{ id: number }[]>(
       `SELECT id FROM reflection WHERE slot_start_at = $1`,
@@ -224,14 +270,14 @@ export async function saveReflection(coveredSlots: string[], text: string): Prom
     );
     if (existing.length > 0) {
       await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE slot_start_at = $3`, [
-        text,
+        stored,
         createdAt,
         slot,
       ]);
     } else {
       await db.execute(
         `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
-        [createdAt, slot, text, createdAt],
+        [createdAt, slot, stored, createdAt],
       );
     }
   }
@@ -255,7 +301,8 @@ export async function getLastReflectionText(
     `SELECT text FROM reflection WHERE slot_start_at < $1 ORDER BY slot_start_at DESC LIMIT 1`,
     [beforeSlotStartIso],
   );
-  return rows[0]?.text ?? null;
+  if (rows[0]?.text === undefined) return null;
+  return decryptField(rows[0].text);
 }
 
 export interface WellnessCheckValues {
@@ -369,12 +416,18 @@ export async function getWellnessSummaryForDate(dateStamp: string): Promise<Well
  */
 export async function getReflectionsForDate(dateStamp: string): Promise<ReflectionRow[]> {
   const db = await getDb();
-  return db.select<ReflectionRow[]>(
+  const rows = await db.select<ReflectionRow[]>(
     `SELECT id, created_at, slot_start_at, text FROM reflection
      WHERE date(slot_start_at, 'localtime') = $1
      ORDER BY slot_start_at ASC`,
     [dateStamp],
   );
+  // One batched decrypt for the whole day (up to 48 rows) rather than one
+  // IPC round trip per row. `clusterReflectionRows` compares these texts to
+  // group consecutive slots, so it has to run on the decrypted values --
+  // ciphertext of identical text differs every time by design.
+  const texts = await decryptFields(rows.map((r) => r.text));
+  return rows.map((row, i) => ({ ...row, text: texts[i] }));
 }
 
 const SLOT_INTERVAL_MS = 30 * 60 * 1000;
@@ -412,7 +465,7 @@ export function clusterReflectionRows(rows: ReflectionRow[]): ReflectionCluster[
 export async function updateReflectionText(id: number, text: string): Promise<void> {
   const db = await getDb();
   await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE id = $3`, [
-    text,
+    await encryptField(text),
     new Date().toISOString(),
     id,
   ]);
@@ -524,6 +577,9 @@ export async function bulkUpsertReflections(
 
   const db = await getDb();
   const createdAt = new Date().toISOString();
+  // One encryption reused across every slot in the range, same reasoning as
+  // saveReflection's.
+  const stored = await encryptField(trimmed);
   for (const slot of slots) {
     const existing = await db.select<{ id: number }[]>(
       `SELECT id FROM reflection WHERE slot_start_at = $1`,
@@ -533,14 +589,14 @@ export async function bulkUpsertReflections(
       // updated_at bump: see updateReflectionText's doc comment -- same P2P
       // sync delta-cursor reasoning applies to this upsert's update branch.
       await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE slot_start_at = $3`, [
-        trimmed,
+        stored,
         createdAt,
         slot,
       ]);
     } else {
       await db.execute(
         `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
-        [createdAt, slot, trimmed, createdAt],
+        [createdAt, slot, stored, createdAt],
       );
     }
   }
@@ -553,7 +609,8 @@ export async function getTaskList(dateStamp: string): Promise<string> {
     `SELECT content FROM daily_task_list WHERE date = $1`,
     [dateStamp],
   );
-  return rows[0]?.content ?? "";
+  if (rows[0]?.content === undefined) return "";
+  return decryptField(rows[0].content);
 }
 
 export interface TaskListUpdate {
@@ -567,8 +624,12 @@ export async function saveTaskList(dateStamp: string, content: string): Promise<
   await db.execute(
     `INSERT INTO daily_task_list (date, content, updated_at) VALUES ($1, $2, $3)
      ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
-    [dateStamp, content, new Date().toISOString()],
+    [dateStamp, await encryptField(content), new Date().toISOString()],
   );
+  // The broadcast below deliberately carries plaintext, unlike the row just
+  // written: it's an in-memory hand-off between this app's own windows, and
+  // every receiver would only have to decrypt it again to use it.
+  //
   // Broadcast so the Timer/overlay/catch-up windows (whichever are open)
   // pick up the edit live instead of showing stale content until their next
   // remount. Tagged with the sending window's label so a window doesn't
@@ -602,7 +663,8 @@ export async function getNotToDoList(dateStamp: string): Promise<string> {
     `SELECT content FROM not_to_do_list WHERE date = $1`,
     [dateStamp],
   );
-  return rows[0]?.content ?? "";
+  if (rows[0]?.content === undefined) return "";
+  return decryptField(rows[0].content);
 }
 
 export interface NotToDoUpdate {
@@ -616,8 +678,9 @@ export async function saveNotToDoList(dateStamp: string, content: string): Promi
   await db.execute(
     `INSERT INTO not_to_do_list (date, content, updated_at) VALUES ($1, $2, $3)
      ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
-    [dateStamp, content, new Date().toISOString()],
+    [dateStamp, await encryptField(content), new Date().toISOString()],
   );
+  // Plaintext broadcast, encrypted row -- see saveTaskList.
   const sourceLabel = getCurrentWindow().label;
   await emit("nottodolist://updated", { date: dateStamp, content, sourceLabel } satisfies NotToDoUpdate);
 }
@@ -1385,11 +1448,29 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
       `SELECT id, app_id, display_name, platform, device_name, started_at, ended_at FROM screen_time_session`,
     ),
   ]);
+  // The export file is deliberately plaintext (a deliberate, documented
+  // decision -- see CLAUDE.md's "Encryption at rest"): it's a portability
+  // format meant to be re-importable on another device, which holds an
+  // entirely unrelated key, so shipping ciphertext would make it unreadable
+  // everywhere including here. Encryption protects the live pomodoro.db, not
+  // a file the user explicitly chose to write somewhere of their choosing.
+  const [reflectionTexts, taskContents, notToDoContents] = await Promise.all([
+    decryptFields(reflection.map((r) => r.text)),
+    decryptFields(daily_task_list.map((r) => r.content)),
+    decryptFields(not_to_do_list.map((r) => r.content)),
+  ]);
   return {
     app: "reflectodoro",
     export_format_version: EXPORT_FORMAT_VERSION,
     exported_at: new Date().toISOString(),
-    data: { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check, screen_time_session },
+    data: {
+      reflection: reflection.map((row, i) => ({ ...row, text: reflectionTexts[i] })),
+      daily_task_list: daily_task_list.map((row, i) => ({ ...row, content: taskContents[i] })),
+      not_to_do_list: not_to_do_list.map((row, i) => ({ ...row, content: notToDoContents[i] })),
+      app_setting,
+      wellness_check,
+      screen_time_session,
+    },
   };
 }
 

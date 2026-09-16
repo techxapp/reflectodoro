@@ -250,6 +250,57 @@ impl<R: Runtime> AndroidBridge<R> {
     pub fn query_usage_events(&self) -> Result<Value, PluginInvokeError> {
         self.0.run_mobile_plugin("queryUsageEvents", ())
     }
+
+    /// Encryption at rest, Android's half (see crypto.rs). Unlike desktop --
+    /// where Rust holds the key itself and does the cipher work -- an Android
+    /// Keystore key is non-exportable by design, so the AES-256-GCM operation
+    /// happens inside Kotlin against a key Rust never sees. Batched because
+    /// every call here is a JNI hop plus a Keystore `Cipher` init.
+    ///
+    /// Both directions take and return `{"values": [...]}`, positionally
+    /// matched to the input.
+    pub fn encrypt_fields(&self, values: &[String]) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("encryptFields", serde_json::json!({ "values": values }))
+    }
+
+    pub fn decrypt_fields(&self, values: &[String]) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("decryptFields", serde_json::json!({ "values": values }))
+    }
+}
+
+/// `crypto::FieldCipher`'s Android arm. Kept here rather than in crypto.rs so
+/// the `AndroidBridge` state lookup and the `{"values": [...]}` response
+/// shape stay next to every other bridge call's.
+fn field_op(
+    app: &tauri::AppHandle,
+    values: &[String],
+    op: fn(&AndroidBridge<tauri::Wry>, &[String]) -> Result<Value, PluginInvokeError>,
+    label: &str,
+) -> Result<Vec<String>, String> {
+    let bridge = app.state::<AndroidBridge<tauri::Wry>>();
+    let response = op(&bridge, values).map_err(|e| format!("{label} bridge call failed: {e:?}"))?;
+    let returned: Vec<String> = response
+        .get("values")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| format!("{label} returned no values array"))?
+        .iter()
+        .map(|v| v.as_str().unwrap_or_default().to_string())
+        .collect();
+    // A short response would otherwise silently shift every later value onto
+    // the wrong row -- for encryption that means writing one row's content
+    // into another's.
+    if returned.len() != values.len() {
+        return Err(format!("{label} returned {} values for {} inputs", returned.len(), values.len()));
+    }
+    Ok(returned)
+}
+
+pub fn encrypt_fields(app: &tauri::AppHandle, values: &[String]) -> Result<Vec<String>, String> {
+    field_op(app, values, AndroidBridge::encrypt_fields, "encryptFields")
+}
+
+pub fn decrypt_fields(app: &tauri::AppHandle, values: &[String]) -> Result<Vec<String>, String> {
+    field_op(app, values, AndroidBridge::decrypt_fields, "decryptFields")
 }
 
 pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {

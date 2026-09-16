@@ -72,6 +72,25 @@ sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
 # (native-tls) in favor of rustls, avoiding a second TLS stack alongside
 # whatever else in the dependency tree already pulls one in.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# crypto.rs: field-level encryption at rest for the three user-typed text
+# columns (see CLAUDE.md's "Encryption at rest"). XChaCha20-Poly1305 rather
+# than AES-256-GCM specifically for its 192-bit nonce: large enough to
+# generate fresh at random on every single call with no realistic collision
+# risk at any volume this app could produce, and therefore no shared counter
+# or coordination needed between the several independent call sites that
+# encrypt (the Tauri command db.ts invokes, import.rs's merge-then-rewrite,
+# and native_overlay.rs on Android). A nonce derived from another column
+# would be actively wrong here -- reflection edits rewrite `text` for the
+# same id/slot_start_at, so a derived nonce would repeat across different
+# plaintexts under one key, which is the catastrophic failure mode for both
+# GCM and ChaCha20-Poly1305.
+chacha20poly1305 = "0.10"
+# Ciphertext is stored as base64 in the existing TEXT columns: it has to
+# cross Tauri's JSON command IPC (UTF-8 only -- raw ciphertext bytes are not
+# valid UTF-8) and tauri-plugin-sql's string bind parameters either way, and
+# base64 is the most compact text-safe encoding that satisfies both without
+# a BLOB-column schema change.
+base64 = "0.22"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
@@ -107,6 +126,14 @@ windows = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Media_Control",
 ] }
+# crypto.rs's at-rest key store. keyring 3 has NO default features -- the
+# backend must be named explicitly per platform, and a build that names none
+# silently falls back to an in-memory mock store (i.e. nothing persists),
+# which here would mean a brand-new key every launch and every previously
+# encrypted reflection becoming permanently unreadable. crypto.rs therefore
+# verifies a freshly stored key can actually be read back before trusting
+# the store, and falls back to its own key file if it can't.
+keyring = { version = "3", features = ["windows-native"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # "exception" feature: lets macos_overlay.rs catch an Objective-C exception
@@ -117,10 +144,28 @@ objc2 = { version = "0.6.4", features = ["exception"] }
 objc2-app-kit = "0.3.2"
 objc2-core-graphics = "0.3.2"
 objc2-foundation = "0.3.2"
+# See the Windows block above for why the backend feature is explicit. macOS
+# Keychain is the one desktop store with real per-app access control -- but
+# that ACL is keyed to code identity, and this build is unsigned/ad-hoc
+# (see CLAUDE.md), so the grant can be dropped by a rebuild exactly the way
+# the media-key TCC grant already is. crypto.rs's file fallback is what
+# keeps that from becoming a hard failure.
+keyring = { version = "3", features = ["apple-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris = "2"
 x11rb = "0.13"
+# See the Windows block above for why the backend feature is explicit.
+# sync- rather than async-secret-service: keyring's own access is synchronous
+# either way, so the async variant would only add an async runtime for
+# nothing. crypto-rust adds encrypted D-Bus transport for the secret without
+# dragging in OpenSSL (crypto-openssl is the other, mutually exclusive
+# option). Needs libdbus-1-dev at build time -- added to release.yml's Linux
+# dependency install for this. A session with no Secret Service daemon at all
+# (headless/minimal installs) is expected and handled: crypto.rs falls back
+# to its own key file there, same spirit as this app's tray icon needing a
+# desktop-environment extension it can't install itself.
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 chrono-tz = "0.10.4"

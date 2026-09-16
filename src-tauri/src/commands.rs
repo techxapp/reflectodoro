@@ -10,6 +10,7 @@ use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::breakit;
+use crate::crypto;
 use crate::overlay;
 use crate::screen_time;
 use crate::state::{AppState, OverlayState};
@@ -37,6 +38,36 @@ pub fn is_dev_mode(state: State<AppState>) -> bool {
 #[tauri::command]
 pub fn current_os() -> &'static str {
     std::env::consts::OS
+}
+
+/// The frontend's half of encryption at rest (see crypto.rs): db.ts encrypts
+/// every value it's about to write to `reflection.text`/
+/// `daily_task_list.content`/`not_to_do_list.content` and decrypts every one
+/// it reads back, keeping all key material and cipher work in Rust (and, on
+/// Android, inside the Keystore) rather than exposing either to the webview.
+///
+/// Batched rather than one value per call because the read side is inherently
+/// list-shaped -- a day's Entries view decrypts up to 48 rows, and an export
+/// decrypts the entire history -- and each `invoke` is its own IPC round trip.
+/// Resolving the cipher once per batch also means one credential-store lookup
+/// (a D-Bus round trip on Linux) instead of one per row.
+#[tauri::command]
+pub async fn encrypt_fields(app: AppHandle, values: Vec<String>) -> Result<Vec<String>, String> {
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+    crypto::FieldCipher::resolve(&app).await?.encrypt_many(&values).await
+}
+
+/// Counterpart to `encrypt_fields`. Values without the `enc1:` marker come
+/// back untouched, so a database the one-time migration hasn't finished (or
+/// hasn't started) still reads correctly -- see crypto.rs.
+#[tauri::command]
+pub async fn decrypt_fields(app: AppHandle, values: Vec<String>) -> Result<Vec<String>, String> {
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+    crypto::FieldCipher::resolve(&app).await?.decrypt_many(&values).await
 }
 
 /// Pushes the breakit challenge length/charset (loaded by the frontend from
