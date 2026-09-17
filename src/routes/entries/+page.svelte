@@ -89,6 +89,9 @@
   let presetError = $state("");
   let applyAllBusy = $state(false);
   let applyAllError = $state("");
+  let selectedPresetIds = $state<Set<string>>(new Set());
+  let applySelectedBusy = $state(false);
+  let applySelectedError = $state("");
 
   // --- "View all" full-day view ---
   let viewAllOpen = $state(false);
@@ -303,6 +306,18 @@
   async function loadPresets() {
     presets = await getBulkEditPresets();
     presetsLoaded = true;
+    // Drop any selected id that no longer exists (most commonly: it was just
+    // deleted) -- otherwise "Apply selected" could silently keep counting a
+    // preset that's no longer in the list.
+    const validIds = new Set(presets.map((p) => p.id));
+    selectedPresetIds = new Set([...selectedPresetIds].filter((id) => validIds.has(id)));
+  }
+
+  function togglePresetSelected(id: string) {
+    const next = new Set(selectedPresetIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selectedPresetIds = next;
   }
 
   function openBulkEdit() {
@@ -328,14 +343,22 @@
     await loadPresets();
   }
 
-  /** Writes every saved preset's range/text straight to the DB via
+  /** Writes each given preset's range/text straight to the DB via
    * bulkUpsertReflections, one preset at a time (sequential, not
    * Promise.all, to avoid concurrent writes racing on the same connection) --
    * bypasses the single-preset "fill the fields, Preview, Apply" flow
    * entirely, since there's only one set of fields to fill and this is
-   * meant to populate a whole day's recurring routine in one click.
-   * Overlapping preset ranges overwrite each other in preset order, same as
-   * running the single-preset flow for each one in sequence would. */
+   * meant to populate several ranges in one click. Overlapping preset ranges
+   * overwrite each other in list order, same as running the single-preset
+   * flow for each one in sequence would. Shared by "Apply all" and "Apply
+   * selected" below -- they differ only in which presets they pass in. */
+  async function applyPresetsToDay(toApply: BulkEditPreset[]) {
+    for (const preset of toApply) {
+      await bulkUpsertReflections(selectedStamp, preset.startTime, preset.endTime, preset.text);
+    }
+    await load();
+  }
+
   async function applyAllPresets() {
     if (presets.length === 0) return;
     const dayLabel = selected.toLocaleDateString(undefined, { month: "long", day: "numeric" });
@@ -347,14 +370,38 @@
     applyAllBusy = true;
     applyAllError = "";
     try {
-      for (const preset of presets) {
-        await bulkUpsertReflections(selectedStamp, preset.startTime, preset.endTime, preset.text);
-      }
-      await load();
+      await applyPresetsToDay(presets);
     } catch (e) {
       applyAllError = e instanceof Error ? e.message : String(e);
     } finally {
       applyAllBusy = false;
+    }
+  }
+
+  /** Same idea as applyAllPresets, restricted to whichever presets the user
+   * has checked via each chip's checkbox -- lets the user apply a subset
+   * (e.g. just "Sleep" and "Gym", skipping "Lunch" today) in one click
+   * instead of either clicking each chip individually (fill-then-preview,
+   * one at a time) or running "Apply all" and manually fixing up the ones
+   * they didn't want. */
+  async function applySelectedPresets() {
+    const toApply = presets.filter((p) => selectedPresetIds.has(p.id));
+    if (toApply.length === 0) return;
+    const dayLabel = selected.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+    const confirmed = confirm(
+      `Apply ${toApply.length} selected preset${toApply.length === 1 ? "" : "s"} to ${dayLabel}? Existing reflections in overlapping time ranges will be overwritten.`,
+    );
+    if (!confirmed) return;
+
+    applySelectedBusy = true;
+    applySelectedError = "";
+    try {
+      await applyPresetsToDay(toApply);
+      selectedPresetIds = new Set();
+    } catch (e) {
+      applySelectedError = e instanceof Error ? e.message : String(e);
+    } finally {
+      applySelectedBusy = false;
     }
   }
 
@@ -738,6 +785,14 @@
                 <div class="preset-chips">
                   {#each presets as preset (preset.id)}
                     <span class="preset-chip">
+                      <input
+                        type="checkbox"
+                        class="preset-chip-checkbox"
+                        checked={selectedPresetIds.has(preset.id)}
+                        onchange={() => togglePresetSelected(preset.id)}
+                        aria-label={`Select preset "${preset.name}" for Apply selected`}
+                        title="Select for Apply selected"
+                      />
                       <button type="button" class="preset-chip-apply" onclick={() => applyPreset(preset)}>
                         {preset.name}
                       </button>
@@ -756,17 +811,31 @@
                   {/each}
                 </div>
                 {#if presets.length > 1}
-                  <button
-                    type="button"
-                    class="preset-apply-all"
-                    disabled={applyAllBusy}
-                    onclick={applyAllPresets}
-                  >
-                    {applyAllBusy ? "Applying all…" : `Apply all ${presets.length} presets`}
-                  </button>
+                  <div class="preset-apply-actions">
+                    <button
+                      type="button"
+                      class="preset-apply-all"
+                      disabled={applyAllBusy}
+                      onclick={applyAllPresets}
+                    >
+                      {applyAllBusy ? "Applying all…" : `Apply all ${presets.length} presets`}
+                    </button>
+                    <button
+                      type="button"
+                      class="preset-apply-all"
+                      disabled={applySelectedBusy || selectedPresetIds.size === 0}
+                      title={selectedPresetIds.size === 0 ? "Check one or more presets above first" : ""}
+                      onclick={applySelectedPresets}
+                    >
+                      {applySelectedBusy ? "Applying…" : `Apply selected (${selectedPresetIds.size})`}
+                    </button>
+                  </div>
                 {/if}
                 {#if applyAllError}
                   <p class="bulk-error">{applyAllError}</p>
+                {/if}
+                {#if applySelectedError}
+                  <p class="bulk-error">{applySelectedError}</p>
                 {/if}
               {/if}
 
@@ -1275,12 +1344,17 @@
     overflow: hidden;
   }
 
+  .preset-chip-checkbox {
+    margin: 0 0 0 12px;
+    accent-color: var(--accent);
+  }
+
   .preset-chip-apply {
     background: none;
     border: none;
     color: var(--accent);
     font-size: 12px;
-    padding: 6px 4px 6px 12px;
+    padding: 6px 4px 6px 8px;
   }
 
   .preset-chip-delete {
@@ -1298,15 +1372,20 @@
     opacity: 1;
   }
 
+  .preset-apply-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
   .preset-apply-all {
-    display: block;
     background: var(--accent);
     color: white;
     border: none;
     padding: 6px 12px;
     border-radius: 8px;
     font-size: 13px;
-    margin-bottom: 8px;
   }
 
   .preset-apply-all:disabled {
