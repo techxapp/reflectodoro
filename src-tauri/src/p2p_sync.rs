@@ -67,11 +67,11 @@ use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snow::params::NoiseParams;
 use spake2::{Ed25519Group, Identity, Password, Spake2};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -209,6 +209,10 @@ pub struct PairedDeviceInfo {
     /// Populated by `get_paired_devices`/`browse_online_paired_devices` from
     /// a fresh mDNS browse -- not stored, always a live snapshot.
     pub online: bool,
+    /// Per-device opt-in for `maybe_auto_sync`, local to this side's own
+    /// copy of the pairing record -- never part of the sync payload. See
+    /// `set_device_auto_sync_enabled`.
+    pub auto_sync_enabled: bool,
 }
 
 // --- Small helpers --------------------------------------------------------
@@ -1131,6 +1135,7 @@ async fn confirm_pairing_inner(app: &AppHandle, device_id: &str, pin: &str) -> R
         paired_at,
         last_sync_at: None,
         online: true,
+        auto_sync_enabled: false,
     })
 }
 
@@ -1139,8 +1144,8 @@ async fn confirm_pairing_inner(app: &AppHandle, device_id: &str, pin: &str) -> R
 #[tauri::command]
 pub async fn get_paired_devices(app: AppHandle) -> Result<Vec<PairedDeviceInfo>, String> {
     let pool = db::open_direct_pool(&app).await?;
-    let rows = sqlx::query_as::<_, (String, String, String, String, Option<String>)>(
-        "SELECT device_id, name, platform, paired_at, last_sync_at FROM paired_device ORDER BY name COLLATE NOCASE",
+    let rows = sqlx::query_as::<_, (String, String, String, String, Option<String>, bool)>(
+        "SELECT device_id, name, platform, paired_at, last_sync_at, auto_sync_enabled FROM paired_device ORDER BY name COLLATE NOCASE",
     )
     .fetch_all(&pool)
     .await
@@ -1155,11 +1160,30 @@ pub async fn get_paired_devices(app: AppHandle) -> Result<Vec<PairedDeviceInfo>,
 
     Ok(rows
         .into_iter()
-        .map(|(device_id, name, platform, paired_at, last_sync_at)| {
+        .map(|(device_id, name, platform, paired_at, last_sync_at, auto_sync_enabled)| {
             let online = online_ids.contains(&device_id);
-            PairedDeviceInfo { device_id, name, platform, paired_at, last_sync_at, online }
+            PairedDeviceInfo { device_id, name, platform, paired_at, last_sync_at, online, auto_sync_enabled }
         })
         .collect())
+}
+
+/// Flips a paired device's opt-in for `maybe_auto_sync`. Local-only: never
+/// touches the peer, never part of the sync payload (see
+/// `PairedDeviceInfo::auto_sync_enabled`'s doc comment).
+#[tauri::command]
+pub async fn set_device_auto_sync_enabled(
+    app: AppHandle,
+    device_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let pool = db::open_direct_pool(&app).await?;
+    sqlx::query("UPDATE paired_device SET auto_sync_enabled = ? WHERE device_id = ?")
+        .bind(enabled)
+        .bind(&device_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Just the currently-online subset -- what the "Import from device"
@@ -1255,6 +1279,80 @@ fn sync_payload_row_count(payload: &SyncPayload) -> usize {
         + payload.wellness_check.len()
         + payload.screen_time_session.len()
         + payload.bulk_edit_preset.len()
+}
+
+/// Minimum time between automatic syncs with the same device. Guards
+/// against `maybe_auto_sync` firing twice in quick succession when
+/// lib.rs's `run_scheduler` resets `last_phase = None` and re-evaluates
+/// the transition branch within seconds of a previous evaluation (a
+/// snooze expiring mid-Break, or the suspend/hibernate-gap recovery path)
+/// -- not sized against the normal ~25-30 minute break cadence, which
+/// wouldn't double-fire on its own.
+fn min_auto_sync_gap() -> chrono::Duration {
+    chrono::Duration::minutes(10)
+}
+
+/// Attempts an automatic sync with every online, opted-in paired device,
+/// gated behind a cheap local existence check so a process with nothing
+/// opted in never performs the mDNS browse below (no network activity at
+/// all, just a local SQLite read) -- see CLAUDE.md's "P2P LAN sync" for the
+/// full battery-cost reasoning. Called fire-and-forget from two wake-ups
+/// the app already incurs regardless of this feature: `run_scheduler`'s
+/// break-boundary phase transition (lib.rs) and the main window regaining
+/// focus (`attempt_auto_sync` below) -- never from a dedicated timer, wake
+/// lock, or foreground service of its own.
+pub async fn maybe_auto_sync(app: AppHandle) {
+    let pool = match db::open_direct_pool(&app).await {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("p2p_sync: maybe_auto_sync: pool open failed: {e}");
+            return;
+        }
+    };
+    let any_enabled: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM paired_device WHERE auto_sync_enabled = 1)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(0);
+    if any_enabled == 0 {
+        return;
+    }
+
+    let devices = match get_paired_devices(app.clone()).await {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("p2p_sync: maybe_auto_sync: list failed: {e}");
+            return;
+        }
+    };
+    let now = Utc::now();
+    let gap = min_auto_sync_gap();
+    for device in devices.into_iter().filter(|d| d.online && d.auto_sync_enabled) {
+        let due = device
+            .last_sync_at
+            .as_deref()
+            .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+            .map_or(true, |last| now - last > gap);
+        if !due {
+            continue;
+        }
+        // sync_with_device already logs its own entry/outcome.
+        let _ = sync_with_device(app.clone(), device.device_id.clone()).await;
+        if let Err(e) = app.emit("p2p-sync://auto-completed", &device.device_id) {
+            log::warn!("p2p_sync: maybe_auto_sync: failed to emit auto-completed event: {e}");
+        }
+    }
+}
+
+/// Thin command wrapper so the frontend can trigger the same check on
+/// window focus (`+page.svelte`'s existing `onWindowFocus`) without waiting
+/// for the next break boundary -- e.g. a desktop user who closes the app
+/// before ever reaching a break would otherwise get zero auto-syncs that
+/// day. Fire-and-forget, same as the break-boundary trigger.
+#[tauri::command]
+pub async fn attempt_auto_sync(app: AppHandle) {
+    tauri::async_runtime::spawn(maybe_auto_sync(app));
 }
 
 #[cfg(test)]

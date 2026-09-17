@@ -351,6 +351,19 @@ async fn run_scheduler(app: AppHandle) {
                 slot.phase,
                 slot.start_iso()
             );
+            // Piggybacks P2P auto-sync (see p2p_sync.rs's maybe_auto_sync and
+            // CLAUDE.md's "P2P LAN sync") on this break-boundary wake, which
+            // the app already incurs regardless of this feature -- no new
+            // timer, wake lock, or foreground service. Fired outside the
+            // POMODORO_ENABLED gate below so turning Pomodoro mode off
+            // doesn't also silently disable auto-sync; fire-and-forget so a
+            // slow/stuck sync attempt can never delay the overlay opening.
+            if slot.phase == Phase::Break {
+                let auto_sync_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    p2p_sync::maybe_auto_sync(auto_sync_handle).await;
+                });
+            }
             if POMODORO_ENABLED.load(Ordering::SeqCst) {
                 match slot.phase {
                     Phase::Break => {
@@ -789,6 +802,8 @@ pub fn run() {
             p2p_sync::forget_paired_device,
             p2p_sync::sync_with_device,
             p2p_sync::resync_advertised_name,
+            p2p_sync::set_device_auto_sync_enabled,
+            p2p_sync::attempt_auto_sync,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

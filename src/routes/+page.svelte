@@ -23,6 +23,11 @@
     listenForMediaToggleRecorded,
     loadAndSyncScreenTimeTrackingSetting,
     ensureDeviceName,
+    getPairedDevices,
+    syncWithDevice,
+    setDeviceAutoSyncEnabled,
+    attemptAutoSync,
+    type PairedDeviceInfo,
   } from "$lib/db";
 
   type SnoozeInfo = { resume_at: string; minutes: number };
@@ -43,11 +48,18 @@
   let mediaKeyPermissionGranted = $state(true);
   let taskListContent = $state("");
   let notToDoContent = $state("");
+  let pairedDevices = $state<PairedDeviceInfo[]>([]);
+  let pairedDevicesLoaded = $state(false);
+  let syncingDeviceId = $state<string | null>(null);
+  let syncStatus = $state<"idle" | "success" | "error">("idle");
+  let syncMessage = $state("");
+  let autoSyncBusyId = $state<string | null>(null);
   let unlisten: UnlistenFn | null = null;
   let unlistenSnooze: UnlistenFn | null = null;
   let unlistenTasks: UnlistenFn | null = null;
   let unlistenNotToDo: UnlistenFn | null = null;
   let unlistenMediaToggle: UnlistenFn | null = null;
+  let unlistenAutoSyncCompleted: UnlistenFn | null = null;
   let tickInterval: ReturnType<typeof setInterval> | null = null;
   let taskSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let notToDoSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -126,9 +138,75 @@
     await refreshMediaKeyPermission();
   }
 
+  // Same fallback as settings/+page.svelte's deviceLabel -- device_name is
+  // blank by default on platforms without hostname resolution (Android), so
+  // fall back to a short device_id prefix rather than the full 32 characters.
+  function deviceLabel(name: string, deviceId: string): string {
+    return name || deviceId.slice(0, 8);
+  }
+
+  function formatLastSync(iso: string | null): string {
+    if (!iso) return "Never";
+    return new Date(iso).toLocaleString();
+  }
+
+  async function loadPairedDevices() {
+    try {
+      pairedDevices = await getPairedDevices();
+    } catch {
+      // Best-effort, same reasoning as settings/+page.svelte's own
+      // loadPairedDevices -- leave the previous snapshot in place.
+    } finally {
+      pairedDevicesLoaded = true;
+    }
+  }
+
+  async function runDeviceSync(device: PairedDeviceInfo) {
+    syncingDeviceId = device.deviceId;
+    syncStatus = "idle";
+    const label = deviceLabel(device.name, device.deviceId);
+    try {
+      const result = await syncWithDevice(device.deviceId);
+      const receivedTotal =
+        result.reflectionCount +
+        result.taskListCount +
+        result.notToDoListCount +
+        result.wellnessCheckCount +
+        result.screenTimeSessionCount +
+        result.bulkEditPresetCount;
+      const mergedClause =
+        result.mergedSlotCount > 0
+          ? ` ${result.mergedSlotCount} reflection slot${result.mergedSlotCount === 1 ? "" : "s"} merged with existing entries.`
+          : "";
+      syncMessage = `Sent ${result.sentCount} row${result.sentCount === 1 ? "" : "s"}, received ${receivedTotal} row${receivedTotal === 1 ? "" : "s"} with ${label}.${mergedClause}`;
+      syncStatus = "success";
+      await loadPairedDevices();
+    } catch (e) {
+      syncMessage = e instanceof Error ? e.message : String(e);
+      syncStatus = "error";
+    } finally {
+      syncingDeviceId = null;
+    }
+  }
+
+  async function toggleDeviceAutoSync(device: PairedDeviceInfo) {
+    autoSyncBusyId = device.deviceId;
+    try {
+      await setDeviceAutoSyncEnabled(device.deviceId, !device.autoSyncEnabled);
+      await loadPairedDevices();
+    } finally {
+      autoSyncBusyId = null;
+    }
+  }
+
   // Granting happens in System Settings, so re-check when the user comes back.
+  // Also a good moment to try an auto-sync (see p2p_sync.rs's maybe_auto_sync)
+  // without waiting for the next break boundary -- rides an event the OS
+  // already delivers, and the Rust side no-ops cheaply when nothing is
+  // opted in or nothing is due yet.
   function onWindowFocus() {
     void refreshMediaKeyPermission();
+    void attemptAutoSync();
   }
 
   /** The boot sequence below is a chain of awaits: before this wrapper, the
@@ -167,15 +245,24 @@
       notToDoContent = content;
     });
     unlistenMediaToggle = await listenForMediaToggleRecorded();
+    unlistenAutoSyncCompleted = await listen<string>("p2p-sync://auto-completed", () => {
+      void loadPairedDevices();
+    });
     // The screen-time batch listener lives in +layout.svelte, not here --
     // this route ("/") unmounts on every tab navigation, which would tear
     // the listener down and silently drop any batch Rust flushes while the
     // user is sitting on another tab. See +layout.svelte's onMount for why.
     void logInfo("main window: boot sequence complete, all listeners registered");
+    // Boot is also a natural moment for the window-focus trigger's logic --
+    // covers a fresh launch that lands well after the last break boundary.
+    void attemptAutoSync();
   }
 
   onMount(async () => {
     window.addEventListener("focus", onWindowFocus);
+    // Independent of bootMainWindow's sequential chain below -- nothing else
+    // needs to block on the paired-device list resolving.
+    void loadPairedDevices();
     // Started immediately, before bootMainWindow's long chain of sequential
     // awaited IPC round-trips (settings syncs, get_enabled, get_snooze_until,
     // task-list reads, listener registrations) -- this route unmounts on
@@ -204,6 +291,7 @@
     unlistenTasks?.();
     unlistenNotToDo?.();
     unlistenMediaToggle?.();
+    unlistenAutoSyncCompleted?.();
     if (tickInterval) clearInterval(tickInterval);
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
     if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
@@ -268,6 +356,50 @@
     ></textarea>
     <p class="hint">Auto-saves as you type.</p>
   </section>
+
+  {#if pairedDevicesLoaded && pairedDevices.length > 0}
+    <section class="card paired-devices-card">
+      <h2>Paired devices</h2>
+      <ul class="paired-device-list">
+        {#each pairedDevices as device (device.deviceId)}
+          <li>
+            <span
+              class="paired-device-status"
+              class:online={device.online}
+              title={device.online ? "Online" : "Offline"}
+            ></span>
+            <span class="paired-device-name"
+              >{deviceLabel(device.name, device.deviceId)} <span class="hint">({device.platform})</span></span
+            >
+            <span class="hint">Last synced: {formatLastSync(device.lastSyncAt)}</span>
+            <label class="checkbox auto-sync-checkbox">
+              <input
+                type="checkbox"
+                checked={device.autoSyncEnabled}
+                disabled={autoSyncBusyId === device.deviceId}
+                onchange={() => toggleDeviceAutoSync(device)}
+              />
+              Auto-sync
+            </label>
+            <button
+              type="button"
+              class="toggle sync-button"
+              onclick={() => runDeviceSync(device)}
+              disabled={syncingDeviceId !== null || !device.online}
+              title={device.online ? "" : "Device is offline"}
+            >
+              {syncingDeviceId === device.deviceId ? "Syncing…" : "Sync"}
+            </button>
+          </li>
+        {/each}
+      </ul>
+      {#if syncStatus === "success"}
+        <p class="hint saved">{syncMessage}</p>
+      {:else if syncStatus === "error"}
+        <p class="hint error">{syncMessage}</p>
+      {/if}
+    </section>
+  {/if}
 </div>
 
 <style>
@@ -385,5 +517,66 @@
     font-size: 12px;
     color: var(--text-dim);
     margin: 8px 0 0;
+  }
+
+  .saved {
+    color: #3a9d5d;
+  }
+
+  .error {
+    color: #d9534f;
+  }
+
+  .paired-device-list {
+    list-style: none;
+    margin: 12px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .paired-device-list li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .paired-device-status {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+
+  .paired-device-status.online {
+    background: #3a9d5d;
+  }
+
+  .paired-device-name {
+    font-size: 14px;
+    flex: 1;
+    min-width: 120px;
+  }
+
+  label.checkbox {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  label.checkbox input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+  }
+
+  .sync-button {
+    padding: 6px 12px;
+    font-size: 12px;
   }
 </style>

@@ -597,6 +597,21 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 27,
+            // Per-device opt-in for automatic P2P sync (see p2p_sync.rs's
+            // maybe_auto_sync and CLAUDE.md's "P2P LAN sync"). Local to each
+            // side's own copy of the pairing record, same as last_sync_at --
+            // never included in the sync payload, so device A's opt-in
+            // choice never dictates device B's. Defaults off, matching
+            // p2p_sync.rs's existing "manual, opt-in" framing for the whole
+            // feature.
+            description: "add auto_sync_enabled to paired_device (per-device opt-in, default off)",
+            sql: r#"
+                ALTER TABLE paired_device ADD COLUMN auto_sync_enabled INTEGER NOT NULL DEFAULT 0;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

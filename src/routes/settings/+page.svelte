@@ -42,6 +42,7 @@
     browseOnlinePairedDevices,
     forgetPairedDevice,
     syncWithDevice,
+    setDeviceAutoSyncEnabled,
     type BreakitSettings,
     type ImportMode,
     type DiscoveredDevice,
@@ -150,6 +151,7 @@
   let syncingDeviceId = $state<string | null>(null);
   let syncStatus = $state<"idle" | "success" | "error">("idle");
   let syncMessage = $state("");
+  let autoSyncBusyId = $state<string | null>(null);
 
   async function loadPairedDevices() {
     pairedDevicesBusy = true;
@@ -286,6 +288,16 @@
       syncStatus = "error";
     } finally {
       syncingDeviceId = null;
+    }
+  }
+
+  async function toggleDeviceAutoSync(device: PairedDeviceInfo) {
+    autoSyncBusyId = device.deviceId;
+    try {
+      await setDeviceAutoSyncEnabled(device.deviceId, !device.autoSyncEnabled);
+      await loadPairedDevices();
+    } finally {
+      autoSyncBusyId = null;
     }
   }
 
@@ -1102,6 +1114,15 @@
             ></span>
             <span class="paired-device-name">{deviceLabel(device.name, device.deviceId)} <span class="hint">({device.platform})</span></span>
             <span class="hint">Last synced: {formatLastSync(device.lastSyncAt)}</span>
+            <label class="checkbox auto-sync-checkbox">
+              <input
+                type="checkbox"
+                checked={device.autoSyncEnabled}
+                disabled={autoSyncBusyId === device.deviceId}
+                onchange={() => toggleDeviceAutoSync(device)}
+              />
+              Auto-sync
+            </label>
             <button
               type="button"
               onclick={() => runDeviceSync(device)}

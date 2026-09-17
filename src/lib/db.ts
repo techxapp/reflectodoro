@@ -2092,6 +2092,10 @@ export interface PairedDeviceInfo {
    * stored flag -- re-fetch (getPairedDevices/browseOnlinePairedDevices)
    * rather than trusting a stale value. */
   online: boolean;
+  /** Per-device opt-in for automatic sync (see maybeAutoSync in Rust),
+   * local to this side's own copy of the pairing record -- never part of
+   * the sync payload, so the peer's own choice is independent of this. */
+  autoSyncEnabled: boolean;
 }
 
 export interface SyncResult {
@@ -2166,6 +2170,19 @@ export async function forgetPairedDevice(deviceId: string): Promise<void> {
  * (app_setting) are never part of the payload in either direction. */
 export async function syncWithDevice(deviceId: string): Promise<SyncResult> {
   return invoke<SyncResult>("sync_with_device", { deviceId });
+}
+
+/** Flips one paired device's auto-sync opt-in. Local-only -- never affects
+ * the peer's own copy of this pairing. */
+export async function setDeviceAutoSyncEnabled(deviceId: string, enabled: boolean): Promise<void> {
+  await invoke("set_device_auto_sync_enabled", { deviceId, enabled });
+}
+
+/** Fire-and-forget: asks Rust to attempt an auto-sync check right now
+ * (same maybe_auto_sync logic the break-boundary trigger uses), for the
+ * window-focus trigger -- see CLAUDE.md's "P2P LAN sync". */
+export async function attemptAutoSync(): Promise<void> {
+  await invoke("attempt_auto_sync");
 }
 
 // --- Quote API (end-of-break overlay panel) ------------------------------
