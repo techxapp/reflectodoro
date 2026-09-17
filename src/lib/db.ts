@@ -38,6 +38,55 @@ function getDb() {
   return dbPromise;
 }
 
+// --- Encryption at rest -------------------------------------------------
+//
+// `reflection.text`, `daily_task_list.content` and `not_to_do_list.content`
+// are stored encrypted (see src-tauri/src/crypto.rs for the format, key
+// storage and threat model). Every write through this module encrypts on the
+// way in and every read decrypts on the way out, so the rest of the app --
+// and every Svelte component -- keeps working in plaintext and never sees a
+// ciphertext blob.
+//
+// All key material and cipher work stays in Rust (and, on Android, inside the
+// OS Keystore): the webview only ever hands plaintext across and gets
+// ciphertext back, never a key.
+//
+// Batched deliberately. The read side is list-shaped (a day's Entries view
+// decrypts up to 48 rows, an export decrypts the whole history) and each
+// `invoke` is its own IPC round trip, so doing these one value at a time
+// would turn one call into dozens.
+
+async function encryptFields(values: string[]): Promise<string[]> {
+  if (values.length === 0) return [];
+  return invoke<string[]>("encrypt_fields", { values });
+}
+
+async function decryptFields(values: string[]): Promise<string[]> {
+  if (values.length === 0) return [];
+  return invoke<string[]>("decrypt_fields", { values });
+}
+
+async function encryptField(value: string): Promise<string> {
+  return (await encryptFields([value]))[0];
+}
+
+/** Values stored before the one-time migration ran come back unchanged
+ * rather than throwing -- see crypto.rs's `enc1:` marker passthrough. */
+async function decryptField(value: string): Promise<string> {
+  return (await decryptFields([value]))[0];
+}
+
+/** `screen_time_session.app_id_hash` -- a deterministic HMAC-SHA256 "blind
+ * index" of `app_id` (see crypto.rs's `FieldCipher::blind_index_many`), used
+ * only for `GROUP BY`/duplicate-check equality once `app_id` itself is
+ * `encryptField`-ed ciphertext and therefore never equal to itself across
+ * two writes. Unlike `encryptFields`, calling this twice on the same value
+ * is expected to return the same hash both times -- that's the whole point. */
+async function hashAppIds(values: string[]): Promise<string[]> {
+  if (values.length === 0) return [];
+  return invoke<string[]>("hash_app_ids", { values });
+}
+
 export interface ReflectionRow {
   id: number;
   created_at: string;
@@ -126,7 +175,8 @@ export async function getReflectionTextForSlot(slotStartIso: string): Promise<st
     `SELECT text FROM reflection WHERE slot_start_at = $1 LIMIT 1`,
     [slotStartIso],
   );
-  return rows[0]?.text ?? null;
+  if (rows[0]?.text === undefined) return null;
+  return decryptField(rows[0].text);
 }
 
 /**
@@ -208,32 +258,86 @@ export async function findMissedSlots(currentSlotIso: string): Promise<string[]>
   return slots;
 }
 
-/** One DB row per covered slot (same created_at/text) -- so "missed" pomodoros are individually
- * recorded, not bundled into one array field. Upserts per slot (same pattern as
- * bulkUpsertReflections) rather than blindly inserting: retrying a failed submit -- the overlay's
- * documented "Close break screen anyway" escape-hatch path exists for exactly this -- would
- * otherwise re-insert the slots that already succeeded before the failure, since slot_start_at
- * has no UNIQUE constraint. An update leaves the original created_at alone. */
+/**
+ * When there's more than one covered (missed) slot and `text` splits into
+ * exactly as many non-blank lines as there are slots, returns those lines in
+ * slot order (index 0 = oldest slot, matching `findMissedSlots`'s own
+ * oldest-first ordering) so each pomodoro gets its own line instead of every
+ * slot sharing the same full text. Returns `null` on any mismatch -- caller
+ * then falls back to writing the same complete text into every slot, same as
+ * before this existed. Blank lines don't count as rows (they're filtered
+ * before the length check), so a deliberately-skipped pomodoro in a split
+ * needs the existing `"skip"` convention (see `isSkipOnlyText`) as its line's
+ * content rather than an empty line.
+ */
+export function splitReflectionForSlots(text: string, coveredSlots: string[]): string[] | null {
+  if (coveredSlots.length <= 1) return null;
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length !== coveredSlots.length) return null;
+  return lines;
+}
+
+async function upsertReflectionRow(
+  db: Database,
+  slot: string,
+  storedText: string,
+  createdAt: string,
+): Promise<void> {
+  const existing = await db.select<{ id: number }[]>(
+    `SELECT id FROM reflection WHERE slot_start_at = $1`,
+    [slot],
+  );
+  if (existing.length > 0) {
+    await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE slot_start_at = $3`, [
+      storedText,
+      createdAt,
+      slot,
+    ]);
+  } else {
+    await db.execute(
+      `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
+      [createdAt, slot, storedText, createdAt],
+    );
+  }
+}
+
+/** One DB row per covered slot -- so "missed" pomodoros are individually recorded, not bundled
+ * into one array field. Upserts per slot (same pattern as bulkUpsertReflections) rather than
+ * blindly inserting: retrying a failed submit -- the overlay's documented "Close break screen
+ * anyway" escape-hatch path exists for exactly this -- would otherwise re-insert the slots that
+ * already succeeded before the failure, since slot_start_at has no UNIQUE constraint. An update
+ * leaves the original created_at alone.
+ *
+ * If `text` cleanly splits into one line per covered slot (see `splitReflectionForSlots`), each
+ * slot gets its own line instead of the full text -- otherwise (the common case: one slot, or a
+ * line count that doesn't match) every slot gets the identical complete text, same as always. */
 export async function saveReflection(coveredSlots: string[], text: string): Promise<void> {
   const db = await getDb();
   const createdAt = new Date().toISOString();
-  for (const slot of coveredSlots) {
-    const existing = await db.select<{ id: number }[]>(
-      `SELECT id FROM reflection WHERE slot_start_at = $1`,
-      [slot],
-    );
-    if (existing.length > 0) {
-      await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE slot_start_at = $3`, [
-        text,
-        createdAt,
-        slot,
-      ]);
-    } else {
-      await db.execute(
-        `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
-        [createdAt, slot, text, createdAt],
-      );
+  const perSlotLines = splitReflectionForSlots(text, coveredSlots);
+  if (perSlotLines) {
+    // Each slot gets genuinely different plaintext now, so each needs its own
+    // fresh nonce -- encryptFields (batched) gives every value its own
+    // encrypt call under the hood, unlike the single shared-ciphertext path
+    // below where one nonce/plaintext pair is legitimately reused verbatim.
+    const encrypted = await encryptFields(perSlotLines);
+    for (let i = 0; i < coveredSlots.length; i++) {
+      await upsertReflectionRow(db, coveredSlots[i], encrypted[i], createdAt);
     }
+    return;
+  }
+  // Encrypted once and the same ciphertext written to every covered slot,
+  // rather than encrypting per slot. This is not nonce reuse: one nonce
+  // encrypted one plaintext, and copying that result into several rows never
+  // pairs that nonce with *different* plaintext (the property that actually
+  // matters -- see crypto.rs). All it reveals is that these rows share text,
+  // which the merge already makes explicit anyway.
+  const stored = await encryptField(text);
+  for (const slot of coveredSlots) {
+    await upsertReflectionRow(db, slot, stored, createdAt);
   }
 }
 
@@ -255,7 +359,8 @@ export async function getLastReflectionText(
     `SELECT text FROM reflection WHERE slot_start_at < $1 ORDER BY slot_start_at DESC LIMIT 1`,
     [beforeSlotStartIso],
   );
-  return rows[0]?.text ?? null;
+  if (rows[0]?.text === undefined) return null;
+  return decryptField(rows[0].text);
 }
 
 export interface WellnessCheckValues {
@@ -291,17 +396,16 @@ export async function saveWellnessCheck(
   if (!existing[0]) throw new Error(`no reflection row found for slot ${slotStartIso}`);
 
   const createdAt = new Date().toISOString();
+  const [relaxedEyes, exercise, drankWater, washroom] = await encryptFields([
+    values.relaxedEyes ? "1" : "0",
+    values.exercise ? "1" : "0",
+    values.drankWater ? "1" : "0",
+    values.washroom ? "1" : "0",
+  ]);
   await db.execute(
     `INSERT INTO wellness_check (slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at)
      VALUES ($1, $2, $3, $4, $5, $6)`,
-    [
-      slotStartIso,
-      values.relaxedEyes ? 1 : 0,
-      values.exercise ? 1 : 0,
-      values.drankWater ? 1 : 0,
-      values.washroom ? 1 : 0,
-      createdAt,
-    ],
+    [slotStartIso, relaxedEyes, exercise, drankWater, washroom, createdAt],
   );
 }
 
@@ -319,35 +423,34 @@ export interface WellnessSummary {
  * after midnight stays filed under the pomodoro it was actually about
  * instead of leaking onto the next day and disagreeing with the reflections
  * shown beside it on the Entries page. No longer needs a JOIN to reflection
- * for this -- see CLAUDE.md's "Data model" on migration 17. */
+ * for this -- see CLAUDE.md's "Data model" on migration 17.
+ *
+ * The four boolean columns are ciphertext at rest (see "Encryption at
+ * rest" above), so this can no longer let SQLite do the summing with
+ * `SUM`/`COUNT` -- it fetches every matching row's four values, decrypts
+ * them in one batched call, and sums client-side instead. A day is at most
+ * 48 rows, so this stays cheap. */
 export async function getWellnessSummaryForDate(dateStamp: string): Promise<WellnessSummary> {
   const db = await getDb();
   const rows = await db.select<
-    {
-      total: number;
-      relaxed_eyes: number | null;
-      exercise: number | null;
-      drank_water: number | null;
-      washroom: number | null;
-    }[]
+    { relaxed_eyes: string; exercise: string; drank_water: string; washroom: string }[]
   >(
-    `SELECT COUNT(*) as total,
-            SUM(relaxed_eyes) as relaxed_eyes,
-            SUM(exercise) as exercise,
-            SUM(drank_water) as drank_water,
-            SUM(washroom) as washroom
+    `SELECT relaxed_eyes, exercise, drank_water, washroom
      FROM wellness_check
      WHERE date(slot_start_at, 'localtime') = $1`,
     [dateStamp],
   );
-  const row = rows[0];
-  return {
-    total: row?.total ?? 0,
-    relaxedEyes: row?.relaxed_eyes ?? 0,
-    exercise: row?.exercise ?? 0,
-    drankWater: row?.drank_water ?? 0,
-    washroom: row?.washroom ?? 0,
-  };
+  const flat = rows.flatMap((r) => [r.relaxed_eyes, r.exercise, r.drank_water, r.washroom]);
+  const decrypted = await decryptFields(flat);
+
+  const summary: WellnessSummary = { total: rows.length, relaxedEyes: 0, exercise: 0, drankWater: 0, washroom: 0 };
+  for (let i = 0; i < rows.length; i++) {
+    summary.relaxedEyes += Number(decrypted[i * 4]);
+    summary.exercise += Number(decrypted[i * 4 + 1]);
+    summary.drankWater += Number(decrypted[i * 4 + 2]);
+    summary.washroom += Number(decrypted[i * 4 + 3]);
+  }
+  return summary;
 }
 
 /**
@@ -369,12 +472,18 @@ export async function getWellnessSummaryForDate(dateStamp: string): Promise<Well
  */
 export async function getReflectionsForDate(dateStamp: string): Promise<ReflectionRow[]> {
   const db = await getDb();
-  return db.select<ReflectionRow[]>(
+  const rows = await db.select<ReflectionRow[]>(
     `SELECT id, created_at, slot_start_at, text FROM reflection
      WHERE date(slot_start_at, 'localtime') = $1
      ORDER BY slot_start_at ASC`,
     [dateStamp],
   );
+  // One batched decrypt for the whole day (up to 48 rows) rather than one
+  // IPC round trip per row. `clusterReflectionRows` compares these texts to
+  // group consecutive slots, so it has to run on the decrypted values --
+  // ciphertext of identical text differs every time by design.
+  const texts = await decryptFields(rows.map((r) => r.text));
+  return rows.map((row, i) => ({ ...row, text: texts[i] }));
 }
 
 const SLOT_INTERVAL_MS = 30 * 60 * 1000;
@@ -412,7 +521,7 @@ export function clusterReflectionRows(rows: ReflectionRow[]): ReflectionCluster[
 export async function updateReflectionText(id: number, text: string): Promise<void> {
   const db = await getDb();
   await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE id = $3`, [
-    text,
+    await encryptField(text),
     new Date().toISOString(),
     id,
   ]);
@@ -524,6 +633,9 @@ export async function bulkUpsertReflections(
 
   const db = await getDb();
   const createdAt = new Date().toISOString();
+  // One encryption reused across every slot in the range, same reasoning as
+  // saveReflection's.
+  const stored = await encryptField(trimmed);
   for (const slot of slots) {
     const existing = await db.select<{ id: number }[]>(
       `SELECT id FROM reflection WHERE slot_start_at = $1`,
@@ -533,18 +645,121 @@ export async function bulkUpsertReflections(
       // updated_at bump: see updateReflectionText's doc comment -- same P2P
       // sync delta-cursor reasoning applies to this upsert's update branch.
       await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE slot_start_at = $3`, [
-        trimmed,
+        stored,
         createdAt,
         slot,
       ]);
     } else {
       await db.execute(
         `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
-        [createdAt, slot, trimmed, createdAt],
+        [createdAt, slot, stored, createdAt],
       );
     }
   }
   return slots.length;
+}
+
+// --- Bulk edit "Prefill" presets -----------------------------------------
+//
+// Named presets (a time range + text) a user can save once from the bulk-edit
+// fields above and reapply with one click instead of retyping the same range
+// for a recurring routine (sleep, lunch, ...). See CLAUDE.md's
+// "Bulk-editing reflections by time range" section.
+
+export interface BulkEditPreset {
+  id: string;
+  name: string;
+  startTime: string;
+  endTime: string;
+  text: string;
+}
+
+const BULK_EDIT_PRESETS_SEEDED_KEY = "bulk_edit_presets_seeded";
+
+/**
+ * Seeds two example presets the first time this feature is used, so it's
+ * immediately visible rather than starting as an empty list -- gated on an
+ * app_setting flag, same one-shot pattern as ensureFirstRunMarker/
+ * isOnboardingCompleted above, so this only ever runs once regardless of how
+ * many times getBulkEditPresets() is called.
+ */
+async function seedDefaultBulkEditPresetsOnce(): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [BULK_EDIT_PRESETS_SEEDED_KEY],
+  );
+  if (rows.length > 0) return;
+
+  const now = new Date().toISOString();
+  const defaults: { name: string; startTime: string; endTime: string; text: string }[] = [
+    { name: "Sleep", startTime: "00:00", endTime: "06:00", text: "Sleeping" },
+    { name: "Lunch", startTime: "13:00", endTime: "14:00", text: "Lunch break" },
+  ];
+  // One batched encrypt call for all three encrypted fields across both rows
+  // -- same "flatten across rows, one IPC round trip" shape
+  // getWellnessSummaryForDate uses for its four booleans.
+  const encrypted = await encryptFields(defaults.flatMap((d) => [d.startTime, d.endTime, d.text]));
+  for (let i = 0; i < defaults.length; i++) {
+    const [startTime, endTime, text] = encrypted.slice(i * 3, i * 3 + 3);
+    await db.execute(
+      `INSERT INTO bulk_edit_preset (id, name, start_time, end_time, text, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [crypto.randomUUID(), defaults[i].name, startTime, endTime, text, now, now],
+    );
+  }
+  // ON CONFLICT DO NOTHING: a concurrent call (unlikely, but getBulkEditPresets
+  // has no lock around this check-then-insert) should never seed twice.
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, '1') ON CONFLICT(key) DO NOTHING`,
+    [BULK_EDIT_PRESETS_SEEDED_KEY],
+  );
+}
+
+export async function getBulkEditPresets(): Promise<BulkEditPreset[]> {
+  await seedDefaultBulkEditPresetsOnce();
+  const db = await getDb();
+  const rows = await db.select<{ id: string; name: string; start_time: string; end_time: string; text: string }[]>(
+    `SELECT id, name, start_time, end_time, text FROM bulk_edit_preset ORDER BY name COLLATE NOCASE`,
+  );
+  const decrypted = await decryptFields(rows.flatMap((r) => [r.start_time, r.end_time, r.text]));
+  return rows.map((row, i) => ({
+    id: row.id,
+    name: row.name,
+    startTime: decrypted[i * 3],
+    endTime: decrypted[i * 3 + 1],
+    text: decrypted[i * 3 + 2],
+  }));
+}
+
+/** Validates the plaintext inputs (same validateBulkEditRange guard the
+ * bulk-edit fields themselves use) before anything is encrypted. */
+export async function saveBulkEditPreset(
+  name: string,
+  startTime: string,
+  endTime: string,
+  text: string,
+): Promise<void> {
+  const trimmedName = name.trim();
+  const trimmedText = text.trim();
+  if (!trimmedName) throw new Error("Name is required");
+  if (!trimmedText) throw new Error("Text is required");
+  const rangeError = validateBulkEditRange(startTime, endTime);
+  if (rangeError) throw new Error(rangeError);
+
+  const db = await getDb();
+  const [encStart, encEnd, encText] = await encryptFields([startTime, endTime, trimmedText]);
+  const now = new Date().toISOString();
+  await db.execute(
+    `INSERT INTO bulk_edit_preset (id, name, start_time, end_time, text, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [crypto.randomUUID(), trimmedName, encStart, encEnd, encText, now, now],
+  );
+}
+
+export async function deleteBulkEditPreset(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(`DELETE FROM bulk_edit_preset WHERE id = $1`, [id]);
 }
 
 export async function getTaskList(dateStamp: string): Promise<string> {
@@ -553,7 +768,8 @@ export async function getTaskList(dateStamp: string): Promise<string> {
     `SELECT content FROM daily_task_list WHERE date = $1`,
     [dateStamp],
   );
-  return rows[0]?.content ?? "";
+  if (rows[0]?.content === undefined) return "";
+  return decryptField(rows[0].content);
 }
 
 export interface TaskListUpdate {
@@ -567,8 +783,12 @@ export async function saveTaskList(dateStamp: string, content: string): Promise<
   await db.execute(
     `INSERT INTO daily_task_list (date, content, updated_at) VALUES ($1, $2, $3)
      ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
-    [dateStamp, content, new Date().toISOString()],
+    [dateStamp, await encryptField(content), new Date().toISOString()],
   );
+  // The broadcast below deliberately carries plaintext, unlike the row just
+  // written: it's an in-memory hand-off between this app's own windows, and
+  // every receiver would only have to decrypt it again to use it.
+  //
   // Broadcast so the Timer/overlay/catch-up windows (whichever are open)
   // pick up the edit live instead of showing stale content until their next
   // remount. Tagged with the sending window's label so a window doesn't
@@ -602,7 +822,8 @@ export async function getNotToDoList(dateStamp: string): Promise<string> {
     `SELECT content FROM not_to_do_list WHERE date = $1`,
     [dateStamp],
   );
-  return rows[0]?.content ?? "";
+  if (rows[0]?.content === undefined) return "";
+  return decryptField(rows[0].content);
 }
 
 export interface NotToDoUpdate {
@@ -616,8 +837,9 @@ export async function saveNotToDoList(dateStamp: string, content: string): Promi
   await db.execute(
     `INSERT INTO not_to_do_list (date, content, updated_at) VALUES ($1, $2, $3)
      ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
-    [dateStamp, content, new Date().toISOString()],
+    [dateStamp, await encryptField(content), new Date().toISOString()],
   );
+  // Plaintext broadcast, encrypted row -- see saveTaskList.
   const sourceLabel = getCurrentWindow().label;
   await emit("nottodolist://updated", { date: dateStamp, content, sourceLabel } satisfies NotToDoUpdate);
 }
@@ -1057,10 +1279,32 @@ export interface ScreenTimeSessionInput {
   ended_at: string;
 }
 
-/** SQLite's default bound-variable ceiling is 999; at 6 columns per row this
+/** SQLite's default bound-variable ceiling is 999; at 7 columns per row this
  * keeps a chunk well under it while still collapsing a whole batch into one or
  * two statements instead of one per session. */
 const SCREEN_TIME_INSERT_CHUNK = 100;
+
+/** Empty `display_name` (no friendly name resolved) stays plain `""` rather
+ * than being encrypted -- every reader already treats `""` as "no friendly
+ * name, fall back to appId", and encrypting nothing would only cost a
+ * decrypt on every later read for no benefit. Mirrors the same rule
+ * crypto.rs's screen-time backfill and import.rs's screen-time import use. */
+async function encryptDisplayNames(values: string[]): Promise<string[]> {
+  const nonEmptyIndexes: number[] = [];
+  const nonEmptyValues: string[] = [];
+  values.forEach((v, i) => {
+    if (v) {
+      nonEmptyIndexes.push(i);
+      nonEmptyValues.push(v);
+    }
+  });
+  const encrypted = await encryptFields(nonEmptyValues);
+  const result = values.map(() => "");
+  nonEmptyIndexes.forEach((idx, j) => {
+    result[idx] = encrypted[j];
+  });
+  return result;
+}
 
 export async function saveScreenTimeSessions(sessions: ScreenTimeSessionInput[]): Promise<void> {
   if (sessions.length === 0) return;
@@ -1070,23 +1314,40 @@ export async function saveScreenTimeSessions(sessions: ScreenTimeSessionInput[])
 
   for (let i = 0; i < sessions.length; i += SCREEN_TIME_INSERT_CHUNK) {
     const chunk = sessions.slice(i, i + SCREEN_TIME_INSERT_CHUNK);
+    const appIds = chunk.map((s) => s.app_id);
+    // app_id/display_name are encrypted the same way reflection.text is (see
+    // crypto.rs's "Encryption at rest") -- a fresh random nonce every call,
+    // so the same plaintext never produces the same ciphertext twice.
+    // app_id_hash is a deterministic HMAC-SHA256 "blind index" of the
+    // plaintext app_id computed alongside it, which is what lets
+    // getScreenTimeForDate's GROUP BY and import.rs's duplicate check keep
+    // working in SQL despite that. Never fall back to writing plaintext on
+    // failure -- a rejected Promise here propagates to the caller's .catch
+    // (listenForScreenTimeSessionBatches), which logs and drops the batch.
+    const [encryptedAppIds, appIdHashes, encryptedDisplayNames] = await Promise.all([
+      encryptFields(appIds),
+      hashAppIds(appIds),
+      encryptDisplayNames(chunk.map((s) => s.display_name)),
+    ]);
+
     const values: string[] = [];
     const placeholders = chunk
       .map((session, index) => {
-        const base = index * 6;
+        const base = index * 7;
         values.push(
-          session.app_id,
-          session.display_name,
+          encryptedAppIds[index],
+          encryptedDisplayNames[index],
+          appIdHashes[index],
           session.platform,
           deviceName,
           session.started_at,
           session.ended_at,
         );
-        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`;
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
       })
       .join(", ");
     await db.execute(
-      `INSERT INTO screen_time_session (app_id, display_name, platform, device_name, started_at, ended_at)
+      `INSERT INTO screen_time_session (app_id, display_name, app_id_hash, platform, device_name, started_at, ended_at)
        VALUES ${placeholders}`,
       values,
     );
@@ -1132,15 +1393,23 @@ export interface ScreenTimeEntry {
  * simple and stable, at the cost of a little drift for anyone working through
  * midnight.
  *
- * Grouped by app_id (not display_name) -- app_id is the stable identity key,
- * display_name is just a label for it, so this stays correct even if a
- * FileDescription somehow resolved differently across two sessions of the
- * same exe. MAX(display_name) picks whichever non-empty label exists among
- * the grouped rows (display_name is constant per app_id in practice).
+ * Grouped by `app_id_hash` (falling back to raw `app_id` for a legacy row the
+ * one-time encryption backfill hasn't reached yet, `app_id_hash = ''`), not
+ * `app_id` itself -- `app_id`/`display_name` are crypto.rs's usual
+ * random-nonce ciphertext (see "Encryption at rest"), which never produces
+ * the same value twice for the same plaintext, so grouping on it directly
+ * would put every session in its own group. `app_id_hash` is the
+ * deterministic HMAC-SHA256 "blind index" computed alongside it precisely so
+ * this grouping keeps working in SQL. `MIN(app_id)`/`MAX(display_name)` just
+ * pick one representative ciphertext per group -- every row in a group
+ * decrypts to the same plaintext app_id, and MAX naturally prefers a
+ * non-empty ciphertext label over plain `""` when both exist in a group,
+ * same property the pre-encryption code relied on.
  *
- * Grouped by device_name as well as app_id, so the same app on two devices
- * (only possible after a cross-device import) reads as two rows instead of
- * being silently summed -- invisible in the ordinary single-device case.
+ * Grouped by device_name as well as the app identity, so the same app on two
+ * devices (only possible after a cross-device import) reads as two rows
+ * instead of being silently summed -- invisible in the ordinary
+ * single-device case.
  */
 export async function getScreenTimeForDate(dateStamp: string): Promise<ScreenTimeEntry[]> {
   const db = await getDb();
@@ -1153,24 +1422,54 @@ export async function getScreenTimeForDate(dateStamp: string): Promise<ScreenTim
       ms: number | null;
     }[]
   >(
-    `SELECT app_id,
+    `SELECT MIN(app_id) as app_id,
             MAX(display_name) as display_name,
             platform,
             device_name,
             SUM((julianday(ended_at) - julianday(started_at)) * 86400000) as ms
      FROM screen_time_session
      WHERE date(started_at, 'localtime') = $1
-     GROUP BY app_id, platform, device_name
+     GROUP BY COALESCE(NULLIF(app_id_hash, ''), app_id), platform, device_name
      ORDER BY ms DESC`,
     [dateStamp],
   );
-  return rows.map((row) => ({
-    appId: row.app_id,
-    displayName: row.display_name || row.app_id,
-    platform: row.platform,
-    deviceName: row.device_name,
-    ms: Math.max(0, Math.round(row.ms ?? 0)),
-  }));
+
+  // One batched decrypt for the whole day's distinct apps (a handful of
+  // values), not one per session row -- the entire point of grouping by
+  // app_id_hash instead of decrypting every row up front.
+  const appIds = await decryptFields(rows.map((r) => r.app_id));
+  const displayNames = await decryptFields(rows.map((r) => r.display_name || ""));
+
+  // During the transition window before the one-time backfill finishes, a
+  // still-plaintext row (app_id_hash = '') and an already-encrypted row for
+  // the same app can land in two separate SQL groups (one keyed by raw
+  // app_id, one by app_id_hash). Merging here by decrypted identity (a
+  // no-op for the common already-fully-migrated case) is what keeps that
+  // window from double-counting or double-listing an app.
+  const merged = new Map<string, ScreenTimeEntry>();
+  rows.forEach((row, i) => {
+    const key = `${appIds[i]}::${row.platform}::${row.device_name}`;
+    const ms = Math.max(0, Math.round(row.ms ?? 0));
+    const existing = merged.get(key);
+    if (existing) {
+      existing.ms += ms;
+      // displayName is never empty (already defaulted to appId below) -- so
+      // "no real label yet" means it still equals its own fallback.
+      if (existing.displayName === existing.appId && displayNames[i]) {
+        existing.displayName = displayNames[i];
+      }
+    } else {
+      merged.set(key, {
+        appId: appIds[i],
+        displayName: displayNames[i] || appIds[i],
+        platform: row.platform,
+        deviceName: row.device_name,
+        ms,
+      });
+    }
+  });
+
+  return Array.from(merged.values()).sort((a, b) => b.ms - a.ms);
 }
 
 export interface CurrentScreenTimeSession {
@@ -1354,6 +1653,16 @@ export interface ScreenTimeSessionRow {
   ended_at: string;
 }
 
+export interface BulkEditPresetRow {
+  id: string;
+  name: string;
+  start_time: string;
+  end_time: string;
+  text: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ExportPayload {
   app: "reflectodoro";
   export_format_version: number;
@@ -1365,31 +1674,93 @@ export interface ExportPayload {
     app_setting: SettingRow[];
     wellness_check: WellnessCheckRow[];
     screen_time_session: ScreenTimeSessionRow[];
+    bulk_edit_preset: BulkEditPresetRow[];
   };
 }
 
 export async function exportAllData(includeSettings: boolean = true): Promise<ExportPayload> {
   const db = await getDb();
-  const [reflection, daily_task_list, not_to_do_list, app_setting, wellness_check, screen_time_session] =
-    await Promise.all([
+  const [
+    reflection,
+    daily_task_list,
+    not_to_do_list,
+    app_setting,
+    wellness_check,
+    screen_time_session,
+    bulk_edit_preset,
+  ] = await Promise.all([
     db.select<ReflectionRow[]>(`SELECT id, created_at, slot_start_at, text FROM reflection`),
     db.select<TaskListRow[]>(`SELECT date, content, updated_at FROM daily_task_list`),
     db.select<NotToDoRow[]>(`SELECT date, content, updated_at FROM not_to_do_list`),
     includeSettings
       ? db.select<SettingRow[]>(`SELECT key, value FROM app_setting`)
       : Promise.resolve([]),
-    db.select<WellnessCheckRow[]>(
+    db.select<{ slot_start_at: string; relaxed_eyes: string; exercise: string; drank_water: string; washroom: string; created_at: string }[]>(
       `SELECT slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at FROM wellness_check`,
     ),
     db.select<ScreenTimeSessionRow[]>(
       `SELECT id, app_id, display_name, platform, device_name, started_at, ended_at FROM screen_time_session`,
     ),
+    db.select<BulkEditPresetRow[]>(
+      `SELECT id, name, start_time, end_time, text, created_at, updated_at FROM bulk_edit_preset`,
+    ),
+  ]);
+  // The export file is deliberately plaintext (a deliberate, documented
+  // decision -- see CLAUDE.md's "Encryption at rest"): it's a portability
+  // format meant to be re-importable on another device, which holds an
+  // entirely unrelated key, so shipping ciphertext would make it unreadable
+  // everywhere including here. Encryption protects the live pomodoro.db, not
+  // a file the user explicitly chose to write somewhere of their choosing.
+  const [
+    reflectionTexts,
+    taskContents,
+    notToDoContents,
+    wellnessValues,
+    screenTimeAppIds,
+    screenTimeDisplayNames,
+    bulkEditPresetValues,
+  ] = await Promise.all([
+    decryptFields(reflection.map((r) => r.text)),
+    decryptFields(daily_task_list.map((r) => r.content)),
+    decryptFields(not_to_do_list.map((r) => r.content)),
+    decryptFields(wellness_check.flatMap((r) => [r.relaxed_eyes, r.exercise, r.drank_water, r.washroom])),
+    decryptFields(screen_time_session.map((r) => r.app_id)),
+    decryptFields(screen_time_session.map((r) => r.display_name)),
+    decryptFields(bulk_edit_preset.flatMap((r) => [r.start_time, r.end_time, r.text])),
   ]);
   return {
     app: "reflectodoro",
     export_format_version: EXPORT_FORMAT_VERSION,
     exported_at: new Date().toISOString(),
-    data: { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check, screen_time_session },
+    data: {
+      reflection: reflection.map((row, i) => ({ ...row, text: reflectionTexts[i] })),
+      daily_task_list: daily_task_list.map((row, i) => ({ ...row, content: taskContents[i] })),
+      not_to_do_list: not_to_do_list.map((row, i) => ({ ...row, content: notToDoContents[i] })),
+      app_setting,
+      wellness_check: wellness_check.map((row, i) => ({
+        slot_start_at: row.slot_start_at,
+        relaxed_eyes: Number(wellnessValues[i * 4]),
+        exercise: Number(wellnessValues[i * 4 + 1]),
+        drank_water: Number(wellnessValues[i * 4 + 2]),
+        washroom: Number(wellnessValues[i * 4 + 3]),
+        created_at: row.created_at,
+      })),
+      // app_id_hash is deliberately left out of every exported row -- it's a
+      // blind index keyed to this device's own key, meaningless (and
+      // potentially misleading) once re-imported on a different device with
+      // an unrelated key. import.rs recomputes it on the way in.
+      screen_time_session: screen_time_session.map((row, i) => ({
+        ...row,
+        app_id: screenTimeAppIds[i],
+        display_name: screenTimeDisplayNames[i],
+      })),
+      bulk_edit_preset: bulk_edit_preset.map((row, i) => ({
+        ...row,
+        start_time: bulkEditPresetValues[i * 3],
+        end_time: bulkEditPresetValues[i * 3 + 1],
+        text: bulkEditPresetValues[i * 3 + 2],
+      })),
+    },
   };
 }
 
@@ -1579,11 +1950,42 @@ export function parseAndValidateExport(raw: string): ExportPayload {
     };
   });
 
+  // Same "tolerant of absence" reasoning as screen_time_session above --
+  // bulk_edit_preset arrived after the export format did.
+  const bulkEditPresetRaw = data.bulk_edit_preset ?? [];
+  if (!Array.isArray(bulkEditPresetRaw)) throw new Error("data.bulk_edit_preset is not an array");
+  const bulk_edit_preset: BulkEditPresetRow[] = bulkEditPresetRaw.map((row, i) => {
+    if (typeof row !== "object" || row === null) throw new Error(`bulk_edit_preset[${i}] is not an object`);
+    const r = row as Record<string, unknown>;
+    const start_time = assertString(r.start_time, `bulk_edit_preset[${i}].start_time`);
+    const end_time = assertString(r.end_time, `bulk_edit_preset[${i}].end_time`);
+    const rangeError = validateBulkEditRange(start_time, end_time);
+    if (rangeError) throw new Error(`bulk_edit_preset[${i}]: ${rangeError}`);
+    return {
+      id: assertString(r.id, `bulk_edit_preset[${i}].id`),
+      name: assertString(r.name, `bulk_edit_preset[${i}].name`),
+      start_time,
+      end_time,
+      text: assertString(r.text, `bulk_edit_preset[${i}].text`),
+      created_at: assertString(r.created_at, `bulk_edit_preset[${i}].created_at`),
+      updated_at: assertString(r.updated_at, `bulk_edit_preset[${i}].updated_at`),
+    };
+  });
+  assertNoDuplicates(bulk_edit_preset.map((r) => r.id), "bulk_edit_preset", "id");
+
   return {
     app: "reflectodoro",
     export_format_version: obj.export_format_version,
     exported_at: obj.exported_at,
-    data: { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check, screen_time_session },
+    data: {
+      reflection,
+      daily_task_list,
+      not_to_do_list,
+      app_setting,
+      wellness_check,
+      screen_time_session,
+      bulk_edit_preset,
+    },
   };
 }
 
@@ -1609,6 +2011,12 @@ export interface ImportResult {
    * imported row -- see import.rs's import_wellness_checks. Always 0 in
    * "replace" mode. */
   wellnessCheckDuplicateCount: number;
+  bulkEditPresetCount: number;
+  /** How many imported bulk_edit_preset rows were skipped because an
+   * existing row with the same id had an updated_at that was already newer
+   * (last-write-wins) -- see import.rs's import_bulk_edit_presets. Always 0
+   * in "replace" mode. */
+  bulkEditPresetStaleCount: number;
 }
 
 /**
@@ -1687,7 +2095,7 @@ export interface PairedDeviceInfo {
 }
 
 export interface SyncResult {
-  /** Rows this device sent to the peer -- a single total across all five
+  /** Rows this device sent to the peer -- a single total across all six
    * synced tables, not broken down. The fields below are the other
    * direction (received from the peer and applied here); without this, a
    * sync that only moved data outward reported "0 rows" even though it
@@ -1701,6 +2109,7 @@ export interface SyncResult {
   mergedSlotCount: number;
   screenTimeDuplicateCount: number;
   wellnessCheckDuplicateCount: number;
+  bulkEditPresetCount: number;
 }
 
 /** Opens a ~60s pairing window on this device and returns the PIN to show

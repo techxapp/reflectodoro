@@ -2,6 +2,7 @@
 mod android_bridge;
 mod breakit;
 mod commands;
+mod crypto;
 mod db;
 mod grid;
 mod hook;
@@ -734,6 +735,9 @@ pub fn run() {
             commands::get_overlay_state,
             commands::is_dev_mode,
             commands::current_os,
+            commands::encrypt_fields,
+            commands::decrypt_fields,
+            commands::hash_app_ids,
             commands::sync_breakit_config,
             commands::mark_reflection_entered,
             commands::report_reflection_save_failure,
@@ -917,6 +921,16 @@ pub fn run() {
             let p2p_listener_handle = handle.clone();
             tauri::async_runtime::spawn(p2p_sync::run_listener(p2p_listener_handle));
             p2p_sync::advertise_self(&handle);
+
+            // Encrypts any rows written before this feature existed (see
+            // crypto.rs). Spawned with its own retry loop rather than run
+            // inline: like p2p_sync::advertise_self's device_id lookup, this
+            // runs before the frontend's Database.load() has necessarily
+            // created pomodoro.db or applied its migrations. New writes are
+            // encrypted whether or not this has run, and rows it hasn't
+            // reached stay readable, so a session where it never succeeds
+            // degrades to "try again next launch" rather than to data loss.
+            tauri::async_runtime::spawn(crypto::run_encryption_migration_after_db_ready(handle.clone()));
 
             Ok(())
         })

@@ -16,7 +16,11 @@
     bulkUpsertReflections,
     saveReflection,
     getAllSlotStartsForDate,
+    getBulkEditPresets,
+    saveBulkEditPreset,
+    deleteBulkEditPreset,
     type BulkEditSlotPreview,
+    type BulkEditPreset,
     getScreenTimeForDate,
     getScreenTimeTrackingEnabled,
     getScreenTimeAppThresholdMinutes,
@@ -75,6 +79,19 @@
   // editing any field after previewing invalidates it instead of letting
   // "Apply" act on stale (possibly no-longer-matching) slots.
   let bulkPreviewFor = $state("");
+
+  // --- Bulk edit "Prefill" presets ---
+  let presets = $state<BulkEditPreset[]>([]);
+  let presetsLoaded = $state(false);
+  let showSavePreset = $state(false);
+  let newPresetName = $state("");
+  let presetSaving = $state(false);
+  let presetError = $state("");
+  let applyAllBusy = $state(false);
+  let applyAllError = $state("");
+  let selectedPresetIds = $state<Set<string>>(new Set());
+  let applySelectedBusy = $state(false);
+  let applySelectedError = $state("");
 
   // --- "View all" full-day view ---
   let viewAllOpen = $state(false);
@@ -281,6 +298,137 @@
     bulkPreviewLoading = false;
     bulkApplying = false;
     bulkPreviewFor = "";
+    showSavePreset = false;
+    newPresetName = "";
+    presetError = "";
+  }
+
+  async function loadPresets() {
+    presets = await getBulkEditPresets();
+    presetsLoaded = true;
+    // Drop any selected id that no longer exists (most commonly: it was just
+    // deleted) -- otherwise "Apply selected" could silently keep counting a
+    // preset that's no longer in the list.
+    const validIds = new Set(presets.map((p) => p.id));
+    selectedPresetIds = new Set([...selectedPresetIds].filter((id) => validIds.has(id)));
+  }
+
+  function togglePresetSelected(id: string) {
+    const next = new Set(selectedPresetIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selectedPresetIds = next;
+  }
+
+  function openBulkEdit() {
+    bulkEditOpen = true;
+    if (!presetsLoaded) void loadPresets();
+  }
+
+  /** Fills the bulk-edit fields from a saved preset -- same field
+   * invalidation the Start/End/Text inputs' own onchange/oninput handlers
+   * already do, since these values may no longer match a previously
+   * computed bulkPreview. */
+  function applyPreset(preset: BulkEditPreset) {
+    bulkStart = preset.startTime;
+    bulkEnd = preset.endTime;
+    bulkText = preset.text;
+    bulkPreview = null;
+    bulkError = "";
+  }
+
+  async function removePreset(preset: BulkEditPreset) {
+    if (!confirm(`Delete the "${preset.name}" preset?`)) return;
+    await deleteBulkEditPreset(preset.id);
+    await loadPresets();
+  }
+
+  /** Writes each given preset's range/text straight to the DB via
+   * bulkUpsertReflections, one preset at a time (sequential, not
+   * Promise.all, to avoid concurrent writes racing on the same connection) --
+   * bypasses the single-preset "fill the fields, Preview, Apply" flow
+   * entirely, since there's only one set of fields to fill and this is
+   * meant to populate several ranges in one click. Overlapping preset ranges
+   * overwrite each other in list order, same as running the single-preset
+   * flow for each one in sequence would. Shared by "Apply all" and "Apply
+   * selected" below -- they differ only in which presets they pass in. */
+  async function applyPresetsToDay(toApply: BulkEditPreset[]) {
+    for (const preset of toApply) {
+      await bulkUpsertReflections(selectedStamp, preset.startTime, preset.endTime, preset.text);
+    }
+    await load();
+  }
+
+  async function applyAllPresets() {
+    if (presets.length === 0) return;
+    const dayLabel = selected.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+    const confirmed = confirm(
+      `Apply all ${presets.length} saved preset${presets.length === 1 ? "" : "s"} to ${dayLabel}? Existing reflections in overlapping time ranges will be overwritten.`,
+    );
+    if (!confirmed) return;
+
+    applyAllBusy = true;
+    applyAllError = "";
+    try {
+      await applyPresetsToDay(presets);
+    } catch (e) {
+      applyAllError = e instanceof Error ? e.message : String(e);
+    } finally {
+      applyAllBusy = false;
+    }
+  }
+
+  /** Same idea as applyAllPresets, restricted to whichever presets the user
+   * has checked via each chip's checkbox -- lets the user apply a subset
+   * (e.g. just "Sleep" and "Gym", skipping "Lunch" today) in one click
+   * instead of either clicking each chip individually (fill-then-preview,
+   * one at a time) or running "Apply all" and manually fixing up the ones
+   * they didn't want. */
+  async function applySelectedPresets() {
+    const toApply = presets.filter((p) => selectedPresetIds.has(p.id));
+    if (toApply.length === 0) return;
+    const dayLabel = selected.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+    const confirmed = confirm(
+      `Apply ${toApply.length} selected preset${toApply.length === 1 ? "" : "s"} to ${dayLabel}? Existing reflections in overlapping time ranges will be overwritten.`,
+    );
+    if (!confirmed) return;
+
+    applySelectedBusy = true;
+    applySelectedError = "";
+    try {
+      await applyPresetsToDay(toApply);
+      selectedPresetIds = new Set();
+    } catch (e) {
+      applySelectedError = e instanceof Error ? e.message : String(e);
+    } finally {
+      applySelectedBusy = false;
+    }
+  }
+
+  /** Same guard previewBulkEdit uses -- disables "Save as preset" until the
+   * current fields are actually a valid range with non-blank text. */
+  const canSaveCurrentAsPreset = $derived(
+    bulkText.trim() !== "" && validateBulkEditRange(bulkStart, bulkEnd) === null,
+  );
+
+  async function confirmSavePreset() {
+    const name = newPresetName.trim();
+    if (!name) {
+      presetError = "Name is required";
+      return;
+    }
+    presetSaving = true;
+    presetError = "";
+    try {
+      await saveBulkEditPreset(name, bulkStart, bulkEnd, bulkText);
+      await loadPresets();
+      showSavePreset = false;
+      newPresetName = "";
+    } catch (e) {
+      presetError = e instanceof Error ? e.message : String(e);
+    } finally {
+      presetSaving = false;
+    }
   }
 
   function bulkFieldsKey(): string {
@@ -620,7 +768,7 @@
       <div class="entry-toolbar">
       <div class="bulk-edit">
         {#if !bulkEditOpen}
-          <button class="bulk-toggle" onclick={() => (bulkEditOpen = true)}>+ Bulk edit</button>
+          <button class="bulk-toggle" onclick={openBulkEdit}>+ Bulk edit</button>
         {:else}
           <div class="bulk-form">
             <h3>Bulk edit reflections</h3>
@@ -628,6 +776,107 @@
               Set the same text on every complete 30-minute slot between a start and end time on
               {selected.toLocaleDateString(undefined, { month: "long", day: "numeric" })}.
             </p>
+
+            <div class="preset-section">
+              <span class="preset-label">Prefill</span>
+              {#if presetsLoaded && presets.length === 0}
+                <span class="hint preset-empty">No saved presets yet.</span>
+              {:else}
+                <div class="preset-chips">
+                  {#each presets as preset (preset.id)}
+                    <span class="preset-chip">
+                      <input
+                        type="checkbox"
+                        class="preset-chip-checkbox"
+                        checked={selectedPresetIds.has(preset.id)}
+                        onchange={() => togglePresetSelected(preset.id)}
+                        aria-label={`Select preset "${preset.name}" for Apply selected`}
+                        title="Select for Apply selected"
+                      />
+                      <button type="button" class="preset-chip-apply" onclick={() => applyPreset(preset)}>
+                        {preset.name}
+                      </button>
+                      <button
+                        type="button"
+                        class="preset-chip-delete"
+                        onclick={() => removePreset(preset)}
+                        aria-label={`Delete preset "${preset.name}"`}
+                        title="Delete preset"
+                      >
+                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6h16Z" />
+                        </svg>
+                      </button>
+                    </span>
+                  {/each}
+                </div>
+                {#if presets.length > 1}
+                  <div class="preset-apply-actions">
+                    <button
+                      type="button"
+                      class="preset-apply-all"
+                      disabled={applyAllBusy}
+                      onclick={applyAllPresets}
+                    >
+                      {applyAllBusy ? "Applying all…" : `Apply all ${presets.length} presets`}
+                    </button>
+                    <button
+                      type="button"
+                      class="preset-apply-all"
+                      disabled={applySelectedBusy || selectedPresetIds.size === 0}
+                      title={selectedPresetIds.size === 0 ? "Check one or more presets above first" : ""}
+                      onclick={applySelectedPresets}
+                    >
+                      {applySelectedBusy ? "Applying…" : `Apply selected (${selectedPresetIds.size})`}
+                    </button>
+                  </div>
+                {/if}
+                {#if applyAllError}
+                  <p class="bulk-error">{applyAllError}</p>
+                {/if}
+                {#if applySelectedError}
+                  <p class="bulk-error">{applySelectedError}</p>
+                {/if}
+              {/if}
+
+              {#if !showSavePreset}
+                <button
+                  type="button"
+                  class="preset-save-toggle"
+                  disabled={!canSaveCurrentAsPreset}
+                  title={canSaveCurrentAsPreset ? "" : "Fill in a valid start/end time and text first"}
+                  onclick={() => (showSavePreset = true)}
+                >
+                  + Save current as preset
+                </button>
+              {:else}
+                <div class="preset-save-row">
+                  <input
+                    type="text"
+                    bind:value={newPresetName}
+                    placeholder="Preset name (e.g. Sleep)"
+                    maxlength="60"
+                  />
+                  <button class="save" disabled={presetSaving || !newPresetName.trim()} onclick={confirmSavePreset}>
+                    {presetSaving ? "Saving…" : "Save"}
+                  </button>
+                  <button
+                    class="cancel"
+                    onclick={() => {
+                      showSavePreset = false;
+                      newPresetName = "";
+                      presetError = "";
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+                {#if presetError}
+                  <p class="bulk-error">{presetError}</p>
+                {/if}
+              {/if}
+            </div>
+
             <div class="bulk-fields">
               <label>
                 Start time
@@ -1060,6 +1309,122 @@
     font-size: 12px;
     color: var(--text-dim);
     margin: 0 0 10px;
+  }
+
+  .preset-section {
+    margin-bottom: 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .preset-label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+
+  .preset-empty {
+    display: block;
+    margin-bottom: 8px;
+  }
+
+  .preset-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .preset-chip {
+    display: inline-flex;
+    align-items: center;
+    background: var(--accent-soft);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .preset-chip-checkbox {
+    margin: 0 0 0 12px;
+    accent-color: var(--accent);
+  }
+
+  .preset-chip-apply {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 12px;
+    padding: 6px 4px 6px 8px;
+  }
+
+  .preset-chip-delete {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--accent);
+    opacity: 0.7;
+    padding: 6px 10px 6px 4px;
+  }
+
+  .preset-chip-delete:hover {
+    opacity: 1;
+  }
+
+  .preset-apply-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .preset-apply-all {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+  }
+
+  .preset-apply-all:disabled {
+    opacity: 0.5;
+  }
+
+  .preset-save-toggle {
+    background: none;
+    border: 1px dashed var(--border);
+    color: inherit;
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+  }
+
+  .preset-save-toggle:hover:not(:disabled) {
+    background: var(--surface);
+  }
+
+  .preset-save-toggle:disabled {
+    opacity: 0.5;
+  }
+
+  .preset-save-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .preset-save-row input {
+    flex: 1 1 160px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: inherit;
+    padding: 8px 10px;
+    font-size: 14px;
+    font-family: inherit;
   }
 
   .reflection-list {

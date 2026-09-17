@@ -147,8 +147,7 @@
   let joinBusy = $state(false);
   let joinError = $state("");
 
-  let syncDeviceId = $state("");
-  let syncBusy = $state(false);
+  let syncingDeviceId = $state<string | null>(null);
   let syncStatus = $state<"idle" | "success" | "error">("idle");
   let syncMessage = $state("");
 
@@ -227,7 +226,6 @@
     if (!confirm(`Forget "${deviceLabel(device.name, device.deviceId)}"? You'll need to pair again (a new PIN exchange) to sync with it.`))
       return;
     await forgetPairedDevice(device.deviceId);
-    if (syncDeviceId === device.deviceId) syncDeviceId = "";
     await loadPairedDevices();
   }
 
@@ -259,18 +257,19 @@
     return name || deviceId.slice(0, 8);
   }
 
-  async function runDeviceSync() {
-    if (!syncDeviceId) return;
-    syncBusy = true;
+  async function runDeviceSync(device: PairedDeviceInfo) {
+    syncingDeviceId = device.deviceId;
     syncStatus = "idle";
+    const label = deviceLabel(device.name, device.deviceId);
     try {
-      const result = await syncWithDevice(syncDeviceId);
+      const result = await syncWithDevice(device.deviceId);
       const receivedTotal =
         result.reflectionCount +
         result.taskListCount +
         result.notToDoListCount +
         result.wellnessCheckCount +
-        result.screenTimeSessionCount;
+        result.screenTimeSessionCount +
+        result.bulkEditPresetCount;
       const mergedClause =
         result.mergedSlotCount > 0
           ? ` ${result.mergedSlotCount} reflection slot${result.mergedSlotCount === 1 ? "" : "s"} merged with existing entries.`
@@ -279,14 +278,14 @@
       // outward (this device had a new change, the peer had nothing new to
       // send back) has receivedTotal = 0, which used to read as "nothing
       // happened" even though the change was sent and applied on the peer.
-      syncMessage = `Sent ${result.sentCount} row${result.sentCount === 1 ? "" : "s"}, received ${receivedTotal} row${receivedTotal === 1 ? "" : "s"} with the selected device.${mergedClause}`;
+      syncMessage = `Sent ${result.sentCount} row${result.sentCount === 1 ? "" : "s"}, received ${receivedTotal} row${receivedTotal === 1 ? "" : "s"} with ${label}.${mergedClause}`;
       syncStatus = "success";
       await loadPairedDevices();
     } catch (e) {
       syncMessage = e instanceof Error ? e.message : String(e);
       syncStatus = "error";
     } finally {
-      syncBusy = false;
+      syncingDeviceId = null;
     }
   }
 
@@ -670,7 +669,11 @@
         result.wellnessCheckDuplicateCount > 0
           ? ` ${result.wellnessCheckDuplicateCount} duplicate wellness check-in${result.wellnessCheckDuplicateCount === 1 ? "" : "s"} skipped.`
           : "";
-      importMessage = `Imported ${result.reflectionCount} reflection${result.reflectionCount === 1 ? "" : "s"}, ${result.taskListCount} task list${result.taskListCount === 1 ? "" : "s"}, ${result.notToDoListCount} not-to-do list${result.notToDoListCount === 1 ? "" : "s"}, ${result.settingCount} setting${result.settingCount === 1 ? "" : "s"}, ${result.wellnessCheckCount} wellness check-in${result.wellnessCheckCount === 1 ? "" : "s"}, ${result.screenTimeSessionCount} screen time session${result.screenTimeSessionCount === 1 ? "" : "s"}.${mergedClause}${duplicateClause}${wellnessDuplicateClause}`;
+      const presetStaleClause =
+        result.bulkEditPresetStaleCount > 0
+          ? ` ${result.bulkEditPresetStaleCount} bulk-edit preset${result.bulkEditPresetStaleCount === 1 ? "" : "s"} already up to date, skipped.`
+          : "";
+      importMessage = `Imported ${result.reflectionCount} reflection${result.reflectionCount === 1 ? "" : "s"}, ${result.taskListCount} task list${result.taskListCount === 1 ? "" : "s"}, ${result.notToDoListCount} not-to-do list${result.notToDoListCount === 1 ? "" : "s"}, ${result.settingCount} setting${result.settingCount === 1 ? "" : "s"}, ${result.wellnessCheckCount} wellness check-in${result.wellnessCheckCount === 1 ? "" : "s"}, ${result.screenTimeSessionCount} screen time session${result.screenTimeSessionCount === 1 ? "" : "s"}, ${result.bulkEditPresetCount} bulk-edit preset${result.bulkEditPresetCount === 1 ? "" : "s"}.${mergedClause}${duplicateClause}${wellnessDuplicateClause}${presetStaleClause}`;
       importStatus = "success";
       importPath = null;
       importFileName = "";
@@ -1099,10 +1102,23 @@
             ></span>
             <span class="paired-device-name">{deviceLabel(device.name, device.deviceId)} <span class="hint">({device.platform})</span></span>
             <span class="hint">Last synced: {formatLastSync(device.lastSyncAt)}</span>
+            <button
+              type="button"
+              onclick={() => runDeviceSync(device)}
+              disabled={syncingDeviceId !== null || !device.online}
+              title={device.online ? "" : "Device is offline"}
+            >
+              {syncingDeviceId === device.deviceId ? "Syncing…" : "Sync"}
+            </button>
             <button type="button" class="danger" onclick={() => removePairedDevice(device)}>Forget</button>
           </li>
         {/each}
       </ul>
+      {#if syncStatus === "success"}
+        <p class="hint saved">{syncMessage}</p>
+      {:else if syncStatus === "error"}
+        <p class="hint error">{syncMessage}</p>
+      {/if}
     {:else if pairedDevicesLoaded}
       <p class="hint">No paired devices yet.</p>
     {/if}
@@ -1165,31 +1181,6 @@
         </div>
       </div>
     {/if}
-
-    <h3>Sync devices</h3>
-    <p class="hint">
-      Pull the selected device's changes and send yours back in one step &mdash; only devices
-      currently online show up below.
-    </p>
-    <div class="data-row">
-      <label class="grow">
-        Device
-        <select bind:value={syncDeviceId}>
-          <option value="">Select a device&hellip;</option>
-          {#each pairedDevices.filter((d) => d.online) as device (device.deviceId)}
-            <option value={device.deviceId}>{deviceLabel(device.name, device.deviceId)} ({device.platform})</option>
-          {/each}
-        </select>
-      </label>
-      <button type="button" onclick={runDeviceSync} disabled={syncBusy || !syncDeviceId}>
-        {syncBusy ? "Syncing…" : "Sync"}
-      </button>
-    </div>
-    {#if syncStatus === "success"}
-      <p class="hint saved">{syncMessage}</p>
-    {:else if syncStatus === "error"}
-      <p class="hint error">{syncMessage}</p>
-    {/if}
   </section>
 </div>
 
@@ -1199,7 +1190,7 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
-    max-width: 600px;
+    max-width: 840px;
     margin: 0 auto;
   }
 

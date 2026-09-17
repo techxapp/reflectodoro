@@ -42,7 +42,7 @@
 //! - **Sync** (dialer writes tag `TAG_SYNC`, then its own device id so the
 //!   responder knows which stored `shared_key` to use): a Noise `NNpsk0`
 //!   handshake keyed by that peer's stored key, then one JSON frame each way
-//!   (`SyncPayload`) carrying delta rows for the five synced tables --
+//!   (`SyncPayload`) carrying delta rows for the six synced tables --
 //!   `app_setting` is never included, by design (see CLAUDE.md). Both sides
 //!   apply the payload they receive via `import.rs`'s existing merge
 //!   functions, always in `ImportMode::Merge`.
@@ -164,6 +164,7 @@ struct SyncPayload {
     not_to_do_list: Vec<import::ImportNotToDoRow>,
     wellness_check: Vec<import::ImportWellnessCheckRow>,
     screen_time_session: Vec<import::ImportScreenTimeSessionRow>,
+    bulk_edit_preset: Vec<import::ImportBulkEditPresetRow>,
 }
 
 #[derive(Serialize)]
@@ -186,6 +187,7 @@ pub struct SyncResult {
     pub merged_slot_count: usize,
     pub screen_time_duplicate_count: usize,
     pub wellness_check_duplicate_count: usize,
+    pub bulk_edit_preset_count: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -614,104 +616,197 @@ async fn update_last_sync_at(app: &AppHandle, peer_device_id: &str, sync_started
 async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<SyncPayload, String> {
     let pool = db::open_direct_pool(app).await?;
     let since = since.unwrap_or("");
+    // The three text columns and wellness_check's four boolean columns are
+    // all ciphertext at rest (crypto.rs), and the two devices in a pair hold
+    // entirely unrelated keys -- each one's key is local to it and never
+    // exchanged, by design. So the sending side decrypts here and the
+    // payload travels as plaintext *inside* the Noise session that already
+    // encrypts and authenticates the whole transfer (see this module's doc
+    // comment), and the receiving side re-encrypts under its own key via
+    // import.rs. Shipping raw ciphertext instead would be unreadable garbage
+    // on the far end.
+    let cipher = crate::crypto::FieldCipher::resolve(app).await?;
 
-    let reflection = sqlx::query_as::<_, (String, String, String, String)>(
+    let reflection_rows = sqlx::query_as::<_, (String, String, String, String)>(
         "SELECT created_at, slot_start_at, text, COALESCE(updated_at, created_at)
          FROM reflection WHERE COALESCE(updated_at, created_at) > ?",
     )
     .bind(since)
     .fetch_all(&pool)
     .await
-    .map_err(|e| e.to_string())?
-    .into_iter()
-    .map(|(created_at, slot_start_at, text, updated_at)| import::ImportReflectionRow {
-        created_at,
-        slot_start_at,
-        text,
-        updated_at: Some(updated_at),
-    })
-    .collect();
+    .map_err(|e| e.to_string())?;
+    let reflection_texts: Vec<String> = reflection_rows.iter().map(|(_, _, text, _)| text.clone()).collect();
+    let reflection_texts = cipher.decrypt_many(&reflection_texts).await?;
+    let reflection = reflection_rows
+        .into_iter()
+        .zip(reflection_texts)
+        .map(|((created_at, slot_start_at, _, updated_at), text)| import::ImportReflectionRow {
+            created_at,
+            slot_start_at,
+            text,
+            updated_at: Some(updated_at),
+        })
+        .collect();
 
-    let daily_task_list = sqlx::query_as::<_, (String, String, String)>(
+    let task_rows = sqlx::query_as::<_, (String, String, String)>(
         "SELECT date, content, updated_at FROM daily_task_list WHERE updated_at > ?",
     )
     .bind(since)
     .fetch_all(&pool)
     .await
-    .map_err(|e| e.to_string())?
-    .into_iter()
-    .map(|(date, content, updated_at)| import::ImportTaskListRow { date, content, updated_at })
-    .collect();
+    .map_err(|e| e.to_string())?;
+    let task_contents: Vec<String> = task_rows.iter().map(|(_, content, _)| content.clone()).collect();
+    let task_contents = cipher.decrypt_many(&task_contents).await?;
+    let daily_task_list = task_rows
+        .into_iter()
+        .zip(task_contents)
+        .map(|((date, _, updated_at), content)| import::ImportTaskListRow { date, content, updated_at })
+        .collect();
 
-    let not_to_do_list = sqlx::query_as::<_, (String, String, String)>(
+    let not_to_do_rows = sqlx::query_as::<_, (String, String, String)>(
         "SELECT date, content, updated_at FROM not_to_do_list WHERE updated_at > ?",
     )
     .bind(since)
     .fetch_all(&pool)
     .await
-    .map_err(|e| e.to_string())?
-    .into_iter()
-    .map(|(date, content, updated_at)| import::ImportNotToDoRow { date, content, updated_at })
-    .collect();
+    .map_err(|e| e.to_string())?;
+    let not_to_do_contents: Vec<String> = not_to_do_rows.iter().map(|(_, content, _)| content.clone()).collect();
+    let not_to_do_contents = cipher.decrypt_many(&not_to_do_contents).await?;
+    let not_to_do_list = not_to_do_rows
+        .into_iter()
+        .zip(not_to_do_contents)
+        .map(|((date, _, updated_at), content)| import::ImportNotToDoRow { date, content, updated_at })
+        .collect();
 
-    let wellness_check = sqlx::query_as::<_, (String, i64, i64, i64, i64, String)>(
+    let wellness_rows = sqlx::query_as::<_, (String, String, String, String, String, String)>(
         "SELECT slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at
          FROM wellness_check WHERE created_at > ?",
     )
     .bind(since)
     .fetch_all(&pool)
     .await
-    .map_err(|e| e.to_string())?
-    .into_iter()
-    .map(|(slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at)| import::ImportWellnessCheckRow {
-        slot_start_at,
-        relaxed_eyes,
-        exercise,
-        drank_water,
-        washroom,
-        created_at,
-    })
-    .collect();
+    .map_err(|e| e.to_string())?;
+    // Same decrypt-before-send treatment as the three text columns above --
+    // flatten the four booleans across every row into one batch so a day's
+    // worth of check-ins costs one decrypt_many call, not four.
+    let wellness_values: Vec<String> = wellness_rows
+        .iter()
+        .flat_map(|(_, relaxed_eyes, exercise, drank_water, washroom, _)| {
+            [relaxed_eyes.clone(), exercise.clone(), drank_water.clone(), washroom.clone()]
+        })
+        .collect();
+    let wellness_values = cipher.decrypt_many(&wellness_values).await?;
+    let wellness_check = wellness_rows
+        .into_iter()
+        .zip(wellness_values.chunks_exact(4))
+        .map(|((slot_start_at, _, _, _, _, created_at), values)| {
+            let parse = |s: &str| s.parse::<i64>().map_err(|e| format!("wellness_check value {s:?} isn't a valid boolean: {e}"));
+            Ok::<_, String>(import::ImportWellnessCheckRow {
+                slot_start_at,
+                relaxed_eyes: parse(&values[0])?,
+                exercise: parse(&values[1])?,
+                drank_water: parse(&values[2])?,
+                washroom: parse(&values[3])?,
+                created_at,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
 
-    let screen_time_session = sqlx::query_as::<_, (String, String, String, String, String, String)>(
+    let screen_time_rows = sqlx::query_as::<_, (String, String, String, String, String, String)>(
         "SELECT app_id, display_name, platform, device_name, started_at, ended_at
          FROM screen_time_session WHERE started_at > ?",
     )
     .bind(since)
     .fetch_all(&pool)
     .await
-    .map_err(|e| e.to_string())?
-    .into_iter()
-    .map(|(app_id, display_name, platform, device_name, started_at, ended_at)| import::ImportScreenTimeSessionRow {
-        app_id,
-        display_name,
-        platform,
-        device_name,
-        started_at,
-        ended_at,
-    })
-    .collect();
+    .map_err(|e| e.to_string())?;
+    // app_id/display_name are crypto.rs's usual random-nonce ciphertext (see
+    // CLAUDE.md's "Encryption at rest") -- decrypted here, same as the other
+    // encrypted tables above, and never including app_id_hash: that column
+    // is a blind index keyed to *this* device's own key, meaningless (and
+    // potentially misleading, since two devices' hashes for the same app
+    // never match) on the receiving side, which computes its own via
+    // import.rs's import_screen_time_sessions instead.
+    let screen_time_app_ids: Vec<String> = screen_time_rows.iter().map(|(app_id, ..)| app_id.clone()).collect();
+    let screen_time_app_ids = cipher.decrypt_many(&screen_time_app_ids).await?;
+    let screen_time_display_names: Vec<String> =
+        screen_time_rows.iter().map(|(_, display_name, ..)| display_name.clone()).collect();
+    let screen_time_display_names = cipher.decrypt_many(&screen_time_display_names).await?;
+    let screen_time_session = screen_time_rows
+        .into_iter()
+        .zip(screen_time_app_ids)
+        .zip(screen_time_display_names)
+        .map(|(((_, _, platform, device_name, started_at, ended_at), app_id), display_name)| {
+            import::ImportScreenTimeSessionRow { app_id, display_name, platform, device_name, started_at, ended_at }
+        })
+        .collect();
 
-    Ok(SyncPayload { reflection, daily_task_list, not_to_do_list, wellness_check, screen_time_session })
+    let preset_rows = sqlx::query_as::<_, (String, String, String, String, String, String, String)>(
+        "SELECT id, name, start_time, end_time, text, created_at, updated_at
+         FROM bulk_edit_preset WHERE updated_at > ?",
+    )
+    .bind(since)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    // start_time/end_time/text are all ciphertext at rest -- decrypted here
+    // like every other encrypted table above, flattening all three per row
+    // into one batch (same shape wellness_check's four booleans use).
+    let preset_values: Vec<String> = preset_rows
+        .iter()
+        .flat_map(|(_, _, start_time, end_time, text, _, _)| [start_time.clone(), end_time.clone(), text.clone()])
+        .collect();
+    let preset_values = cipher.decrypt_many(&preset_values).await?;
+    let bulk_edit_preset = preset_rows
+        .into_iter()
+        .zip(preset_values.chunks_exact(3))
+        .map(|((id, name, _, _, _, created_at, updated_at), values)| import::ImportBulkEditPresetRow {
+            id,
+            name,
+            start_time: values[0].clone(),
+            end_time: values[1].clone(),
+            text: values[2].clone(),
+            created_at,
+            updated_at,
+        })
+        .collect();
+
+    Ok(SyncPayload {
+        reflection,
+        daily_task_list,
+        not_to_do_list,
+        wellness_check,
+        screen_time_session,
+        bulk_edit_preset,
+    })
 }
 
 async fn apply_payload(app: &AppHandle, payload: &SyncPayload) -> Result<SyncResult, String> {
     let pool = db::open_direct_pool(app).await?;
+    // Incoming rows are plaintext (the peer decrypted them before sending --
+    // see build_delta_payload); import.rs re-encrypts them under *this*
+    // device's own key on the way into the database.
+    let cipher = crate::crypto::FieldCipher::resolve(app).await?;
     let mut tx = pool.begin().await.map_err(|e| format!("failed to start sync-apply transaction: {e}"))?;
 
-    let merged_slot_count = import::import_reflections(&mut tx, &payload.reflection, import::ImportMode::Merge).await?;
+    let merged_slot_count =
+        import::import_reflections(&mut tx, &cipher, &payload.reflection, import::ImportMode::Merge).await?;
     let wellness_check_duplicate_count =
-        import::import_wellness_checks(&mut tx, &payload.wellness_check, import::ImportMode::Merge).await?;
+        import::import_wellness_checks(&mut tx, &cipher, &payload.wellness_check, import::ImportMode::Merge).await?;
 
     let daily_task_rows: Vec<(&str, &str, &str)> =
         payload.daily_task_list.iter().map(|r| (r.date.as_str(), r.content.as_str(), r.updated_at.as_str())).collect();
-    import::merge_import_day_rows(&mut tx, "daily_task_list", &daily_task_rows, import::ImportMode::Merge).await?;
+    import::merge_import_day_rows(&mut tx, &cipher, "daily_task_list", &daily_task_rows, import::ImportMode::Merge)
+        .await?;
 
     let not_to_do_rows: Vec<(&str, &str, &str)> =
         payload.not_to_do_list.iter().map(|r| (r.date.as_str(), r.content.as_str(), r.updated_at.as_str())).collect();
-    import::merge_import_day_rows(&mut tx, "not_to_do_list", &not_to_do_rows, import::ImportMode::Merge).await?;
+    import::merge_import_day_rows(&mut tx, &cipher, "not_to_do_list", &not_to_do_rows, import::ImportMode::Merge)
+        .await?;
 
-    let screen_time_duplicate_count = import::import_screen_time_sessions(&mut tx, &payload.screen_time_session).await?;
+    let screen_time_duplicate_count =
+        import::import_screen_time_sessions(&mut tx, &cipher, &payload.screen_time_session).await?;
+    import::import_bulk_edit_presets(&mut tx, &cipher, &payload.bulk_edit_preset, import::ImportMode::Merge).await?;
 
     tx.commit().await.map_err(|e| format!("failed to commit sync-apply transaction: {e}"))?;
 
@@ -727,6 +822,7 @@ async fn apply_payload(app: &AppHandle, payload: &SyncPayload) -> Result<SyncRes
         merged_slot_count,
         screen_time_duplicate_count,
         wellness_check_duplicate_count,
+        bulk_edit_preset_count: payload.bulk_edit_preset.len(),
     })
 }
 
@@ -1158,6 +1254,7 @@ fn sync_payload_row_count(payload: &SyncPayload) -> usize {
         + payload.not_to_do_list.len()
         + payload.wellness_check.len()
         + payload.screen_time_session.len()
+        + payload.bulk_edit_preset.len()
 }
 
 #[cfg(test)]

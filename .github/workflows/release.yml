@@ -57,7 +57,11 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf build-essential curl wget file libssl-dev libgtk-3-dev libx11-dev xdg-utils
+          # libdbus-1-dev backs the keyring crate's sync-secret-service
+          # backend (crypto.rs's at-rest key storage on Linux) -- it is not
+          # pulled in transitively by any of the others here, and without it
+          # the Linux build fails at link time rather than degrading.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf build-essential curl wget file libssl-dev libgtk-3-dev libx11-dev libdbus-1-dev xdg-utils
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (as of 2026-09-03)

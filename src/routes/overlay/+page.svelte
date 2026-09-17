@@ -6,6 +6,7 @@
   import {
     findMissedSlots,
     saveReflection,
+    splitReflectionForSlots,
     getLastReflectionText,
     getTaskList,
     saveTaskList,
@@ -68,6 +69,14 @@
 
   const promptLabel = $derived(
     missedSlots.length > 1 ? `last ${missedSlots.length} pomodoros` : "last 1 pomodoro",
+  );
+
+  /** Non-null once `reflectionText` splits cleanly into one line per missed slot -- lets the UI
+   * preview, before submit, whether saveReflection (db.ts) will split this text across the
+   * missed slots or (the fallback, whenever the line count doesn't match) write it whole into
+   * every one of them. */
+  const splitPreview = $derived(
+    missedSlots.length > 1 ? splitReflectionForSlots(reflectionText, missedSlots) : null,
   );
 
   const remainingSeconds = $derived.by(() => {
@@ -381,6 +390,16 @@
       <p class="timer">{remainingSeconds > 0 ? remainingLabel : "Time's up"}</p>
 
       <h1>What did I do in the {promptLabel}?</h1>
+      {#if missedSlots.length > 1 && !overlayState?.reflection_entered}
+        <p class="hint">
+          {#if splitPreview}
+            Will save as {missedSlots.length} separate entries, oldest first.
+          {:else}
+            Tip: write {missedSlots.length} lines (one per pomodoro, oldest first) to log each
+            separately -- otherwise this saves as one summary for all {missedSlots.length}.
+          {/if}
+        </p>
+      {/if}
       <form onsubmit={submitReflection}>
         <textarea
           bind:value={reflectionText}
