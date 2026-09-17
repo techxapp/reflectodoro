@@ -710,24 +710,34 @@ async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<Syn
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    let screen_time_session = sqlx::query_as::<_, (String, String, String, String, String, String)>(
+    let screen_time_rows = sqlx::query_as::<_, (String, String, String, String, String, String)>(
         "SELECT app_id, display_name, platform, device_name, started_at, ended_at
          FROM screen_time_session WHERE started_at > ?",
     )
     .bind(since)
     .fetch_all(&pool)
     .await
-    .map_err(|e| e.to_string())?
-    .into_iter()
-    .map(|(app_id, display_name, platform, device_name, started_at, ended_at)| import::ImportScreenTimeSessionRow {
-        app_id,
-        display_name,
-        platform,
-        device_name,
-        started_at,
-        ended_at,
-    })
-    .collect();
+    .map_err(|e| e.to_string())?;
+    // app_id/display_name are crypto.rs's usual random-nonce ciphertext (see
+    // CLAUDE.md's "Encryption at rest") -- decrypted here, same as the other
+    // encrypted tables above, and never including app_id_hash: that column
+    // is a blind index keyed to *this* device's own key, meaningless (and
+    // potentially misleading, since two devices' hashes for the same app
+    // never match) on the receiving side, which computes its own via
+    // import.rs's import_screen_time_sessions instead.
+    let screen_time_app_ids: Vec<String> = screen_time_rows.iter().map(|(app_id, ..)| app_id.clone()).collect();
+    let screen_time_app_ids = cipher.decrypt_many(&screen_time_app_ids).await?;
+    let screen_time_display_names: Vec<String> =
+        screen_time_rows.iter().map(|(_, display_name, ..)| display_name.clone()).collect();
+    let screen_time_display_names = cipher.decrypt_many(&screen_time_display_names).await?;
+    let screen_time_session = screen_time_rows
+        .into_iter()
+        .zip(screen_time_app_ids)
+        .zip(screen_time_display_names)
+        .map(|(((_, _, platform, device_name, started_at, ended_at), app_id), display_name)| {
+            import::ImportScreenTimeSessionRow { app_id, display_name, platform, device_name, started_at, ended_at }
+        })
+        .collect();
 
     Ok(SyncPayload { reflection, daily_task_list, not_to_do_list, wellness_check, screen_time_session })
 }
@@ -755,7 +765,8 @@ async fn apply_payload(app: &AppHandle, payload: &SyncPayload) -> Result<SyncRes
     import::merge_import_day_rows(&mut tx, &cipher, "not_to_do_list", &not_to_do_rows, import::ImportMode::Merge)
         .await?;
 
-    let screen_time_duplicate_count = import::import_screen_time_sessions(&mut tx, &payload.screen_time_session).await?;
+    let screen_time_duplicate_count =
+        import::import_screen_time_sessions(&mut tx, &cipher, &payload.screen_time_session).await?;
 
     tx.commit().await.map_err(|e| format!("failed to commit sync-apply transaction: {e}"))?;
 

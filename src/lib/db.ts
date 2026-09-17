@@ -76,6 +76,17 @@ async function decryptField(value: string): Promise<string> {
   return (await decryptFields([value]))[0];
 }
 
+/** `screen_time_session.app_id_hash` -- a deterministic HMAC-SHA256 "blind
+ * index" of `app_id` (see crypto.rs's `FieldCipher::blind_index_many`), used
+ * only for `GROUP BY`/duplicate-check equality once `app_id` itself is
+ * `encryptField`-ed ciphertext and therefore never equal to itself across
+ * two writes. Unlike `encryptFields`, calling this twice on the same value
+ * is expected to return the same hash both times -- that's the whole point. */
+async function hashAppIds(values: string[]): Promise<string[]> {
+  if (values.length === 0) return [];
+  return invoke<string[]>("hash_app_ids", { values });
+}
+
 export interface ReflectionRow {
   id: number;
   created_at: string;
@@ -1165,10 +1176,32 @@ export interface ScreenTimeSessionInput {
   ended_at: string;
 }
 
-/** SQLite's default bound-variable ceiling is 999; at 6 columns per row this
+/** SQLite's default bound-variable ceiling is 999; at 7 columns per row this
  * keeps a chunk well under it while still collapsing a whole batch into one or
  * two statements instead of one per session. */
 const SCREEN_TIME_INSERT_CHUNK = 100;
+
+/** Empty `display_name` (no friendly name resolved) stays plain `""` rather
+ * than being encrypted -- every reader already treats `""` as "no friendly
+ * name, fall back to appId", and encrypting nothing would only cost a
+ * decrypt on every later read for no benefit. Mirrors the same rule
+ * crypto.rs's screen-time backfill and import.rs's screen-time import use. */
+async function encryptDisplayNames(values: string[]): Promise<string[]> {
+  const nonEmptyIndexes: number[] = [];
+  const nonEmptyValues: string[] = [];
+  values.forEach((v, i) => {
+    if (v) {
+      nonEmptyIndexes.push(i);
+      nonEmptyValues.push(v);
+    }
+  });
+  const encrypted = await encryptFields(nonEmptyValues);
+  const result = values.map(() => "");
+  nonEmptyIndexes.forEach((idx, j) => {
+    result[idx] = encrypted[j];
+  });
+  return result;
+}
 
 export async function saveScreenTimeSessions(sessions: ScreenTimeSessionInput[]): Promise<void> {
   if (sessions.length === 0) return;
@@ -1178,23 +1211,40 @@ export async function saveScreenTimeSessions(sessions: ScreenTimeSessionInput[])
 
   for (let i = 0; i < sessions.length; i += SCREEN_TIME_INSERT_CHUNK) {
     const chunk = sessions.slice(i, i + SCREEN_TIME_INSERT_CHUNK);
+    const appIds = chunk.map((s) => s.app_id);
+    // app_id/display_name are encrypted the same way reflection.text is (see
+    // crypto.rs's "Encryption at rest") -- a fresh random nonce every call,
+    // so the same plaintext never produces the same ciphertext twice.
+    // app_id_hash is a deterministic HMAC-SHA256 "blind index" of the
+    // plaintext app_id computed alongside it, which is what lets
+    // getScreenTimeForDate's GROUP BY and import.rs's duplicate check keep
+    // working in SQL despite that. Never fall back to writing plaintext on
+    // failure -- a rejected Promise here propagates to the caller's .catch
+    // (listenForScreenTimeSessionBatches), which logs and drops the batch.
+    const [encryptedAppIds, appIdHashes, encryptedDisplayNames] = await Promise.all([
+      encryptFields(appIds),
+      hashAppIds(appIds),
+      encryptDisplayNames(chunk.map((s) => s.display_name)),
+    ]);
+
     const values: string[] = [];
     const placeholders = chunk
       .map((session, index) => {
-        const base = index * 6;
+        const base = index * 7;
         values.push(
-          session.app_id,
-          session.display_name,
+          encryptedAppIds[index],
+          encryptedDisplayNames[index],
+          appIdHashes[index],
           session.platform,
           deviceName,
           session.started_at,
           session.ended_at,
         );
-        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`;
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
       })
       .join(", ");
     await db.execute(
-      `INSERT INTO screen_time_session (app_id, display_name, platform, device_name, started_at, ended_at)
+      `INSERT INTO screen_time_session (app_id, display_name, app_id_hash, platform, device_name, started_at, ended_at)
        VALUES ${placeholders}`,
       values,
     );
@@ -1240,15 +1290,23 @@ export interface ScreenTimeEntry {
  * simple and stable, at the cost of a little drift for anyone working through
  * midnight.
  *
- * Grouped by app_id (not display_name) -- app_id is the stable identity key,
- * display_name is just a label for it, so this stays correct even if a
- * FileDescription somehow resolved differently across two sessions of the
- * same exe. MAX(display_name) picks whichever non-empty label exists among
- * the grouped rows (display_name is constant per app_id in practice).
+ * Grouped by `app_id_hash` (falling back to raw `app_id` for a legacy row the
+ * one-time encryption backfill hasn't reached yet, `app_id_hash = ''`), not
+ * `app_id` itself -- `app_id`/`display_name` are crypto.rs's usual
+ * random-nonce ciphertext (see "Encryption at rest"), which never produces
+ * the same value twice for the same plaintext, so grouping on it directly
+ * would put every session in its own group. `app_id_hash` is the
+ * deterministic HMAC-SHA256 "blind index" computed alongside it precisely so
+ * this grouping keeps working in SQL. `MIN(app_id)`/`MAX(display_name)` just
+ * pick one representative ciphertext per group -- every row in a group
+ * decrypts to the same plaintext app_id, and MAX naturally prefers a
+ * non-empty ciphertext label over plain `""` when both exist in a group,
+ * same property the pre-encryption code relied on.
  *
- * Grouped by device_name as well as app_id, so the same app on two devices
- * (only possible after a cross-device import) reads as two rows instead of
- * being silently summed -- invisible in the ordinary single-device case.
+ * Grouped by device_name as well as the app identity, so the same app on two
+ * devices (only possible after a cross-device import) reads as two rows
+ * instead of being silently summed -- invisible in the ordinary
+ * single-device case.
  */
 export async function getScreenTimeForDate(dateStamp: string): Promise<ScreenTimeEntry[]> {
   const db = await getDb();
@@ -1261,24 +1319,54 @@ export async function getScreenTimeForDate(dateStamp: string): Promise<ScreenTim
       ms: number | null;
     }[]
   >(
-    `SELECT app_id,
+    `SELECT MIN(app_id) as app_id,
             MAX(display_name) as display_name,
             platform,
             device_name,
             SUM((julianday(ended_at) - julianday(started_at)) * 86400000) as ms
      FROM screen_time_session
      WHERE date(started_at, 'localtime') = $1
-     GROUP BY app_id, platform, device_name
+     GROUP BY COALESCE(NULLIF(app_id_hash, ''), app_id), platform, device_name
      ORDER BY ms DESC`,
     [dateStamp],
   );
-  return rows.map((row) => ({
-    appId: row.app_id,
-    displayName: row.display_name || row.app_id,
-    platform: row.platform,
-    deviceName: row.device_name,
-    ms: Math.max(0, Math.round(row.ms ?? 0)),
-  }));
+
+  // One batched decrypt for the whole day's distinct apps (a handful of
+  // values), not one per session row -- the entire point of grouping by
+  // app_id_hash instead of decrypting every row up front.
+  const appIds = await decryptFields(rows.map((r) => r.app_id));
+  const displayNames = await decryptFields(rows.map((r) => r.display_name || ""));
+
+  // During the transition window before the one-time backfill finishes, a
+  // still-plaintext row (app_id_hash = '') and an already-encrypted row for
+  // the same app can land in two separate SQL groups (one keyed by raw
+  // app_id, one by app_id_hash). Merging here by decrypted identity (a
+  // no-op for the common already-fully-migrated case) is what keeps that
+  // window from double-counting or double-listing an app.
+  const merged = new Map<string, ScreenTimeEntry>();
+  rows.forEach((row, i) => {
+    const key = `${appIds[i]}::${row.platform}::${row.device_name}`;
+    const ms = Math.max(0, Math.round(row.ms ?? 0));
+    const existing = merged.get(key);
+    if (existing) {
+      existing.ms += ms;
+      // displayName is never empty (already defaulted to appId below) -- so
+      // "no real label yet" means it still equals its own fallback.
+      if (existing.displayName === existing.appId && displayNames[i]) {
+        existing.displayName = displayNames[i];
+      }
+    } else {
+      merged.set(key, {
+        appId: appIds[i],
+        displayName: displayNames[i] || appIds[i],
+        platform: row.platform,
+        deviceName: row.device_name,
+        ms,
+      });
+    }
+  });
+
+  return Array.from(merged.values()).sort((a, b) => b.ms - a.ms);
 }
 
 export interface CurrentScreenTimeSession {
@@ -1499,12 +1587,15 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
   // entirely unrelated key, so shipping ciphertext would make it unreadable
   // everywhere including here. Encryption protects the live pomodoro.db, not
   // a file the user explicitly chose to write somewhere of their choosing.
-  const [reflectionTexts, taskContents, notToDoContents, wellnessValues] = await Promise.all([
-    decryptFields(reflection.map((r) => r.text)),
-    decryptFields(daily_task_list.map((r) => r.content)),
-    decryptFields(not_to_do_list.map((r) => r.content)),
-    decryptFields(wellness_check.flatMap((r) => [r.relaxed_eyes, r.exercise, r.drank_water, r.washroom])),
-  ]);
+  const [reflectionTexts, taskContents, notToDoContents, wellnessValues, screenTimeAppIds, screenTimeDisplayNames] =
+    await Promise.all([
+      decryptFields(reflection.map((r) => r.text)),
+      decryptFields(daily_task_list.map((r) => r.content)),
+      decryptFields(not_to_do_list.map((r) => r.content)),
+      decryptFields(wellness_check.flatMap((r) => [r.relaxed_eyes, r.exercise, r.drank_water, r.washroom])),
+      decryptFields(screen_time_session.map((r) => r.app_id)),
+      decryptFields(screen_time_session.map((r) => r.display_name)),
+    ]);
   return {
     app: "reflectodoro",
     export_format_version: EXPORT_FORMAT_VERSION,
@@ -1522,7 +1613,15 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
         washroom: Number(wellnessValues[i * 4 + 3]),
         created_at: row.created_at,
       })),
-      screen_time_session,
+      // app_id_hash is deliberately left out of every exported row -- it's a
+      // blind index keyed to this device's own key, meaningless (and
+      // potentially misleading) once re-imported on a different device with
+      // an unrelated key. import.rs recomputes it on the way in.
+      screen_time_session: screen_time_session.map((row, i) => ({
+        ...row,
+        app_id: screenTimeAppIds[i],
+        display_name: screenTimeDisplayNames[i],
+      })),
     },
   };
 }

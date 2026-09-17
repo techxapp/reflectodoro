@@ -91,6 +91,21 @@ chacha20poly1305 = "0.10"
 # base64 is the most compact text-safe encoding that satisfies both without
 # a BLOB-column schema change.
 base64 = "0.22"
+# crypto.rs: back screen_time_session.app_id_hash, a deterministic "blind
+# index" that lets getScreenTimeForDate's GROUP BY and import.rs's duplicate
+# check keep working on app_id/display_name once those columns are
+# encrypted with crypto.rs's usual random-nonce scheme (which, by design,
+# never produces the same ciphertext twice -- see that module's doc
+# comment). hkdf derives a dedicated HMAC subkey from the existing 32-byte
+# AEAD key (desktop only -- Android's Keystore key is non-exportable, so it
+# uses a second, independently generated Keystore HMAC key instead, see
+# android_bridge.rs/NativeBridgePlugin.kt) so the same raw key is never used
+# for both encryption and a MAC. All three are already pulled in
+# transitively by spake2/snow/sqlx/keyring at the versions pinned here, so
+# adding them directly costs no new versions in the dependency tree.
+hmac = "0.12"
+hkdf = "0.12"
+sha2 = "0.10"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"

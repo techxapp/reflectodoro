@@ -42,7 +42,13 @@ use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng};
 #[cfg(not(target_os = "android"))]
 use chacha20poly1305::XChaCha20Poly1305;
+#[cfg(not(target_os = "android"))]
+use hkdf::Hkdf;
+#[cfg(not(target_os = "android"))]
+use hmac::{Hmac, Mac};
 use sqlx::{Row, Sqlite, Transaction};
+#[cfg(not(target_os = "android"))]
+use sha2::Sha256;
 use tauri::AppHandle;
 #[cfg(not(target_os = "android"))]
 use tokio::sync::OnceCell;
@@ -62,6 +68,18 @@ const NONCE_LEN: usize = 24;
 
 #[cfg(not(target_os = "android"))]
 const KEY_LEN: usize = 32;
+
+/// HKDF `info` label for the HMAC subkey that backs
+/// `screen_time_session.app_id_hash` (see `FieldCipher::blind_index_many`).
+/// Never the raw AEAD key itself -- reusing one raw key for two different
+/// cryptographic primitives (AEAD encryption and a MAC) is a key-separation
+/// anti-pattern this label exists to avoid. Android has no equivalent
+/// derivation: its Keystore key is non-exportable, so it uses a second,
+/// independently generated Keystore HMAC key instead (see
+/// android_bridge.rs's `hmac_fields` / `NativeBridgePlugin.kt`'s
+/// `HMAC_KEY_ALIAS`) rather than deriving anything from the AEAD key.
+#[cfg(not(target_os = "android"))]
+const BLIND_INDEX_HKDF_INFO: &[u8] = b"reflectodoro/screen_time/app_id_hash/v1";
 
 /// Identifies this app's entry in the OS credential store. Deliberately the
 /// same bundle identifier used for `app_config_dir()`/`app_log_dir()`.
@@ -165,6 +183,41 @@ impl FieldCipher {
                 }
             })
             .collect()
+    }
+
+    /// Deterministic "blind index" for `screen_time_session.app_id` (see
+    /// CLAUDE.md's "Encryption at rest"): the same input always produces the
+    /// same output under one device's key, which is what lets
+    /// `getScreenTimeForDate`'s `GROUP BY` and `import.rs`'s duplicate check
+    /// keep working in SQL once `app_id` itself is random-nonce ciphertext
+    /// (and therefore never equal to itself across two encryptions). Never
+    /// used to recover the plaintext -- HMAC isn't reversible -- only to
+    /// tell "these two rows are the same app" apart from "different apps".
+    #[cfg(not(target_os = "android"))]
+    pub async fn blind_index_many(&self, values: &[String]) -> Result<Vec<String>, String> {
+        let hk = Hkdf::<Sha256>::new(None, &self.key);
+        let mut subkey = [0u8; 32];
+        hk.expand(BLIND_INDEX_HKDF_INFO, &mut subkey).map_err(|e| format!("HKDF expand failed: {e}"))?;
+        values
+            .iter()
+            .map(|v| {
+                // Fully qualified: `KeyInit` (already in scope for the AEAD
+                // cipher above) and `hmac::Mac` both define
+                // `new_from_slice`, which is ambiguous without this.
+                let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&subkey)
+                    .map_err(|e| format!("HMAC init failed: {e}"))?;
+                mac.update(v.as_bytes());
+                Ok(BASE64.encode(mac.finalize().into_bytes()))
+            })
+            .collect()
+    }
+
+    /// Android has no raw key to derive from (see `BLIND_INDEX_HKDF_INFO`'s
+    /// doc comment), so this runs against a second, independently generated
+    /// Keystore HMAC key instead, entirely inside Kotlin.
+    #[cfg(target_os = "android")]
+    pub async fn blind_index_many(&self, values: &[String]) -> Result<Vec<String>, String> {
+        crate::android_bridge::hmac_fields(&self.app, values)
     }
 
     /// Fixed-key cipher for tests (import.rs's DB-backed tests in
@@ -375,7 +428,17 @@ const ENCRYPTED_COLUMNS: [(&str, &str, &str); 7] = [
     ("wellness_check", "id", "washroom"),
 ];
 
-/// Spawned from `lib.rs`'s `setup()`. Retries on the same cold-start race
+/// Spawned from `lib.rs`'s `setup()`. Runs the original four-table migration
+/// and the `screen_time_session` one (see `SCREEN_TIME_MIGRATED_KEY`) as two
+/// independently retried passes: an install that already has
+/// `MIGRATED_KEY = "true"` from before app names were encrypted would
+/// otherwise skip the screen-time backfill entirely if both shared one flag.
+pub async fn run_encryption_migration_after_db_ready(app: AppHandle) {
+    retry_migration(app.clone(), "data", migrate_once).await;
+    retry_migration(app, "screen_time_session", migrate_screen_time_sessions_once).await;
+}
+
+/// Retries on the same cold-start race
 /// `p2p_sync::get_or_create_device_id_after_db_ready` exists for: `.setup()`
 /// runs before the frontend's `Database.load()` has necessarily created
 /// `pomodoro.db` or applied its migrations, so the first few attempts here
@@ -385,15 +448,26 @@ const ENCRYPTED_COLUMNS: [(&str, &str, &str); 7] = [
 /// are encrypted regardless of whether this ran, and rows it hasn't reached
 /// stay readable through `decrypt`'s passthrough. The next launch tries
 /// again.
-pub async fn run_encryption_migration_after_db_ready(app: AppHandle) {
+///
+/// Takes `app` by value (cloned per attempt below) rather than by
+/// reference: an `async fn(&AppHandle) -> impl Future` function item's
+/// implicit borrow doesn't satisfy a plain `F: FnMut(&AppHandle) -> Fut`
+/// bound (the required higher-ranked lifetime isn't expressible with a
+/// single fixed `Fut` type), and `AppHandle` is a cheap `Clone` handle
+/// anyway.
+async fn retry_migration<F, Fut>(app: AppHandle, label: &str, mut attempt: F)
+where
+    F: FnMut(AppHandle) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<usize>, String>>,
+{
     const MAX_ATTEMPTS: u32 = 10;
     const RETRY_DELAY: Duration = Duration::from_millis(750);
 
     let mut last_err = String::new();
     for _ in 0..MAX_ATTEMPTS {
-        match migrate_once(&app).await {
+        match attempt(app.clone()).await {
             Ok(Some(count)) => {
-                log::info!("crypto: encryption-at-rest migration complete, {count} row(s) encrypted");
+                log::info!("crypto: {label} encryption-at-rest migration complete, {count} row(s) encrypted");
                 return;
             }
             Ok(None) => return, // already migrated
@@ -404,14 +478,14 @@ pub async fn run_encryption_migration_after_db_ready(app: AppHandle) {
         }
     }
     log::error!(
-        "crypto: encryption-at-rest migration did not run this session ({last_err}); \
+        "crypto: {label} encryption-at-rest migration did not run this session ({last_err}); \
          existing rows stay readable as plaintext and it will be retried on next launch"
     );
 }
 
 /// `Ok(None)` = already migrated, nothing to do.
-async fn migrate_once(app: &AppHandle) -> Result<Option<usize>, String> {
-    let pool = db::open_direct_pool(app).await?;
+async fn migrate_once(app: AppHandle) -> Result<Option<usize>, String> {
+    let pool = db::open_direct_pool(&app).await?;
 
     let done: Option<String> = sqlx::query_scalar("SELECT value FROM app_setting WHERE key = ?")
         .bind(MIGRATED_KEY)
@@ -422,7 +496,7 @@ async fn migrate_once(app: &AppHandle) -> Result<Option<usize>, String> {
         return Ok(None);
     }
 
-    let cipher = FieldCipher::resolve(app).await?;
+    let cipher = FieldCipher::resolve(&app).await?;
     let mut tx = pool.begin().await.map_err(|e| format!("failed to start migration transaction: {e}"))?;
 
     let mut encrypted = 0usize;
@@ -494,6 +568,140 @@ async fn encrypt_existing_rows(
             .map_err(|e| format!("couldn't encrypt a {table} row: {e}"))?;
     }
     Ok(pending.len())
+}
+
+/// `app_setting` key for the one-time backfill of `screen_time_session`'s
+/// `app_id`/`display_name` (encryption) and `app_id_hash` (blind index).
+/// Deliberately separate from `MIGRATED_KEY`: an install that already ran
+/// the original four-table migration has `MIGRATED_KEY = "true"` and would
+/// otherwise skip this table's backfill entirely if both shared one flag --
+/// see CLAUDE.md's "Encryption at rest".
+const SCREEN_TIME_MIGRATED_KEY: &str = "screen_time_encryption_migrated";
+
+/// Rows per backfill batch. `screen_time_session` is documented (CLAUDE.md)
+/// as likely to become the largest table by row count, and on Android every
+/// batch is at least two JNI bridge round trips (decrypt, blind-index,
+/// encrypt) -- chunking keeps any one pass bounded instead of pulling an
+/// entire history into memory and one giant transaction.
+const SCREEN_TIME_MIGRATION_CHUNK: i64 = 500;
+
+/// Not built on the generic `ENCRYPTED_COLUMNS`/`encrypt_existing_rows`
+/// machinery above: that helper only ever rewrites one ciphertext column
+/// for a row it already knows the key of, with no way to also compute and
+/// write a derived `app_id_hash` alongside it. `Ok(None)` = already
+/// migrated, nothing to do.
+///
+/// Every row this touches is selected by `WHERE app_id_hash = ''`, so a row
+/// already handled by a previous run (or one written after this feature
+/// shipped, which always sets `app_id_hash` at insert/import time -- see
+/// db.ts's `saveScreenTimeSessions` and `import.rs`) is never revisited.
+/// Each batch commits in its own transaction, so a crash mid-backfill
+/// leaves already-committed batches fully encrypted+hashed and the rest
+/// untouched plaintext -- never a row with ciphertext but no hash, which is
+/// what makes re-running this safe.
+async fn migrate_screen_time_sessions_once(app: AppHandle) -> Result<Option<usize>, String> {
+    let pool = db::open_direct_pool(&app).await?;
+
+    let done: Option<String> = sqlx::query_scalar("SELECT value FROM app_setting WHERE key = ?")
+        .bind(SCREEN_TIME_MIGRATED_KEY)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    if done.as_deref() == Some("true") {
+        return Ok(None);
+    }
+
+    let cipher = FieldCipher::resolve(&app).await?;
+    let total = encrypt_and_hash_screen_time_rows(&pool, &cipher).await?;
+
+    sqlx::query(
+        "INSERT INTO app_setting (key, value) VALUES (?, 'true')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(SCREEN_TIME_MIGRATED_KEY)
+    .execute(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(Some(total))
+}
+
+/// The testable core of the screen-time backfill -- takes a pool and cipher
+/// directly (no `AppHandle`) so tests can drive it against an in-memory
+/// database with `FieldCipher::test_fixed()`, the same split
+/// `encrypt_existing_rows`/`migrate_once` already have. Returns how many
+/// rows were encrypted+hashed.
+async fn encrypt_and_hash_screen_time_rows(pool: &sqlx::SqlitePool, cipher: &FieldCipher) -> Result<usize, String> {
+    let mut total = 0usize;
+
+    loop {
+        let rows = sqlx::query("SELECT id, app_id, display_name FROM screen_time_session WHERE app_id_hash = '' LIMIT ?")
+            .bind(SCREEN_TIME_MIGRATION_CHUNK)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("couldn't read screen_time_session for encryption: {e}"))?;
+        if rows.is_empty() {
+            break;
+        }
+
+        let ids: Vec<i64> = rows
+            .iter()
+            .map(|r| r.try_get("id"))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("couldn't read screen_time_session.id: {e}"))?;
+        let raw_app_ids: Vec<String> = rows
+            .iter()
+            .map(|r| r.try_get("app_id"))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("couldn't read screen_time_session.app_id: {e}"))?;
+        let raw_display_names: Vec<String> = rows
+            .iter()
+            .map(|r| r.try_get("display_name"))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("couldn't read screen_time_session.display_name: {e}"))?;
+
+        // `decrypt_many` passes plaintext through untouched, so this is
+        // correct whichever state these rows are actually in.
+        let plaintext_app_ids = cipher.decrypt_many(&raw_app_ids).await?;
+        let hashes = cipher.blind_index_many(&plaintext_app_ids).await?;
+        let encrypted_app_ids = cipher.encrypt_many(&plaintext_app_ids).await?;
+
+        // Empty `display_name` stays plain `''` -- same rule the write path
+        // uses (readers already treat `""` as "no friendly name", and
+        // encrypting nothing would only cost a decrypt on every later read
+        // for no benefit).
+        let plaintext_display_names = cipher.decrypt_many(&raw_display_names).await?;
+        let to_encrypt: Vec<String> = plaintext_display_names.iter().filter(|v| !v.is_empty()).cloned().collect();
+        let mut encrypted_non_empty =
+            if to_encrypt.is_empty() { Vec::new() } else { cipher.encrypt_many(&to_encrypt).await? }.into_iter();
+        let mut encrypted_display_names = Vec::with_capacity(plaintext_display_names.len());
+        for v in &plaintext_display_names {
+            if v.is_empty() {
+                encrypted_display_names.push(String::new());
+            } else {
+                encrypted_display_names
+                    .push(encrypted_non_empty.next().ok_or("display_name encryption returned too few values")?);
+            }
+        }
+
+        let mut tx =
+            pool.begin().await.map_err(|e| format!("failed to start screen_time_session migration transaction: {e}"))?;
+        for i in 0..rows.len() {
+            sqlx::query("UPDATE screen_time_session SET app_id = ?, display_name = ?, app_id_hash = ? WHERE id = ?")
+                .bind(&encrypted_app_ids[i])
+                .bind(&encrypted_display_names[i])
+                .bind(&hashes[i])
+                .bind(ids[i])
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| format!("couldn't encrypt a screen_time_session row: {e}"))?;
+        }
+        tx.commit().await.map_err(|e| format!("failed to commit screen_time_session migration transaction: {e}"))?;
+
+        total += rows.len();
+    }
+
+    Ok(total)
 }
 
 #[cfg(test)]
@@ -571,6 +779,54 @@ mod tests {
         assert_eq!(cipher.decrypt_many(&encrypted).await.unwrap(), values);
     }
 
+    // --- Blind index (screen_time_session.app_id_hash) ---------------------
+
+    /// The property `getScreenTimeForDate`'s `GROUP BY` and `import.rs`'s
+    /// duplicate check both rest on: the same plaintext under one key always
+    /// produces the same hash, unlike `encrypt` (which never repeats).
+    #[tokio::test]
+    async fn blind_index_is_deterministic() {
+        let cipher = FieldCipher::test_fixed();
+        let a = cipher.blind_index_many(&["chrome.exe".to_string()]).await.unwrap();
+        let b = cipher.blind_index_many(&["chrome.exe".to_string()]).await.unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[tokio::test]
+    async fn blind_index_differs_for_different_values() {
+        let cipher = FieldCipher::test_fixed();
+        let hashes = cipher.blind_index_many(&["chrome.exe".to_string(), "notepad.exe".to_string()]).await.unwrap();
+        assert_ne!(hashes[0], hashes[1]);
+    }
+
+    /// A device's hash values must not match another device's for the same
+    /// app name -- this is what makes the "won't link across users" property
+    /// hold without any coordination between devices.
+    #[tokio::test]
+    async fn blind_index_differs_across_keys() {
+        let a = FieldCipher::test_fixed();
+        let b = FieldCipher { key: [9u8; KEY_LEN] };
+        let hash_a = a.blind_index_many(&["chrome.exe".to_string()]).await.unwrap();
+        let hash_b = b.blind_index_many(&["chrome.exe".to_string()]).await.unwrap();
+        assert_ne!(hash_a, hash_b);
+    }
+
+    /// Proves the HMAC subkey is actually derived via HKDF rather than the
+    /// raw AEAD key being reused directly as the MAC key -- the key-
+    /// separation property the whole `BLIND_INDEX_HKDF_INFO` label exists
+    /// for.
+    #[tokio::test]
+    async fn blind_index_does_not_use_the_raw_aead_key_directly() {
+        let cipher = FieldCipher::test_fixed();
+        let hash = cipher.blind_index_many(&["chrome.exe".to_string()]).await.unwrap().remove(0);
+
+        let mut raw_key_mac = <Hmac<Sha256> as Mac>::new_from_slice(&cipher.key).unwrap();
+        raw_key_mac.update(b"chrome.exe");
+        let raw_key_hash = BASE64.encode(raw_key_mac.finalize().into_bytes());
+
+        assert_ne!(hash, raw_key_hash);
+    }
+
     // --- Migration of pre-existing plaintext rows -------------------------
 
     async fn migration_test_pool() -> sqlx::SqlitePool {
@@ -608,6 +864,24 @@ mod tests {
                 drank_water TEXT NOT NULL DEFAULT '1',
                 washroom TEXT NOT NULL DEFAULT '0',
                 created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            // Migration 24's shape: app_id_hash defaults to '' for
+            // pre-existing rows, which is exactly what
+            // encrypt_and_hash_screen_time_rows selects on.
+            "CREATE TABLE screen_time_session (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_id TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                app_id_hash TEXT NOT NULL DEFAULT '',
+                platform TEXT NOT NULL,
+                device_name TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT NOT NULL
             )",
         )
         .execute(&pool)
@@ -784,5 +1058,111 @@ mod tests {
             cipher.decrypt_many(&mixed).await.unwrap(),
             vec!["encrypted row".to_string(), "legacy plaintext row".to_string()]
         );
+    }
+
+    // --- screen_time_session backfill (app_id/display_name + app_id_hash) --
+
+    #[tokio::test]
+    async fn screen_time_backfill_encrypts_and_hashes_plaintext_rows() {
+        let pool = migration_test_pool().await;
+        let cipher = FieldCipher::test_fixed();
+        sqlx::query(
+            "INSERT INTO screen_time_session (id, app_id, display_name, platform, device_name, started_at, ended_at)
+             VALUES (1, 'chrome.exe', 'Google Chrome', 'windows', 'desktop', '2026-01-01T00:00:00.000Z', '2026-01-01T00:05:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let count = encrypt_and_hash_screen_time_rows(&pool, &cipher).await.unwrap();
+        assert_eq!(count, 1);
+
+        let row = sqlx::query("SELECT app_id, display_name, app_id_hash, started_at FROM screen_time_session WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let app_id: String = row.try_get("app_id").unwrap();
+        let display_name: String = row.try_get("display_name").unwrap();
+        let app_id_hash: String = row.try_get("app_id_hash").unwrap();
+        let started_at: String = row.try_get("started_at").unwrap();
+
+        assert!(app_id.starts_with(MARKER));
+        assert_eq!(cipher.decrypt(&app_id).await.unwrap(), "chrome.exe");
+        assert!(display_name.starts_with(MARKER));
+        assert_eq!(cipher.decrypt(&display_name).await.unwrap(), "Google Chrome");
+        assert_eq!(app_id_hash, cipher.blind_index_many(&["chrome.exe".to_string()]).await.unwrap()[0]);
+        assert_eq!(started_at, "2026-01-01T00:00:00.000Z", "the sync cursor column must be untouched");
+    }
+
+    /// Empty `display_name` (no friendly name resolved) must stay plain --
+    /// same rule the write path uses, so `MAX(display_name)`-style logic
+    /// still prefers a real label over ciphertext-of-nothing.
+    #[tokio::test]
+    async fn screen_time_backfill_leaves_empty_display_name_plain() {
+        let pool = migration_test_pool().await;
+        let cipher = FieldCipher::test_fixed();
+        sqlx::query(
+            "INSERT INTO screen_time_session (id, app_id, display_name, platform, device_name, started_at, ended_at)
+             VALUES (1, 'unknown.bin', '', 'windows', 'desktop', '2026-01-01T00:00:00.000Z', '2026-01-01T00:05:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        encrypt_and_hash_screen_time_rows(&pool, &cipher).await.unwrap();
+
+        let display_name: String =
+            sqlx::query_scalar("SELECT display_name FROM screen_time_session WHERE id = 1").fetch_one(&pool).await.unwrap();
+        assert_eq!(display_name, "");
+    }
+
+    /// Two rows for the same app must hash identically -- the property
+    /// `getScreenTimeForDate`'s `GROUP BY app_id_hash` depends on.
+    #[tokio::test]
+    async fn screen_time_backfill_hashes_identically_for_the_same_app() {
+        let pool = migration_test_pool().await;
+        let cipher = FieldCipher::test_fixed();
+        sqlx::query(
+            "INSERT INTO screen_time_session (id, app_id, display_name, platform, device_name, started_at, ended_at)
+             VALUES
+                (1, 'chrome.exe', 'Google Chrome', 'windows', 'desktop', '2026-01-01T00:00:00.000Z', '2026-01-01T00:05:00.000Z'),
+                (2, 'chrome.exe', 'Google Chrome', 'windows', 'desktop', '2026-01-01T00:10:00.000Z', '2026-01-01T00:20:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        encrypt_and_hash_screen_time_rows(&pool, &cipher).await.unwrap();
+
+        let hashes: Vec<String> =
+            sqlx::query_scalar("SELECT app_id_hash FROM screen_time_session ORDER BY id").fetch_all(&pool).await.unwrap();
+        assert_eq!(hashes[0], hashes[1]);
+        // But the ciphertext itself must still differ (fresh nonce each
+        // time) -- the hash is the only thing that's allowed to repeat.
+        let app_ids: Vec<String> =
+            sqlx::query_scalar("SELECT app_id FROM screen_time_session ORDER BY id").fetch_all(&pool).await.unwrap();
+        assert_ne!(app_ids[0], app_ids[1]);
+    }
+
+    /// Running the backfill again must be a no-op: every row it already
+    /// touched has a non-empty `app_id_hash`, so the `WHERE app_id_hash = ''`
+    /// selection finds nothing left to do.
+    #[tokio::test]
+    async fn screen_time_backfill_is_idempotent() {
+        let pool = migration_test_pool().await;
+        let cipher = FieldCipher::test_fixed();
+        sqlx::query(
+            "INSERT INTO screen_time_session (id, app_id, display_name, platform, device_name, started_at, ended_at)
+             VALUES (1, 'chrome.exe', 'Google Chrome', 'windows', 'desktop', '2026-01-01T00:00:00.000Z', '2026-01-01T00:05:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(encrypt_and_hash_screen_time_rows(&pool, &cipher).await.unwrap(), 1);
+        assert_eq!(encrypt_and_hash_screen_time_rows(&pool, &cipher).await.unwrap(), 0, "already-hashed rows must not be re-touched");
+
+        let app_id: String = sqlx::query_scalar("SELECT app_id FROM screen_time_session WHERE id = 1").fetch_one(&pool).await.unwrap();
+        assert_eq!(cipher.decrypt(&app_id).await.unwrap(), "chrome.exe", "content must survive verbatim");
     }
 }

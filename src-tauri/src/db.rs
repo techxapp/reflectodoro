@@ -507,6 +507,41 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 24,
+            // screen_time_session's app_id/display_name become crypto.rs's
+            // usual 'enc1:'-prefixed ciphertext (see CLAUDE.md's "Encryption
+            // at rest") -- a fresh random nonce every time, so the same
+            // plaintext never encrypts to the same value twice. That breaks
+            // both getScreenTimeForDate's GROUP BY and import.rs's
+            // duplicate check, which used to compare app_id directly.
+            // app_id_hash is a deterministic HMAC-SHA256 "blind index" of
+            // app_id (crypto::FieldCipher::blind_index_many) that both of
+            // those switch to instead. Defaults to '' for every existing
+            // row -- crypto::run_encryption_migration_after_db_ready's
+            // screen-time backfill picks those up afterward, the same way
+            // migration 23 left encryption itself to the four-table
+            // migration that already existed.
+            //
+            // idx_screen_time_session_dedupe (migration 16) is rebuilt to
+            // match: it existed to keep import.rs's per-row duplicate check
+            // fast, and that check now filters on app_id_hash instead of
+            // ciphertext app_id. idx_screen_time_session_app_id (migration
+            // 13) is dropped outright -- nothing looks up by app_id's value
+            // anymore now that it's ciphertext, so an index on it only adds
+            // write overhead on this app's fastest-growing table.
+            description: "add app_id_hash to screen_time_session for encrypted-column dedupe/aggregation",
+            sql: r#"
+                ALTER TABLE screen_time_session ADD COLUMN app_id_hash TEXT NOT NULL DEFAULT '';
+
+                DROP INDEX idx_screen_time_session_dedupe;
+                CREATE INDEX idx_screen_time_session_dedupe
+                    ON screen_time_session(app_id_hash, platform, device_name, started_at, ended_at);
+
+                DROP INDEX idx_screen_time_session_app_id;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -685,5 +720,78 @@ mod tests {
                 .await
                 .unwrap();
         assert!(result.last_insert_rowid() > 5);
+    }
+
+    /// Runs migration 24's actual SQL against a post-migration-16
+    /// `screen_time_session` (both original indexes in place, plaintext
+    /// app_id) to confirm: app_id_hash is added and defaults to '' for
+    /// existing rows (what crypto.rs's screen-time backfill selects on),
+    /// the dedupe index is rebuilt to key on app_id_hash instead of app_id,
+    /// and the now-useless plain app_id index is gone.
+    #[tokio::test]
+    async fn migration_24_adds_app_id_hash_and_rebuilds_indexes() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+
+        // Post-migration-16 shape.
+        sqlx::query(
+            "CREATE TABLE screen_time_session (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_id TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                platform TEXT NOT NULL,
+                device_name TEXT NOT NULL DEFAULT '',
+                started_at TEXT NOT NULL,
+                ended_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("CREATE INDEX idx_screen_time_session_started_at ON screen_time_session(started_at)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE INDEX idx_screen_time_session_app_id ON screen_time_session(app_id)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE INDEX idx_screen_time_session_dedupe
+                 ON screen_time_session(app_id, platform, device_name, started_at, ended_at)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO screen_time_session (id, app_id, display_name, platform, device_name, started_at, ended_at)
+             VALUES (1, 'chrome.exe', 'Google Chrome', 'windows', 'desktop', '2026-01-01T00:00:00.000Z', '2026-01-01T00:05:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::raw_sql(&migration_sql(24)).execute(&pool).await.unwrap();
+
+        let columns = sqlx::query("PRAGMA table_info(screen_time_session)").fetch_all(&pool).await.unwrap();
+        assert!(columns.iter().any(|r| r.get::<String, _>("name") == "app_id_hash"), "app_id_hash column should exist");
+
+        let hash: String =
+            sqlx::query_scalar("SELECT app_id_hash FROM screen_time_session WHERE id = 1").fetch_one(&pool).await.unwrap();
+        assert_eq!(hash, "", "pre-existing rows should default to an empty hash for the backfill to pick up");
+
+        let indexes: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'index'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(!indexes.contains(&"idx_screen_time_session_app_id".to_string()), "plain app_id index should be dropped");
+        assert!(indexes.contains(&"idx_screen_time_session_dedupe".to_string()), "dedupe index should still exist");
+
+        let dedupe_sql: String =
+            sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE name = 'idx_screen_time_session_dedupe'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(dedupe_sql.contains("app_id_hash"), "dedupe index should key on app_id_hash now: {dedupe_sql}");
+        assert!(!dedupe_sql.contains("(app_id,"), "dedupe index should no longer key on plaintext app_id: {dedupe_sql}");
     }
 }

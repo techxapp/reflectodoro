@@ -369,33 +369,73 @@ pub(crate) async fn import_reflections(
 /// any rows a pre-fix double-import already wrote, and would also start
 /// constraining `screen_time.rs`'s normal capture-write path, which this
 /// dedupe has no reason to touch. `idx_screen_time_session_dedupe` (db.rs
-/// migration 16) is what keeps this `NOT EXISTS` check fast on a table
-/// documented as likely to become the largest by row count. One statement
-/// per row rather than db.ts's chunked multi-row INSERT: that chunking
-/// amortized tauri-plugin-sql's per-call IPC overhead, which doesn't exist
-/// here (this runs entirely inside one Rust process/connection). Returns how
-/// many rows were skipped as duplicates.
+/// migration 16, rebuilt by migration 24) is what keeps this `NOT EXISTS`
+/// check fast on a table documented as likely to become the largest by row
+/// count.
+///
+/// The equality check itself compares `app_id_hash`, not `app_id`: since
+/// `app_id`/`display_name` are `crypto.rs`'s usual random-nonce ciphertext
+/// (see CLAUDE.md's "Encryption at rest"), the same plaintext never encrypts
+/// to the same value twice, so a `WHERE app_id = ?` match would never fire
+/// even for a genuine re-import of the same file. `app_id_hash` is a
+/// deterministic HMAC-SHA256 "blind index" of `app_id` that exists
+/// specifically so this comparison keeps working. Incoming rows are always
+/// plaintext, whichever caller it is (a file import's JSON is plaintext by
+/// design; a P2P payload was decrypted by the sender -- see p2p_sync.rs), so
+/// they're hashed/encrypted here rather than needing a decrypt pass first,
+/// unlike `import_reflections`' existing-row merge. Batched once for the
+/// whole incoming slice (each Android call is a JNI hop), then one INSERT
+/// statement per row -- db.ts's chunked multi-row INSERT amortizes
+/// tauri-plugin-sql's per-call IPC overhead, which doesn't exist here (this
+/// runs entirely inside one Rust process/connection). Returns how many rows
+/// were skipped as duplicates.
 pub(crate) async fn import_screen_time_sessions(
     tx: &mut Transaction<'_, Sqlite>,
+    cipher: &FieldCipher,
     rows: &[ImportScreenTimeSessionRow],
 ) -> Result<usize, String> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+
+    let app_ids: Vec<String> = rows.iter().map(|r| r.app_id.clone()).collect();
+    let hashes = cipher.blind_index_many(&app_ids).await?;
+    let encrypted_app_ids = cipher.encrypt_many(&app_ids).await?;
+
+    // Empty display_name stays plain '' -- same rule db.ts's
+    // saveScreenTimeSessions and crypto.rs's screen-time backfill use.
+    let display_names: Vec<String> = rows.iter().map(|r| r.display_name.clone()).collect();
+    let to_encrypt: Vec<String> = display_names.iter().filter(|v| !v.is_empty()).cloned().collect();
+    let mut encrypted_non_empty =
+        if to_encrypt.is_empty() { Vec::new() } else { cipher.encrypt_many(&to_encrypt).await? }.into_iter();
+    let mut encrypted_display_names = Vec::with_capacity(display_names.len());
+    for v in &display_names {
+        if v.is_empty() {
+            encrypted_display_names.push(String::new());
+        } else {
+            encrypted_display_names
+                .push(encrypted_non_empty.next().ok_or("display_name encryption returned too few values")?);
+        }
+    }
+
     let mut duplicate_count = 0usize;
-    for row in rows {
+    for (i, row) in rows.iter().enumerate() {
         let result = sqlx::query(
-            "INSERT INTO screen_time_session (app_id, display_name, platform, device_name, started_at, ended_at)
-             SELECT ?, ?, ?, ?, ?, ?
+            "INSERT INTO screen_time_session (app_id, display_name, app_id_hash, platform, device_name, started_at, ended_at)
+             SELECT ?, ?, ?, ?, ?, ?, ?
              WHERE NOT EXISTS (
                  SELECT 1 FROM screen_time_session
-                 WHERE app_id = ? AND platform = ? AND device_name = ? AND started_at = ? AND ended_at = ?
+                 WHERE app_id_hash = ? AND platform = ? AND device_name = ? AND started_at = ? AND ended_at = ?
              )",
         )
-        .bind(&row.app_id)
-        .bind(&row.display_name)
+        .bind(&encrypted_app_ids[i])
+        .bind(&encrypted_display_names[i])
+        .bind(&hashes[i])
         .bind(&row.platform)
         .bind(&row.device_name)
         .bind(&row.started_at)
         .bind(&row.ended_at)
-        .bind(&row.app_id)
+        .bind(&hashes[i])
         .bind(&row.platform)
         .bind(&row.device_name)
         .bind(&row.started_at)
@@ -665,7 +705,7 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
         .collect();
     merge_import_day_rows(&mut tx, &cipher, "not_to_do_list", &not_to_do_rows, mode).await?;
 
-    let screen_time_duplicate_count = import_screen_time_sessions(&mut tx, &data.screen_time_session).await?;
+    let screen_time_duplicate_count = import_screen_time_sessions(&mut tx, &cipher, &data.screen_time_session).await?;
 
     if include_settings {
         for row in &data.app_setting {
@@ -836,10 +876,12 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
+            // Migration 24's shape (app_id_hash added).
             "CREATE TABLE screen_time_session (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 app_id TEXT NOT NULL,
                 display_name TEXT NOT NULL DEFAULT '',
+                app_id_hash TEXT NOT NULL DEFAULT '',
                 platform TEXT NOT NULL,
                 device_name TEXT NOT NULL DEFAULT '',
                 started_at TEXT NOT NULL,
@@ -1065,17 +1107,55 @@ mod tests {
         }
     }
 
+    /// Inserts a pre-existing row the way the real app would have it at
+    /// rest post-migration-24: `app_id`/non-empty `display_name` encrypted,
+    /// `app_id_hash` the deterministic blind index of the plaintext
+    /// `app_id`. Tests below insert via this helper rather than raw
+    /// plaintext SQL so the dedupe check (which now compares `app_id_hash`,
+    /// not `app_id`) is exercised the way it actually runs in production.
+    async fn insert_encrypted_screen_time_row(
+        pool: &sqlx::SqlitePool,
+        app_id: &str,
+        display_name: &str,
+        platform: &str,
+        device_name: &str,
+        started_at: &str,
+        ended_at: &str,
+    ) {
+        let cipher = cipher();
+        let encrypted_app_id = cipher.encrypt(app_id).await.unwrap();
+        let encrypted_display_name =
+            if display_name.is_empty() { String::new() } else { cipher.encrypt(display_name).await.unwrap() };
+        let hash = cipher.blind_index_many(&[app_id.to_string()]).await.unwrap().remove(0);
+        sqlx::query(
+            "INSERT INTO screen_time_session (app_id, display_name, app_id_hash, platform, device_name, started_at, ended_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&encrypted_app_id)
+        .bind(&encrypted_display_name)
+        .bind(&hash)
+        .bind(platform)
+        .bind(device_name)
+        .bind(started_at)
+        .bind(ended_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn screen_time_duplicate_is_skipped_not_duplicated() {
         let pool = test_pool().await;
-
-        sqlx::query(
-            "INSERT INTO screen_time_session (app_id, display_name, platform, device_name, started_at, ended_at)
-             VALUES ('chrome.exe', 'Google Chrome', 'windows', 'laptop-a', '2026-01-01T10:00:00.000Z', '2026-01-01T10:05:00.000Z')",
+        insert_encrypted_screen_time_row(
+            &pool,
+            "chrome.exe",
+            "Google Chrome",
+            "windows",
+            "laptop-a",
+            "2026-01-01T10:00:00.000Z",
+            "2026-01-01T10:05:00.000Z",
         )
-        .execute(&pool)
-        .await
-        .unwrap();
+        .await;
 
         let imported = vec![screen_time_row(
             "chrome.exe",
@@ -1087,7 +1167,7 @@ mod tests {
         )];
 
         let mut tx = pool.begin().await.unwrap();
-        let duplicate_count = import_screen_time_sessions(&mut tx, &imported).await.unwrap();
+        let duplicate_count = import_screen_time_sessions(&mut tx, &cipher(), &imported).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(duplicate_count, 1);
@@ -1101,14 +1181,16 @@ mod tests {
     #[tokio::test]
     async fn screen_time_display_name_difference_is_still_a_duplicate() {
         let pool = test_pool().await;
-
-        sqlx::query(
-            "INSERT INTO screen_time_session (app_id, display_name, platform, device_name, started_at, ended_at)
-             VALUES ('chrome.exe', '', 'windows', 'laptop-a', '2026-01-01T10:00:00.000Z', '2026-01-01T10:05:00.000Z')",
+        insert_encrypted_screen_time_row(
+            &pool,
+            "chrome.exe",
+            "",
+            "windows",
+            "laptop-a",
+            "2026-01-01T10:00:00.000Z",
+            "2026-01-01T10:05:00.000Z",
         )
-        .execute(&pool)
-        .await
-        .unwrap();
+        .await;
 
         // display_name is excluded from the dedupe key -- a resolved friendly
         // name arriving later for the same session must not be treated as a
@@ -1123,7 +1205,7 @@ mod tests {
         )];
 
         let mut tx = pool.begin().await.unwrap();
-        let duplicate_count = import_screen_time_sessions(&mut tx, &imported).await.unwrap();
+        let duplicate_count = import_screen_time_sessions(&mut tx, &cipher(), &imported).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(duplicate_count, 1);
@@ -1148,7 +1230,7 @@ mod tests {
         ];
 
         let mut tx = pool.begin().await.unwrap();
-        let duplicate_count = import_screen_time_sessions(&mut tx, &imported).await.unwrap();
+        let duplicate_count = import_screen_time_sessions(&mut tx, &cipher(), &imported).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(duplicate_count, 0);
@@ -1157,6 +1239,37 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 3);
+    }
+
+    /// The property that makes the whole `app_id_hash` design work: since
+    /// `app_id` is random-nonce ciphertext (never equal to itself across two
+    /// encryptions), a re-import of the exact same file must still be
+    /// recognized as duplicates via the hash, not silently re-inserted.
+    #[tokio::test]
+    async fn screen_time_import_is_idempotent_across_encrypted_rows() {
+        let pool = test_pool().await;
+
+        let imported = vec![screen_time_row(
+            "chrome.exe",
+            "Google Chrome",
+            "windows",
+            "laptop-a",
+            "2026-01-01T10:00:00.000Z",
+            "2026-01-01T10:05:00.000Z",
+        )];
+
+        let mut tx = pool.begin().await.unwrap();
+        let first_pass = import_screen_time_sessions(&mut tx, &cipher(), &imported).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(first_pass, 0, "first import of a new row is never a duplicate");
+
+        let mut tx = pool.begin().await.unwrap();
+        let second_pass = import_screen_time_sessions(&mut tx, &cipher(), &imported).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(second_pass, 1, "re-importing the same file must be recognized as a duplicate via app_id_hash");
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM screen_time_session").fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
     }
 
     fn wellness_row(slot_start_at: &str, created_at: &str) -> ImportWellnessCheckRow {

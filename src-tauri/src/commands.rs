@@ -70,6 +70,22 @@ pub async fn decrypt_fields(app: AppHandle, values: Vec<String>) -> Result<Vec<S
     crypto::FieldCipher::resolve(&app).await?.decrypt_many(&values).await
 }
 
+/// The frontend's half of `screen_time_session.app_id_hash` (see crypto.rs's
+/// "Encryption at rest" / `FieldCipher::blind_index_many`): db.ts calls this
+/// alongside `encrypt_fields` whenever it writes or imports a session, and
+/// uses the result to `GROUP BY`/dedupe in SQL instead of the ciphertext
+/// `app_id` column, which never repeats for the same plaintext. Deterministic
+/// by design (unlike `encrypt_fields`) -- that's the whole point of a blind
+/// index -- so, unlike encryption, calling this twice on the same value is
+/// expected to return the same hash both times.
+#[tauri::command]
+pub async fn hash_app_ids(app: AppHandle, values: Vec<String>) -> Result<Vec<String>, String> {
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+    crypto::FieldCipher::resolve(&app).await?.blind_index_many(&values).await
+}
+
 /// Pushes the breakit challenge length/charset (loaded by the frontend from
 /// app_setting) into Rust state. Called once on app boot and again whenever
 /// Settings saves, so SQLite stays the source of truth while the scheduler

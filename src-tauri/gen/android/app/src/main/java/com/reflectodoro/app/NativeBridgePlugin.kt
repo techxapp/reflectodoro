@@ -26,6 +26,7 @@ import android.util.Log
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
+import javax.crypto.Mac
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import app.tauri.annotation.Command
@@ -160,10 +161,28 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         // not secret, only required to be unique per key (see crypto.rs).
         private const val FIELD_IV_BYTES = 12
         private const val FIELD_TAG_BITS = 128
+
+        // A second, independent Keystore key backing screen_time_session's
+        // app_id_hash "blind index" (see crypto.rs's "Encryption at rest" /
+        // CLAUDE.md). Deliberately a separate alias, not fieldKey() reused:
+        // an Android Keystore key is typed to the algorithm/purpose it was
+        // generated for, so the same AES-GCM key can't also be opened as an
+        // HMAC key -- and even if the platform allowed it, reusing one raw
+        // key for two different cryptographic primitives (AEAD + MAC) is a
+        // key-separation anti-pattern. Desktop instead derives its HMAC
+        // subkey from the raw AEAD key via HKDF (crypto.rs), which isn't an
+        // option here since a Keystore key's bytes never leave the Keystore
+        // to begin with -- this key is independently generated, not derived
+        // from FIELD_KEY_ALIAS.
+        private const val HMAC_KEY_ALIAS = "reflectodoro_app_id_hmac_key"
+        private const val HMAC_ALGORITHM = "HmacSHA256"
     }
 
     /** Serializes first-use key generation -- see fieldKey(). */
     private val fieldKeyLock = Any()
+
+    /** Serializes first-use key generation -- see hmacKey(). */
+    private val hmacKeyLock = Any()
 
     @Command
     fun ping(invoke: Invoke) {
@@ -367,6 +386,54 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         } catch (e: Exception) {
             Log.e(CRYPTO_TAG, "decryptFields failed", e)
             invoke.reject("decryptFields failed: ${e.message}")
+        }
+    }
+
+    /** Independent Keystore key for screen_time_session's app_id_hash blind
+     * index -- see HMAC_KEY_ALIAS above. Same lookup-then-generate-under-lock
+     * shape as fieldKey(), for the same reason: two racing first-use calls
+     * must not both generate under the same alias and strand each other's
+     * already-hashed rows. PURPOSE_SIGN, not PURPOSE_ENCRYPT/DECRYPT -- an
+     * HMAC Keystore key has no block mode, padding, or IV to configure. */
+    private fun hmacKey(): SecretKey {
+        synchronized(hmacKeyLock) {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            (keyStore.getKey(HMAC_KEY_ALIAS, null) as? SecretKey)?.let { return it }
+            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, ANDROID_KEYSTORE)
+            generator.init(
+                KeyGenParameterSpec.Builder(HMAC_KEY_ALIAS, KeyProperties.PURPOSE_SIGN).build()
+            )
+            return generator.generateKey()
+        }
+    }
+
+    /** Rust's blind-index call for screen_time_session.app_id (see
+     * crypto.rs's FieldCipher::blind_index_many and CLAUDE.md's "Encryption
+     * at rest"). Deterministic by design -- the same input always produces
+     * the same output under this key, which is exactly what backs
+     * getScreenTimeForDate's GROUP BY and import.rs's duplicate check.
+     * Output is base64 (NO_WRAP), matching the desktop HMAC-SHA256 output
+     * format even though the key itself lives in a completely different
+     * place. Values come back positionally matched, same contract as
+     * encryptFields/decryptFields. */
+    @Command
+    fun hmacFields(invoke: Invoke) {
+        val args = invoke.parseArgs(FieldCryptoArgs::class.java)
+        try {
+            val key = hmacKey()
+            val mac = Mac.getInstance(HMAC_ALGORITHM)
+            val out = JSArray()
+            for (value in args.values) {
+                mac.init(key)
+                val digest = mac.doFinal(value.toByteArray(Charsets.UTF_8))
+                out.put(Base64.encodeToString(digest, Base64.NO_WRAP))
+            }
+            val ret = JSObject()
+            ret.put("values", out)
+            invoke.resolve(ret)
+        } catch (e: Exception) {
+            Log.e(CRYPTO_TAG, "hmacFields failed", e)
+            invoke.reject("hmacFields failed: ${e.message}")
         }
     }
 

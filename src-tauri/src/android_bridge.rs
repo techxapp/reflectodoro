@@ -266,6 +266,15 @@ impl<R: Runtime> AndroidBridge<R> {
     pub fn decrypt_fields(&self, values: &[String]) -> Result<Value, PluginInvokeError> {
         self.0.run_mobile_plugin("decryptFields", serde_json::json!({ "values": values }))
     }
+
+    /// The blind-index half of screen_time_session's app_id_hash (see
+    /// crypto.rs's FieldCipher::blind_index_many). Runs against a second,
+    /// independent Keystore key (HMAC_KEY_ALIAS in NativeBridgePlugin.kt) --
+    /// not derived from the AES field-encryption key, since a Keystore key's
+    /// raw bytes never leave the Keystore for Rust to run HKDF on.
+    pub fn hmac_fields(&self, values: &[String]) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("hmacFields", serde_json::json!({ "values": values }))
+    }
 }
 
 /// `crypto::FieldCipher`'s Android arm. Kept here rather than in crypto.rs so
@@ -301,6 +310,10 @@ pub fn encrypt_fields(app: &tauri::AppHandle, values: &[String]) -> Result<Vec<S
 
 pub fn decrypt_fields(app: &tauri::AppHandle, values: &[String]) -> Result<Vec<String>, String> {
     field_op(app, values, AndroidBridge::decrypt_fields, "decryptFields")
+}
+
+pub fn hmac_fields(app: &tauri::AppHandle, values: &[String]) -> Result<Vec<String>, String> {
+    field_op(app, values, AndroidBridge::hmac_fields, "hmacFields")
 }
 
 pub fn register<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {

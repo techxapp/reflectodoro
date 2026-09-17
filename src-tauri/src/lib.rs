@@ -737,6 +737,7 @@ pub fn run() {
             commands::current_os,
             commands::encrypt_fields,
             commands::decrypt_fields,
+            commands::hash_app_ids,
             commands::sync_breakit_config,
             commands::mark_reflection_entered,
             commands::report_reflection_save_failure,
