@@ -26,7 +26,7 @@
   } from "$lib/db";
 
   type SnoozeInfo = { resume_at: string; minutes: number };
-  const SNOOZE_MINUTES_OPTIONS = [30, 60, 90, 120];
+  const SNOOZE_MINUTES_OPTIONS = [30, 60, 120, 360, 720];
   function snoozeOptionLabel(minutes: number): string {
     const hours = minutes / 60;
     return `Pause for ${hours < 1 ? `${minutes} min` : `${hours} hr`}`;
@@ -172,12 +172,24 @@
     // the listener down and silently drop any batch Rust flushes while the
     // user is sitting on another tab. See +layout.svelte's onMount for why.
     void logInfo("main window: boot sequence complete, all listeners registered");
-
-    tickInterval = setInterval(() => (now = new Date()), 1000);
   }
 
   onMount(async () => {
     window.addEventListener("focus", onWindowFocus);
+    // Started immediately, before bootMainWindow's long chain of sequential
+    // awaited IPC round-trips (settings syncs, get_enabled, get_snooze_until,
+    // task-list reads, listener registrations) -- this route unmounts on
+    // every client-side tab navigation and remounts when the user comes back
+    // to it (see +layout.svelte's screen-time-listener comment for why), so
+    // `onMount` -- and this boot chain -- re-runs on every such visit. With
+    // the interval previously only started at the end of that chain, `now`
+    // (initialized once at component creation) sat frozen for however long
+    // the chain took on each remount, showing stale clock/countdown time
+    // right after switching back to this tab. Resyncing `now` here too
+    // covers the gap between component creation and this line, same
+    // reasoning as the overlay's identical fix.
+    now = new Date();
+    tickInterval = setInterval(() => (now = new Date()), 1000);
     try {
       await bootMainWindow();
     } catch (e) {
