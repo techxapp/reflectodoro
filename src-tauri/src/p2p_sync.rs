@@ -42,7 +42,7 @@
 //! - **Sync** (dialer writes tag `TAG_SYNC`, then its own device id so the
 //!   responder knows which stored `shared_key` to use): a Noise `NNpsk0`
 //!   handshake keyed by that peer's stored key, then one JSON frame each way
-//!   (`SyncPayload`) carrying delta rows for the five synced tables --
+//!   (`SyncPayload`) carrying delta rows for the six synced tables --
 //!   `app_setting` is never included, by design (see CLAUDE.md). Both sides
 //!   apply the payload they receive via `import.rs`'s existing merge
 //!   functions, always in `ImportMode::Merge`.
@@ -164,6 +164,7 @@ struct SyncPayload {
     not_to_do_list: Vec<import::ImportNotToDoRow>,
     wellness_check: Vec<import::ImportWellnessCheckRow>,
     screen_time_session: Vec<import::ImportScreenTimeSessionRow>,
+    bulk_edit_preset: Vec<import::ImportBulkEditPresetRow>,
 }
 
 #[derive(Serialize)]
@@ -186,6 +187,7 @@ pub struct SyncResult {
     pub merged_slot_count: usize,
     pub screen_time_duplicate_count: usize,
     pub wellness_check_duplicate_count: usize,
+    pub bulk_edit_preset_count: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -739,7 +741,44 @@ async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<Syn
         })
         .collect();
 
-    Ok(SyncPayload { reflection, daily_task_list, not_to_do_list, wellness_check, screen_time_session })
+    let preset_rows = sqlx::query_as::<_, (String, String, String, String, String, String, String)>(
+        "SELECT id, name, start_time, end_time, text, created_at, updated_at
+         FROM bulk_edit_preset WHERE updated_at > ?",
+    )
+    .bind(since)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    // start_time/end_time/text are all ciphertext at rest -- decrypted here
+    // like every other encrypted table above, flattening all three per row
+    // into one batch (same shape wellness_check's four booleans use).
+    let preset_values: Vec<String> = preset_rows
+        .iter()
+        .flat_map(|(_, _, start_time, end_time, text, _, _)| [start_time.clone(), end_time.clone(), text.clone()])
+        .collect();
+    let preset_values = cipher.decrypt_many(&preset_values).await?;
+    let bulk_edit_preset = preset_rows
+        .into_iter()
+        .zip(preset_values.chunks_exact(3))
+        .map(|((id, name, _, _, _, created_at, updated_at), values)| import::ImportBulkEditPresetRow {
+            id,
+            name,
+            start_time: values[0].clone(),
+            end_time: values[1].clone(),
+            text: values[2].clone(),
+            created_at,
+            updated_at,
+        })
+        .collect();
+
+    Ok(SyncPayload {
+        reflection,
+        daily_task_list,
+        not_to_do_list,
+        wellness_check,
+        screen_time_session,
+        bulk_edit_preset,
+    })
 }
 
 async fn apply_payload(app: &AppHandle, payload: &SyncPayload) -> Result<SyncResult, String> {
@@ -767,6 +806,7 @@ async fn apply_payload(app: &AppHandle, payload: &SyncPayload) -> Result<SyncRes
 
     let screen_time_duplicate_count =
         import::import_screen_time_sessions(&mut tx, &cipher, &payload.screen_time_session).await?;
+    import::import_bulk_edit_presets(&mut tx, &cipher, &payload.bulk_edit_preset, import::ImportMode::Merge).await?;
 
     tx.commit().await.map_err(|e| format!("failed to commit sync-apply transaction: {e}"))?;
 
@@ -782,6 +822,7 @@ async fn apply_payload(app: &AppHandle, payload: &SyncPayload) -> Result<SyncRes
         merged_slot_count,
         screen_time_duplicate_count,
         wellness_check_duplicate_count,
+        bulk_edit_preset_count: payload.bulk_edit_preset.len(),
     })
 }
 
@@ -1213,6 +1254,7 @@ fn sync_payload_row_count(payload: &SyncPayload) -> usize {
         + payload.not_to_do_list.len()
         + payload.wellness_check.len()
         + payload.screen_time_session.len()
+        + payload.bulk_edit_preset.len()
 }
 
 #[cfg(test)]

@@ -18,7 +18,7 @@ use tauri::AppHandle;
 use crate::crypto::FieldCipher;
 use crate::db;
 
-// Serialize (as well as Deserialize) on the five row types below: p2p_sync.rs
+// Serialize (as well as Deserialize) on the six row types below: p2p_sync.rs
 // reuses these exact shapes to build its own delta payload (never including
 // ImportSettingRow/app_setting -- P2P sync deliberately never touches
 // settings, see CLAUDE.md's P2P LAN sync section), so both the file-based
@@ -77,6 +77,22 @@ pub struct ImportScreenTimeSessionRow {
     pub ended_at: String,
 }
 
+/// Backs the Entries page's "Bulk edit reflections" -> Prefill presets
+/// feature (see CLAUDE.md's "Bulk-editing reflections by time range"). `id`
+/// is a client-generated crypto.randomUUID() (db.ts), stable across devices,
+/// so both this and P2P sync (p2p_sync.rs) can merge by it directly instead
+/// of needing a natural-key dedupe the way `reflection`/`wellness_check` do.
+#[derive(Deserialize, Serialize, Clone)]
+pub struct ImportBulkEditPresetRow {
+    pub id: String,
+    pub name: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub text: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Deserialize)]
 pub struct ImportData {
     pub reflection: Vec<ImportReflectionRow>,
@@ -85,6 +101,7 @@ pub struct ImportData {
     pub app_setting: Vec<ImportSettingRow>,
     pub wellness_check: Vec<ImportWellnessCheckRow>,
     pub screen_time_session: Vec<ImportScreenTimeSessionRow>,
+    pub bulk_edit_preset: Vec<ImportBulkEditPresetRow>,
 }
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +135,12 @@ pub struct ImportResult {
     /// either an existing row or another imported row -- see
     /// `import_wellness_checks`. Always zero in "replace" mode.
     pub wellness_check_duplicate_count: usize,
+    pub bulk_edit_preset_count: usize,
+    /// Number of imported `bulk_edit_preset` rows skipped because an
+    /// existing row with the same `id` already had a newer `updated_at`
+    /// (last-write-wins) -- see `import_bulk_edit_presets`. Always zero in
+    /// "replace" mode.
+    pub bulk_edit_preset_stale_count: usize,
 }
 
 // --- Pure line-merge algorithm (no DB access -- see #[cfg(test)] below) ---
@@ -664,6 +687,75 @@ pub(crate) async fn merge_import_day_rows(
     Ok(())
 }
 
+/// Keyed by `id` (a client-generated, cross-device-stable UUID -- see
+/// `ImportBulkEditPresetRow`'s doc comment), so unlike `reflection`/
+/// `wellness_check` there's no natural-key grouping/collapsing to do here.
+/// Merge mode is last-write-wins by `updated_at`, not a line merge: a
+/// preset's fields are a fixed, atomically-replaced snippet the user
+/// explicitly saved, not prose that's meant to accumulate content from both
+/// sides the way a day's task list does. The `WHERE excluded.updated_at >
+/// bulk_edit_preset.updated_at` clause on the upsert is what makes this LWW
+/// rather than "imported always wins" -- a row is a no-op (`rows_affected()
+/// == 0`) whenever the existing one is already at least as new, which is
+/// what `stale_count` below counts. Replace mode always inserts fresh, same
+/// as every other table (the caller wipes the table first).
+///
+/// **Encryption boundary**: unlike `import_reflections`'/
+/// `merge_import_day_rows`'s content-aware merges, this never needs to read
+/// an *existing* row's ciphertext (LWW never compares content, only
+/// `updated_at`), so `start_time`/`end_time`/`text` are simply
+/// batch-encrypted on the way in. `rows` arrives plaintext from both callers
+/// (a file import's JSON is plaintext by design; a P2P payload was decrypted
+/// by the sender -- see `p2p_sync::build_delta_payload`).
+pub(crate) async fn import_bulk_edit_presets(
+    tx: &mut Transaction<'_, Sqlite>,
+    cipher: &FieldCipher,
+    rows: &[ImportBulkEditPresetRow],
+    mode: ImportMode,
+) -> Result<usize, String> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+
+    let flat_values: Vec<String> =
+        rows.iter().flat_map(|r| [r.start_time.clone(), r.end_time.clone(), r.text.clone()]).collect();
+    let encrypted = cipher.encrypt_many(&flat_values).await?;
+
+    let mut stale_count = 0usize;
+    for (i, row) in rows.iter().enumerate() {
+        let start_time = &encrypted[i * 3];
+        let end_time = &encrypted[i * 3 + 1];
+        let text = &encrypted[i * 3 + 2];
+
+        let sql = if mode == ImportMode::Merge {
+            "INSERT INTO bulk_edit_preset (id, name, start_time, end_time, text, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                 name = excluded.name, start_time = excluded.start_time, end_time = excluded.end_time,
+                 text = excluded.text, updated_at = excluded.updated_at
+             WHERE excluded.updated_at > bulk_edit_preset.updated_at"
+        } else {
+            "INSERT INTO bulk_edit_preset (id, name, start_time, end_time, text, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)"
+        };
+        let result = sqlx::query(sql)
+            .bind(&row.id)
+            .bind(&row.name)
+            .bind(start_time)
+            .bind(end_time)
+            .bind(text)
+            .bind(&row.created_at)
+            .bind(&row.updated_at)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        if mode == ImportMode::Merge && result.rows_affected() == 0 {
+            stale_count += 1;
+        }
+    }
+    Ok(stale_count)
+}
+
 #[tauri::command]
 pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, include_settings: bool) -> Result<ImportResult, String> {
     let pool = db::open_direct_pool(&app).await?;
@@ -683,6 +775,7 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
         sqlx::query("DELETE FROM daily_task_list").execute(&mut *tx).await.map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM not_to_do_list").execute(&mut *tx).await.map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM screen_time_session").execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM bulk_edit_preset").execute(&mut *tx).await.map_err(|e| e.to_string())?;
         if include_settings {
             sqlx::query("DELETE FROM app_setting").execute(&mut *tx).await.map_err(|e| e.to_string())?;
         }
@@ -706,6 +799,8 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
     merge_import_day_rows(&mut tx, &cipher, "not_to_do_list", &not_to_do_rows, mode).await?;
 
     let screen_time_duplicate_count = import_screen_time_sessions(&mut tx, &cipher, &data.screen_time_session).await?;
+    let bulk_edit_preset_stale_count =
+        import_bulk_edit_presets(&mut tx, &cipher, &data.bulk_edit_preset, mode).await?;
 
     if include_settings {
         for row in &data.app_setting {
@@ -736,6 +831,8 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
         merged_slot_count,
         screen_time_duplicate_count,
         wellness_check_duplicate_count,
+        bulk_edit_preset_count: data.bulk_edit_preset.len(),
+        bulk_edit_preset_stale_count,
     })
 }
 
@@ -905,6 +1002,20 @@ mod tests {
             "CREATE TABLE not_to_do_list (
                 date TEXT PRIMARY KEY,
                 content TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE bulk_edit_preset (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )",
         )
@@ -1532,5 +1643,111 @@ mod tests {
 
         let content = read_decrypted(&pool, "SELECT content FROM daily_task_list WHERE date = '2026-01-01'").await;
         assert_eq!(content, "New task");
+    }
+
+    // --- import_bulk_edit_presets: last-write-wins by updated_at ---------
+
+    fn preset_row(id: &str, name: &str, start: &str, end: &str, text: &str, updated_at: &str) -> ImportBulkEditPresetRow {
+        ImportBulkEditPresetRow {
+            id: id.to_string(),
+            name: name.to_string(),
+            start_time: start.to_string(),
+            end_time: end.to_string(),
+            text: text.to_string(),
+            created_at: updated_at.to_string(),
+            updated_at: updated_at.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn preset_inserted_fresh_when_absent() {
+        let pool = test_pool().await;
+
+        let rows = vec![preset_row("p1", "Sleep", "00:00", "06:00", "Sleeping", "2026-01-01T00:00:00.000Z")];
+        let mut tx = pool.begin().await.unwrap();
+        let stale = import_bulk_edit_presets(&mut tx, &cipher(), &rows, ImportMode::Merge).await.unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(stale, 0);
+        let name: String = sqlx::query_scalar("SELECT name FROM bulk_edit_preset WHERE id = 'p1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(name, "Sleep");
+        let text = read_decrypted(&pool, "SELECT text FROM bulk_edit_preset WHERE id = 'p1'").await;
+        assert_eq!(text, "Sleeping");
+    }
+
+    #[tokio::test]
+    async fn preset_newer_incoming_overwrites_existing() {
+        let pool = test_pool().await;
+        let existing_text = cipher().encrypt("Sleeping").await.unwrap();
+        sqlx::query(
+            "INSERT INTO bulk_edit_preset (id, name, start_time, end_time, text, created_at, updated_at)
+             VALUES ('p1', 'Sleep', '00:00', '06:00', ?, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+        )
+        .bind(&existing_text)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let rows =
+            vec![preset_row("p1", "Sleep (renamed)", "00:00", "07:00", "Sleeping in", "2026-01-02T00:00:00.000Z")];
+        let mut tx = pool.begin().await.unwrap();
+        let stale = import_bulk_edit_presets(&mut tx, &cipher(), &rows, ImportMode::Merge).await.unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(stale, 0);
+        let name: String = sqlx::query_scalar("SELECT name FROM bulk_edit_preset WHERE id = 'p1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(name, "Sleep (renamed)");
+        let text = read_decrypted(&pool, "SELECT text FROM bulk_edit_preset WHERE id = 'p1'").await;
+        assert_eq!(text, "Sleeping in");
+    }
+
+    #[tokio::test]
+    async fn preset_older_incoming_is_skipped_as_stale() {
+        let pool = test_pool().await;
+        let existing_text = cipher().encrypt("Sleeping").await.unwrap();
+        sqlx::query(
+            "INSERT INTO bulk_edit_preset (id, name, start_time, end_time, text, created_at, updated_at)
+             VALUES ('p1', 'Sleep', '00:00', '06:00', ?, '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z')",
+        )
+        .bind(&existing_text)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Older updated_at than what's already stored.
+        let rows = vec![preset_row("p1", "Stale name", "00:00", "05:00", "Stale text", "2026-01-01T00:00:00.000Z")];
+        let mut tx = pool.begin().await.unwrap();
+        let stale = import_bulk_edit_presets(&mut tx, &cipher(), &rows, ImportMode::Merge).await.unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(stale, 1);
+        let name: String = sqlx::query_scalar("SELECT name FROM bulk_edit_preset WHERE id = 'p1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(name, "Sleep", "the newer existing row must survive untouched");
+    }
+
+    #[tokio::test]
+    async fn preset_replace_mode_always_inserts_fresh() {
+        let pool = test_pool().await;
+
+        // Replace mode wipes the table before this runs in the real
+        // import_data flow -- the table starts empty here since test_pool()
+        // never seeds it.
+        let rows = vec![preset_row("p1", "Lunch", "13:00", "14:00", "Lunch break", "2026-01-01T00:00:00.000Z")];
+        let mut tx = pool.begin().await.unwrap();
+        let stale = import_bulk_edit_presets(&mut tx, &cipher(), &rows, ImportMode::Replace).await.unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(stale, 0);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bulk_edit_preset").fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
     }
 }

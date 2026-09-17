@@ -659,6 +659,109 @@ export async function bulkUpsertReflections(
   return slots.length;
 }
 
+// --- Bulk edit "Prefill" presets -----------------------------------------
+//
+// Named presets (a time range + text) a user can save once from the bulk-edit
+// fields above and reapply with one click instead of retyping the same range
+// for a recurring routine (sleep, lunch, ...). See CLAUDE.md's
+// "Bulk-editing reflections by time range" section.
+
+export interface BulkEditPreset {
+  id: string;
+  name: string;
+  startTime: string;
+  endTime: string;
+  text: string;
+}
+
+const BULK_EDIT_PRESETS_SEEDED_KEY = "bulk_edit_presets_seeded";
+
+/**
+ * Seeds two example presets the first time this feature is used, so it's
+ * immediately visible rather than starting as an empty list -- gated on an
+ * app_setting flag, same one-shot pattern as ensureFirstRunMarker/
+ * isOnboardingCompleted above, so this only ever runs once regardless of how
+ * many times getBulkEditPresets() is called.
+ */
+async function seedDefaultBulkEditPresetsOnce(): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [BULK_EDIT_PRESETS_SEEDED_KEY],
+  );
+  if (rows.length > 0) return;
+
+  const now = new Date().toISOString();
+  const defaults: { name: string; startTime: string; endTime: string; text: string }[] = [
+    { name: "Sleep", startTime: "00:00", endTime: "06:00", text: "Sleeping" },
+    { name: "Lunch", startTime: "13:00", endTime: "14:00", text: "Lunch break" },
+  ];
+  // One batched encrypt call for all three encrypted fields across both rows
+  // -- same "flatten across rows, one IPC round trip" shape
+  // getWellnessSummaryForDate uses for its four booleans.
+  const encrypted = await encryptFields(defaults.flatMap((d) => [d.startTime, d.endTime, d.text]));
+  for (let i = 0; i < defaults.length; i++) {
+    const [startTime, endTime, text] = encrypted.slice(i * 3, i * 3 + 3);
+    await db.execute(
+      `INSERT INTO bulk_edit_preset (id, name, start_time, end_time, text, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [crypto.randomUUID(), defaults[i].name, startTime, endTime, text, now, now],
+    );
+  }
+  // ON CONFLICT DO NOTHING: a concurrent call (unlikely, but getBulkEditPresets
+  // has no lock around this check-then-insert) should never seed twice.
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, '1') ON CONFLICT(key) DO NOTHING`,
+    [BULK_EDIT_PRESETS_SEEDED_KEY],
+  );
+}
+
+export async function getBulkEditPresets(): Promise<BulkEditPreset[]> {
+  await seedDefaultBulkEditPresetsOnce();
+  const db = await getDb();
+  const rows = await db.select<{ id: string; name: string; start_time: string; end_time: string; text: string }[]>(
+    `SELECT id, name, start_time, end_time, text FROM bulk_edit_preset ORDER BY name COLLATE NOCASE`,
+  );
+  const decrypted = await decryptFields(rows.flatMap((r) => [r.start_time, r.end_time, r.text]));
+  return rows.map((row, i) => ({
+    id: row.id,
+    name: row.name,
+    startTime: decrypted[i * 3],
+    endTime: decrypted[i * 3 + 1],
+    text: decrypted[i * 3 + 2],
+  }));
+}
+
+/** Validates the plaintext inputs (same validateBulkEditRange guard the
+ * bulk-edit fields themselves use) before anything is encrypted. */
+export async function saveBulkEditPreset(
+  name: string,
+  startTime: string,
+  endTime: string,
+  text: string,
+): Promise<void> {
+  const trimmedName = name.trim();
+  const trimmedText = text.trim();
+  if (!trimmedName) throw new Error("Name is required");
+  if (!trimmedText) throw new Error("Text is required");
+  const rangeError = validateBulkEditRange(startTime, endTime);
+  if (rangeError) throw new Error(rangeError);
+
+  const db = await getDb();
+  const [encStart, encEnd, encText] = await encryptFields([startTime, endTime, trimmedText]);
+  const now = new Date().toISOString();
+  await db.execute(
+    `INSERT INTO bulk_edit_preset (id, name, start_time, end_time, text, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [crypto.randomUUID(), trimmedName, encStart, encEnd, encText, now, now],
+  );
+}
+
+export async function deleteBulkEditPreset(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(`DELETE FROM bulk_edit_preset WHERE id = $1`, [id]);
+}
+
 export async function getTaskList(dateStamp: string): Promise<string> {
   const db = await getDb();
   const rows = await db.select<{ content: string }[]>(
@@ -1550,6 +1653,16 @@ export interface ScreenTimeSessionRow {
   ended_at: string;
 }
 
+export interface BulkEditPresetRow {
+  id: string;
+  name: string;
+  start_time: string;
+  end_time: string;
+  text: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ExportPayload {
   app: "reflectodoro";
   export_format_version: number;
@@ -1561,13 +1674,21 @@ export interface ExportPayload {
     app_setting: SettingRow[];
     wellness_check: WellnessCheckRow[];
     screen_time_session: ScreenTimeSessionRow[];
+    bulk_edit_preset: BulkEditPresetRow[];
   };
 }
 
 export async function exportAllData(includeSettings: boolean = true): Promise<ExportPayload> {
   const db = await getDb();
-  const [reflection, daily_task_list, not_to_do_list, app_setting, wellness_check, screen_time_session] =
-    await Promise.all([
+  const [
+    reflection,
+    daily_task_list,
+    not_to_do_list,
+    app_setting,
+    wellness_check,
+    screen_time_session,
+    bulk_edit_preset,
+  ] = await Promise.all([
     db.select<ReflectionRow[]>(`SELECT id, created_at, slot_start_at, text FROM reflection`),
     db.select<TaskListRow[]>(`SELECT date, content, updated_at FROM daily_task_list`),
     db.select<NotToDoRow[]>(`SELECT date, content, updated_at FROM not_to_do_list`),
@@ -1580,6 +1701,9 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
     db.select<ScreenTimeSessionRow[]>(
       `SELECT id, app_id, display_name, platform, device_name, started_at, ended_at FROM screen_time_session`,
     ),
+    db.select<BulkEditPresetRow[]>(
+      `SELECT id, name, start_time, end_time, text, created_at, updated_at FROM bulk_edit_preset`,
+    ),
   ]);
   // The export file is deliberately plaintext (a deliberate, documented
   // decision -- see CLAUDE.md's "Encryption at rest"): it's a portability
@@ -1587,15 +1711,23 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
   // entirely unrelated key, so shipping ciphertext would make it unreadable
   // everywhere including here. Encryption protects the live pomodoro.db, not
   // a file the user explicitly chose to write somewhere of their choosing.
-  const [reflectionTexts, taskContents, notToDoContents, wellnessValues, screenTimeAppIds, screenTimeDisplayNames] =
-    await Promise.all([
-      decryptFields(reflection.map((r) => r.text)),
-      decryptFields(daily_task_list.map((r) => r.content)),
-      decryptFields(not_to_do_list.map((r) => r.content)),
-      decryptFields(wellness_check.flatMap((r) => [r.relaxed_eyes, r.exercise, r.drank_water, r.washroom])),
-      decryptFields(screen_time_session.map((r) => r.app_id)),
-      decryptFields(screen_time_session.map((r) => r.display_name)),
-    ]);
+  const [
+    reflectionTexts,
+    taskContents,
+    notToDoContents,
+    wellnessValues,
+    screenTimeAppIds,
+    screenTimeDisplayNames,
+    bulkEditPresetValues,
+  ] = await Promise.all([
+    decryptFields(reflection.map((r) => r.text)),
+    decryptFields(daily_task_list.map((r) => r.content)),
+    decryptFields(not_to_do_list.map((r) => r.content)),
+    decryptFields(wellness_check.flatMap((r) => [r.relaxed_eyes, r.exercise, r.drank_water, r.washroom])),
+    decryptFields(screen_time_session.map((r) => r.app_id)),
+    decryptFields(screen_time_session.map((r) => r.display_name)),
+    decryptFields(bulk_edit_preset.flatMap((r) => [r.start_time, r.end_time, r.text])),
+  ]);
   return {
     app: "reflectodoro",
     export_format_version: EXPORT_FORMAT_VERSION,
@@ -1621,6 +1753,12 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
         ...row,
         app_id: screenTimeAppIds[i],
         display_name: screenTimeDisplayNames[i],
+      })),
+      bulk_edit_preset: bulk_edit_preset.map((row, i) => ({
+        ...row,
+        start_time: bulkEditPresetValues[i * 3],
+        end_time: bulkEditPresetValues[i * 3 + 1],
+        text: bulkEditPresetValues[i * 3 + 2],
       })),
     },
   };
@@ -1812,11 +1950,42 @@ export function parseAndValidateExport(raw: string): ExportPayload {
     };
   });
 
+  // Same "tolerant of absence" reasoning as screen_time_session above --
+  // bulk_edit_preset arrived after the export format did.
+  const bulkEditPresetRaw = data.bulk_edit_preset ?? [];
+  if (!Array.isArray(bulkEditPresetRaw)) throw new Error("data.bulk_edit_preset is not an array");
+  const bulk_edit_preset: BulkEditPresetRow[] = bulkEditPresetRaw.map((row, i) => {
+    if (typeof row !== "object" || row === null) throw new Error(`bulk_edit_preset[${i}] is not an object`);
+    const r = row as Record<string, unknown>;
+    const start_time = assertString(r.start_time, `bulk_edit_preset[${i}].start_time`);
+    const end_time = assertString(r.end_time, `bulk_edit_preset[${i}].end_time`);
+    const rangeError = validateBulkEditRange(start_time, end_time);
+    if (rangeError) throw new Error(`bulk_edit_preset[${i}]: ${rangeError}`);
+    return {
+      id: assertString(r.id, `bulk_edit_preset[${i}].id`),
+      name: assertString(r.name, `bulk_edit_preset[${i}].name`),
+      start_time,
+      end_time,
+      text: assertString(r.text, `bulk_edit_preset[${i}].text`),
+      created_at: assertString(r.created_at, `bulk_edit_preset[${i}].created_at`),
+      updated_at: assertString(r.updated_at, `bulk_edit_preset[${i}].updated_at`),
+    };
+  });
+  assertNoDuplicates(bulk_edit_preset.map((r) => r.id), "bulk_edit_preset", "id");
+
   return {
     app: "reflectodoro",
     export_format_version: obj.export_format_version,
     exported_at: obj.exported_at,
-    data: { reflection, daily_task_list, not_to_do_list, app_setting, wellness_check, screen_time_session },
+    data: {
+      reflection,
+      daily_task_list,
+      not_to_do_list,
+      app_setting,
+      wellness_check,
+      screen_time_session,
+      bulk_edit_preset,
+    },
   };
 }
 
@@ -1842,6 +2011,12 @@ export interface ImportResult {
    * imported row -- see import.rs's import_wellness_checks. Always 0 in
    * "replace" mode. */
   wellnessCheckDuplicateCount: number;
+  bulkEditPresetCount: number;
+  /** How many imported bulk_edit_preset rows were skipped because an
+   * existing row with the same id had an updated_at that was already newer
+   * (last-write-wins) -- see import.rs's import_bulk_edit_presets. Always 0
+   * in "replace" mode. */
+  bulkEditPresetStaleCount: number;
 }
 
 /**
@@ -1920,7 +2095,7 @@ export interface PairedDeviceInfo {
 }
 
 export interface SyncResult {
-  /** Rows this device sent to the peer -- a single total across all five
+  /** Rows this device sent to the peer -- a single total across all six
    * synced tables, not broken down. The fields below are the other
    * direction (received from the peer and applied here); without this, a
    * sync that only moved data outward reported "0 rows" even though it
@@ -1934,6 +2109,7 @@ export interface SyncResult {
   mergedSlotCount: number;
   screenTimeDuplicateCount: number;
   wellnessCheckDuplicateCount: number;
+  bulkEditPresetCount: number;
 }
 
 /** Opens a ~60s pairing window on this device and returns the PIN to show

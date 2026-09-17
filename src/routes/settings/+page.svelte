@@ -268,7 +268,8 @@
         result.taskListCount +
         result.notToDoListCount +
         result.wellnessCheckCount +
-        result.screenTimeSessionCount;
+        result.screenTimeSessionCount +
+        result.bulkEditPresetCount;
       const mergedClause =
         result.mergedSlotCount > 0
           ? ` ${result.mergedSlotCount} reflection slot${result.mergedSlotCount === 1 ? "" : "s"} merged with existing entries.`
@@ -668,7 +669,11 @@
         result.wellnessCheckDuplicateCount > 0
           ? ` ${result.wellnessCheckDuplicateCount} duplicate wellness check-in${result.wellnessCheckDuplicateCount === 1 ? "" : "s"} skipped.`
           : "";
-      importMessage = `Imported ${result.reflectionCount} reflection${result.reflectionCount === 1 ? "" : "s"}, ${result.taskListCount} task list${result.taskListCount === 1 ? "" : "s"}, ${result.notToDoListCount} not-to-do list${result.notToDoListCount === 1 ? "" : "s"}, ${result.settingCount} setting${result.settingCount === 1 ? "" : "s"}, ${result.wellnessCheckCount} wellness check-in${result.wellnessCheckCount === 1 ? "" : "s"}, ${result.screenTimeSessionCount} screen time session${result.screenTimeSessionCount === 1 ? "" : "s"}.${mergedClause}${duplicateClause}${wellnessDuplicateClause}`;
+      const presetStaleClause =
+        result.bulkEditPresetStaleCount > 0
+          ? ` ${result.bulkEditPresetStaleCount} bulk-edit preset${result.bulkEditPresetStaleCount === 1 ? "" : "s"} already up to date, skipped.`
+          : "";
+      importMessage = `Imported ${result.reflectionCount} reflection${result.reflectionCount === 1 ? "" : "s"}, ${result.taskListCount} task list${result.taskListCount === 1 ? "" : "s"}, ${result.notToDoListCount} not-to-do list${result.notToDoListCount === 1 ? "" : "s"}, ${result.settingCount} setting${result.settingCount === 1 ? "" : "s"}, ${result.wellnessCheckCount} wellness check-in${result.wellnessCheckCount === 1 ? "" : "s"}, ${result.screenTimeSessionCount} screen time session${result.screenTimeSessionCount === 1 ? "" : "s"}, ${result.bulkEditPresetCount} bulk-edit preset${result.bulkEditPresetCount === 1 ? "" : "s"}.${mergedClause}${duplicateClause}${wellnessDuplicateClause}${presetStaleClause}`;
       importStatus = "success";
       importPath = null;
       importFileName = "";

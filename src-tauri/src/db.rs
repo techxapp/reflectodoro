@@ -542,6 +542,47 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 25,
+            // Backs the Entries page's "Bulk edit reflections" -> Prefill
+            // feature (see CLAUDE.md's "Bulk-editing reflections by time
+            // range"): named presets a user can save once (a time range +
+            // text) and reapply to the bulk-edit fields instead of retyping
+            // them every time for a recurring routine (sleep, lunch, ...).
+            //
+            // `id` is a client-generated crypto.randomUUID() (db.ts), not an
+            // autoincrement integer -- it has to stay stable and collision-free
+            // across two independent devices for P2P sync/export-import to
+            // upsert by it, the same reasoning paired_device.device_id and
+            // p2p_device_id already follow.
+            //
+            // start_time/end_time/text are ENCRYPTED AT REST (crypto.rs's
+            // usual 'enc1:'-prefixed ciphertext, written via db.ts's
+            // encryptField/encryptFields -- never via raw migration SQL,
+            // which has no access to FieldCipher) -- `name` stays plaintext
+            // since getBulkEditPresets sorts by it in SQL, which ciphertext
+            // can't support. No ENCRYPTED_COLUMNS backfill entry needed in
+            // crypto.rs: this table is brand new, so there are no
+            // pre-existing plaintext rows to migrate -- every row, seeded or
+            // user-created, is written through the cipher from the moment it
+            // can exist.
+            //
+            // updated_at is this table's P2P sync delta cursor, same role as
+            // reflection.updated_at.
+            description: "create bulk_edit_preset table for saved bulk-edit prefill presets",
+            sql: r#"
+                CREATE TABLE bulk_edit_preset (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
