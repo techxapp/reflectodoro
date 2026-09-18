@@ -277,14 +277,42 @@ pub(crate) async fn import_reflections(
             .push(row);
     }
 
+    // created_at/updated_at are ciphertext at rest (crypto.rs), so what gets
+    // written has to be encrypted -- but the min/max that *picks* those values
+    // runs on the incoming plaintext first, since random-nonce ciphertext has
+    // no usable ordering. Computed for every slot up front and encrypted in
+    // one batch rather than two encrypt calls per slot: on Android each call
+    // is a JNI hop into the Keystore, and an import can cover thousands of
+    // slots.
+    let mut plain_timestamps: Vec<String> = Vec::with_capacity(order.len() * 2);
+    for slot in &order {
+        let group = &groups[slot];
+        // `created_at` for a brand-new slot is the earliest among the rows
+        // collapsing into it; `updated_at` is the latest of the group (falling
+        // back to created_at when a legacy export omits it). Plain string
+        // comparison is safe -- these are all `toISOString()` UTC strings.
+        let created = group.iter().map(|r| r.created_at.as_str()).min().unwrap_or_default().to_string();
+        let updated = group
+            .iter()
+            .map(|r| r.updated_at.as_deref().unwrap_or(r.created_at.as_str()))
+            .max()
+            .unwrap_or_default()
+            .to_string();
+        plain_timestamps.push(created);
+        plain_timestamps.push(updated);
+    }
+    let stored_timestamps = cipher.encrypt_many(&plain_timestamps).await?;
+
     let mut merged_slot_count = 0usize;
 
-    for slot in order {
-        let group = &groups[&slot];
+    for (slot_index, slot) in order.iter().enumerate() {
+        let group = &groups[slot];
+        let stored_created_at = &stored_timestamps[slot_index * 2];
+        let stored_updated_at = &stored_timestamps[slot_index * 2 + 1];
 
         let existing_rows: Vec<(i64, String)> = if mode == ImportMode::Merge {
             let db_rows = sqlx::query("SELECT id, text FROM reflection WHERE slot_start_at = ? ORDER BY id ASC")
-                .bind(&slot)
+                .bind(slot)
                 .fetch_all(&mut **tx)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -316,17 +344,6 @@ pub(crate) async fn import_reflections(
         let final_text = merge_reflection_lines(&existing_baseline, &incoming_lines).join("\n");
         let final_text_stored = cipher.encrypt(&final_text).await?;
 
-        // The delta-sync cursor (p2p_sync.rs): the latest of every incoming
-        // row's updated_at (falling back to its created_at when a legacy
-        // export omits it) for this slot -- a plain string max is safe, same
-        // ISO/UTC format as everywhere else in this app.
-        let final_updated_at = group
-            .iter()
-            .map(|r| r.updated_at.as_deref().unwrap_or(r.created_at.as_str()))
-            .max()
-            .unwrap_or_default()
-            .to_string();
-
         if existing_rows.len() + group.len() > 1 {
             merged_slot_count += 1;
         }
@@ -335,7 +352,7 @@ pub(crate) async fn import_reflections(
             let survivor_id = *first_id;
             sqlx::query("UPDATE reflection SET text = ?, updated_at = ? WHERE id = ?")
                 .bind(&final_text_stored)
-                .bind(&final_updated_at)
+                .bind(stored_updated_at)
                 .bind(survivor_id)
                 .execute(&mut **tx)
                 .await
@@ -357,20 +374,15 @@ pub(crate) async fn import_reflections(
                 delete_dupes.execute(&mut **tx).await.map_err(|e| e.to_string())?;
             }
         } else {
-            // No existing row: brand-new slot. `created_at` is the earliest
-            // among the imported rows collapsing into it (plain string min
-            // is safe -- these are all `toISOString()` UTC strings).
-            let created_at = group
-                .iter()
-                .map(|r| r.created_at.as_str())
-                .min()
-                .unwrap_or_default()
-                .to_string();
+            // No existing row: brand-new slot. `rev` is deliberately not named
+            // here -- migration 28's triggers assign this device's own value,
+            // which is what makes a row received from one peer forward on to
+            // another.
             sqlx::query("INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES (?, ?, ?, ?)")
-                .bind(&created_at)
-                .bind(&slot)
+                .bind(stored_created_at)
+                .bind(slot)
                 .bind(&final_text_stored)
-                .bind(&final_updated_at)
+                .bind(stored_updated_at)
                 .execute(&mut **tx)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -1108,6 +1120,41 @@ mod tests {
         assert_eq!(text, "Did laundry\nWent for a walk", "the encrypted existing line must survive the merge");
     }
 
+    /// The merge branch writes `updated_at` on the surviving row; like
+    /// created_at on the insert branch, it has to land as ciphertext rather
+    /// than the plaintext value that arrived in the payload.
+    #[tokio::test]
+    async fn merge_stores_updated_at_encrypted() {
+        let pool = test_pool().await;
+
+        let stored = cipher().encrypt("Did laundry").await.unwrap();
+        sqlx::query(
+            "INSERT INTO reflection (id, created_at, slot_start_at, text)
+             VALUES (1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', ?)",
+        )
+        .bind(&stored)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let imported = vec![ImportReflectionRow {
+            created_at: "2026-01-01T00:10:00.000Z".to_string(),
+            slot_start_at: "2026-01-01T00:00:00.000Z".to_string(),
+            text: "Went for a walk".to_string(),
+            updated_at: Some("2026-01-02T08:00:00.000Z".to_string()),
+        }];
+
+        let mut tx = pool.begin().await.unwrap();
+        import_reflections(&mut tx, &cipher(), &imported, ImportMode::Merge).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let raw: String =
+            sqlx::query_scalar("SELECT updated_at FROM reflection WHERE id = 1").fetch_one(&pool).await.unwrap();
+        assert!(raw.starts_with("enc1:"), "updated_at should be stored encrypted: {raw}");
+        let updated = read_decrypted(&pool, "SELECT updated_at FROM reflection WHERE id = 1").await;
+        assert_eq!(updated, "2026-01-02T08:00:00.000Z", "the latest incoming updated_at should win, decrypted intact");
+    }
+
     #[tokio::test]
     async fn no_existing_row_is_a_plain_insert_with_no_merge() {
         let pool = test_pool().await;
@@ -1125,11 +1172,18 @@ mod tests {
 
         assert_eq!(merged_slot_count, 0, "a single fresh row with nothing to merge against shouldn't count as merged");
 
-        let created_at: String =
+        // created_at arrives plaintext (an export file is plaintext by
+        // design, and a P2P payload was decrypted by the sender) and must be
+        // stored encrypted, like every other encrypted column here.
+        let stored_created_at: String =
             sqlx::query_scalar("SELECT created_at FROM reflection WHERE slot_start_at = '2026-02-01T00:00:00.000Z'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
+        assert!(stored_created_at.starts_with("enc1:"), "created_at should be stored encrypted: {stored_created_at}");
+        let created_at =
+            read_decrypted(&pool, "SELECT created_at FROM reflection WHERE slot_start_at = '2026-02-01T00:00:00.000Z'")
+                .await;
         assert_eq!(created_at, "2026-02-01T00:00:00.000Z");
         let text =
             read_decrypted(&pool, "SELECT text FROM reflection WHERE slot_start_at = '2026-02-01T00:00:00.000Z'").await;

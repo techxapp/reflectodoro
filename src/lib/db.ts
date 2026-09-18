@@ -87,12 +87,20 @@ async function hashAppIds(values: string[]): Promise<string[]> {
   return invoke<string[]>("hash_app_ids", { values });
 }
 
+/** The full stored/exported shape. `created_at` is ciphertext in the
+ * database and plaintext in an export file -- `exportAllData` decrypts it on
+ * the way out. */
 export interface ReflectionRow {
   id: number;
   created_at: string;
   slot_start_at: string;
   text: string;
 }
+
+/** What the Entries view actually reads. `created_at` is deliberately absent
+ * rather than carried along as an unused ciphertext blob: nothing in the UI
+ * displays it, and having it in the type invites someone to render it. */
+export type ReflectionDisplayRow = Omit<ReflectionRow, "created_at">;
 
 /** A run of rows for display purposes: consecutive break slots (30 minutes
  * apart, no gap) carrying identical text. Computed client-side from the flat
@@ -101,7 +109,7 @@ export interface ReflectionRow {
  * logic), because editing one row's text should immediately split it off
  * from unedited neighbors, not stay bundled under the original save event. */
 export interface ReflectionCluster {
-  rows: ReflectionRow[];
+  rows: ReflectionDisplayRow[];
 }
 
 export function localDateStamp(d: Date = new Date()): string {
@@ -280,11 +288,17 @@ export function splitReflectionForSlots(text: string, coveredSlots: string[]): s
   return lines;
 }
 
+/** `storedCreatedAt` is ciphertext, not a plain timestamp: reflection's
+ * created_at/updated_at are encrypted at rest (crypto.rs) -- a plaintext edit
+ * time would leak when the user is awake and working even to someone who
+ * can't read a single reflection. Nothing queries either column any more;
+ * P2P sync finds changed rows via the `rev` counter instead (db.rs migration
+ * 28), which the table's triggers maintain, so nothing here writes it. */
 async function upsertReflectionRow(
   db: Database,
   slot: string,
   storedText: string,
-  createdAt: string,
+  storedCreatedAt: string,
 ): Promise<void> {
   const existing = await db.select<{ id: number }[]>(
     `SELECT id FROM reflection WHERE slot_start_at = $1`,
@@ -293,13 +307,13 @@ async function upsertReflectionRow(
   if (existing.length > 0) {
     await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE slot_start_at = $3`, [
       storedText,
-      createdAt,
+      storedCreatedAt,
       slot,
     ]);
   } else {
     await db.execute(
       `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
-      [createdAt, slot, storedText, createdAt],
+      [storedCreatedAt, slot, storedText, storedCreatedAt],
     );
   }
 }
@@ -323,9 +337,12 @@ export async function saveReflection(coveredSlots: string[], text: string): Prom
     // fresh nonce -- encryptFields (batched) gives every value its own
     // encrypt call under the hood, unlike the single shared-ciphertext path
     // below where one nonce/plaintext pair is legitimately reused verbatim.
-    const encrypted = await encryptFields(perSlotLines);
+    // createdAt rides along in the same batch rather than costing a second
+    // IPC round trip -- this is the break overlay's submit path.
+    const encrypted = await encryptFields([...perSlotLines, createdAt]);
+    const storedCreatedAt = encrypted[encrypted.length - 1];
     for (let i = 0; i < coveredSlots.length; i++) {
-      await upsertReflectionRow(db, coveredSlots[i], encrypted[i], createdAt);
+      await upsertReflectionRow(db, coveredSlots[i], encrypted[i], storedCreatedAt);
     }
     return;
   }
@@ -335,9 +352,9 @@ export async function saveReflection(coveredSlots: string[], text: string): Prom
   // pairs that nonce with *different* plaintext (the property that actually
   // matters -- see crypto.rs). All it reveals is that these rows share text,
   // which the merge already makes explicit anyway.
-  const stored = await encryptField(text);
+  const [stored, storedCreatedAt] = await encryptFields([text, createdAt]);
   for (const slot of coveredSlots) {
-    await upsertReflectionRow(db, slot, stored, createdAt);
+    await upsertReflectionRow(db, slot, stored, storedCreatedAt);
   }
 }
 
@@ -470,10 +487,10 @@ export async function getWellnessSummaryForDate(dateStamp: string): Promise<Well
  * (`localtime_r`/equivalent), so this stays correct across DST transitions
  * too, not just a fixed current-offset shift.
  */
-export async function getReflectionsForDate(dateStamp: string): Promise<ReflectionRow[]> {
+export async function getReflectionsForDate(dateStamp: string): Promise<ReflectionDisplayRow[]> {
   const db = await getDb();
-  const rows = await db.select<ReflectionRow[]>(
-    `SELECT id, created_at, slot_start_at, text FROM reflection
+  const rows = await db.select<ReflectionDisplayRow[]>(
+    `SELECT id, slot_start_at, text FROM reflection
      WHERE date(slot_start_at, 'localtime') = $1
      ORDER BY slot_start_at ASC`,
     [dateStamp],
@@ -493,7 +510,7 @@ const SLOT_INTERVAL_MS = 30 * 60 * 1000;
  * (see the Entries page's $derived), so editing a row's text re-clusters
  * immediately -- an edited row that no longer matches its neighbor's text
  * splits into its own cluster without any explicit "ungroup" step. */
-export function clusterReflectionRows(rows: ReflectionRow[]): ReflectionCluster[] {
+export function clusterReflectionRows(rows: ReflectionDisplayRow[]): ReflectionCluster[] {
   const clusters: ReflectionCluster[] = [];
   for (const row of rows) {
     const current = clusters[clusters.length - 1];
@@ -514,15 +531,17 @@ export function clusterReflectionRows(rows: ReflectionRow[]): ReflectionCluster[
  * that were saved together in the same saveReflection call -- keyed by id,
  * not created_at, so editing one slot never touches the others (and, per
  * clusterReflectionRows above, immediately splits it out of its display
- * cluster if the new text no longer matches). Also bumps updated_at -- the
- * P2P sync delta cursor for this table (p2p_sync.rs); without it, an edit
- * made after the original insert would never be picked up by a sync that
- * only looks at rows changed since a device's last_sync_at. */
+ * cluster if the new text no longer matches). Also bumps updated_at, which is
+ * now purely a record of when the row was last edited -- P2P sync tracks
+ * changes via the `rev` counter (db.rs migration 28) rather than this column,
+ * and the table's triggers advance rev on this UPDATE without it being named
+ * here. Both the text and the timestamp are encrypted, in one batched call. */
 export async function updateReflectionText(id: number, text: string): Promise<void> {
   const db = await getDb();
+  const [storedText, storedUpdatedAt] = await encryptFields([text, new Date().toISOString()]);
   await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE id = $3`, [
-    await encryptField(text),
-    new Date().toISOString(),
+    storedText,
+    storedUpdatedAt,
     id,
   ]);
 }
@@ -634,25 +653,23 @@ export async function bulkUpsertReflections(
   const db = await getDb();
   const createdAt = new Date().toISOString();
   // One encryption reused across every slot in the range, same reasoning as
-  // saveReflection's.
-  const stored = await encryptField(trimmed);
+  // saveReflection's; the timestamp rides in the same batch.
+  const [stored, storedCreatedAt] = await encryptFields([trimmed, createdAt]);
   for (const slot of slots) {
     const existing = await db.select<{ id: number }[]>(
       `SELECT id FROM reflection WHERE slot_start_at = $1`,
       [slot],
     );
     if (existing.length > 0) {
-      // updated_at bump: see updateReflectionText's doc comment -- same P2P
-      // sync delta-cursor reasoning applies to this upsert's update branch.
       await db.execute(`UPDATE reflection SET text = $1, updated_at = $2 WHERE slot_start_at = $3`, [
         stored,
-        createdAt,
+        storedCreatedAt,
         slot,
       ]);
     } else {
       await db.execute(
         `INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES ($1, $2, $3, $4)`,
-        [createdAt, slot, stored, createdAt],
+        [storedCreatedAt, slot, stored, storedCreatedAt],
       );
     }
   }
@@ -1713,6 +1730,7 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
   // a file the user explicitly chose to write somewhere of their choosing.
   const [
     reflectionTexts,
+    reflectionCreatedAts,
     taskContents,
     notToDoContents,
     wellnessValues,
@@ -1721,6 +1739,12 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
     bulkEditPresetValues,
   ] = await Promise.all([
     decryptFields(reflection.map((r) => r.text)),
+    // created_at is ciphertext at rest now, and the export file is
+    // deliberately plaintext, so it decrypts on the way out like everything
+    // else here. `rev` is never selected at all: it's a device-local counter
+    // (same exclusion as app_id_hash), and the importing device's triggers
+    // assign their own.
+    decryptFields(reflection.map((r) => r.created_at)),
     decryptFields(daily_task_list.map((r) => r.content)),
     decryptFields(not_to_do_list.map((r) => r.content)),
     decryptFields(wellness_check.flatMap((r) => [r.relaxed_eyes, r.exercise, r.drank_water, r.washroom])),
@@ -1733,7 +1757,11 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
     export_format_version: EXPORT_FORMAT_VERSION,
     exported_at: new Date().toISOString(),
     data: {
-      reflection: reflection.map((row, i) => ({ ...row, text: reflectionTexts[i] })),
+      reflection: reflection.map((row, i) => ({
+        ...row,
+        created_at: reflectionCreatedAts[i],
+        text: reflectionTexts[i],
+      })),
       daily_task_list: daily_task_list.map((row, i) => ({ ...row, content: taskContents[i] })),
       not_to_do_list: not_to_do_list.map((row, i) => ({ ...row, content: notToDoContents[i] })),
       app_setting,

@@ -571,16 +571,55 @@ async fn already_paired_ids(app: &AppHandle) -> Result<Vec<String>, String> {
         .map_err(|e| e.to_string())
 }
 
-async fn load_paired_device_secret(app: &AppHandle, peer_device_id: &str) -> Result<(String, Option<String>), String> {
+async fn load_paired_device_secret(app: &AppHandle, peer_device_id: &str) -> Result<String, String> {
     let pool = db::open_direct_pool(app).await?;
-    let row = sqlx::query_as::<_, (String, Option<String>)>(
-        "SELECT shared_key, last_sync_at FROM paired_device WHERE device_id = ?",
-    )
-    .bind(peer_device_id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    let row = sqlx::query_scalar::<_, String>("SELECT shared_key FROM paired_device WHERE device_id = ?")
+        .bind(peer_device_id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
     row.ok_or_else(|| format!("device {peer_device_id} is not paired with this device"))
+}
+
+/// Every table whose rows travel in a `SyncPayload`. Kept as one list so the
+/// cursor bookkeeping below can't quietly fall out of step with the queries in
+/// `build_delta_payload` -- a table present in one and missing from the other
+/// would either never sync or re-send its whole history every time.
+const SYNCED_TABLES: [&str; 6] =
+    ["reflection", "daily_task_list", "not_to_do_list", "wellness_check", "screen_time_session", "bulk_edit_preset"];
+
+/// Per-table `rev` high-water marks for one peer. A table with no entry has
+/// never been synced with that peer, which reads as `0` -- and since migration
+/// 28 seeds every existing row's rev from its rowid (so the lowest real rev is
+/// 1), that naturally means "send everything", the same thing a NULL
+/// `last_sync_at` used to mean.
+type SyncCursors = std::collections::HashMap<String, i64>;
+
+async fn load_sync_cursors(app: &AppHandle, peer_device_id: &str) -> Result<SyncCursors, String> {
+    let pool = db::open_direct_pool(app).await?;
+    let rows = sqlx::query_as::<_, (String, i64)>("SELECT table_name, last_rev FROM sync_cursor WHERE device_id = ?")
+        .bind(peer_device_id)
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().collect())
+}
+
+async fn save_sync_cursors(app: &AppHandle, peer_device_id: &str, cursors: &SyncCursors) -> Result<(), String> {
+    let pool = db::open_direct_pool(app).await?;
+    for (table, rev) in cursors {
+        sqlx::query(
+            "INSERT INTO sync_cursor (device_id, table_name, last_rev) VALUES (?, ?, ?)
+             ON CONFLICT(device_id, table_name) DO UPDATE SET last_rev = excluded.last_rev",
+        )
+        .bind(peer_device_id)
+        .bind(table)
+        .bind(rev)
+        .execute(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 async fn save_paired_device(app: &AppHandle, peer: &PeerIdentity, shared_key_hex: &str, paired_at: &str) -> Result<(), String> {
@@ -614,14 +653,40 @@ async fn update_last_sync_at(app: &AppHandle, peer_device_id: &str, sync_started
     Ok(())
 }
 
-/// `since = None` (a device never synced with this peer before) selects
-/// every row -- an empty-string lower bound sorts before every real ISO
-/// timestamp, so it doubles as "no cursor yet" without a separate branch.
-async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<SyncPayload, String> {
+/// Selects every row each table has gained or had edited since this peer's
+/// last successful sync, using the monotonic `rev` counter migration 28 added
+/// rather than a timestamp comparison.
+///
+/// **Why not timestamps**: `reflection.created_at`/`updated_at` are ciphertext
+/// at rest now (crypto.rs), and random-nonce ciphertext supports no ordering,
+/// so the old `COALESCE(updated_at, created_at) > ?` predicate can't run. A
+/// counter is also strictly better for this job: it survives a backward system
+/// clock jump (which used to strand rows below the cursor forever), and it
+/// advances on every *local* write, so a row this device received from peer A
+/// still forwards to peer C -- with timestamps it kept peer A's original
+/// stamp and could already sit below C's cursor.
+///
+/// Returns the cursors to persist on success alongside the payload. The upper
+/// bound is captured *before* each query and the query is bounded by it, so
+/// the rows sent and the cursor advance always describe exactly the same set;
+/// anything written mid-transfer lands above the bound and goes out next time
+/// rather than being skipped.
+async fn build_delta_payload(app: &AppHandle, cursors: &SyncCursors) -> Result<(SyncPayload, SyncCursors), String> {
     let pool = db::open_direct_pool(app).await?;
-    let since = since.unwrap_or("");
-    // The three text columns and wellness_check's four boolean columns are
-    // all ciphertext at rest (crypto.rs), and the two devices in a pair hold
+
+    let mut upper: SyncCursors = SyncCursors::new();
+    for table in SYNCED_TABLES {
+        let max: i64 = sqlx::query_scalar(&format!("SELECT COALESCE(MAX(rev), 0) FROM {table}"))
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| format!("couldn't read {table}'s rev high-water mark: {e}"))?;
+        upper.insert(table.to_string(), max);
+    }
+    let bounds = |table: &str| (cursors.get(table).copied().unwrap_or(0), upper.get(table).copied().unwrap_or(0));
+    // Every encrypted column below -- the three text columns, wellness_check's
+    // four booleans, screen_time_session's app names, bulk_edit_preset's
+    // fields, and reflection's created_at/updated_at -- is ciphertext at rest
+    // (crypto.rs), and the two devices in a pair hold
     // entirely unrelated keys -- each one's key is local to it and never
     // exchanged, by design. So the sending side decrypts here and the
     // payload travels as plaintext *inside* the Noise session that already
@@ -631,31 +696,45 @@ async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<Syn
     // on the far end.
     let cipher = crate::crypto::FieldCipher::resolve(app).await?;
 
+    let (from, to) = bounds("reflection");
     let reflection_rows = sqlx::query_as::<_, (String, String, String, String)>(
         "SELECT created_at, slot_start_at, text, COALESCE(updated_at, created_at)
-         FROM reflection WHERE COALESCE(updated_at, created_at) > ?",
+         FROM reflection WHERE rev > ? AND rev <= ?",
     )
-    .bind(since)
+    .bind(from)
+    .bind(to)
     .fetch_all(&pool)
     .await
     .map_err(|e| e.to_string())?;
-    let reflection_texts: Vec<String> = reflection_rows.iter().map(|(_, _, text, _)| text.clone()).collect();
-    let reflection_texts = cipher.decrypt_many(&reflection_texts).await?;
+    // created_at/updated_at join text as ciphertext at rest, so all three
+    // decrypt -- flattened into one batch rather than three calls, since on
+    // Android each is a JNI hop into the Keystore (same shape wellness_check's
+    // four booleans use below). `rev` itself is never sent: it's this device's
+    // own local counter, meaningless on the far end, which assigns its own via
+    // the triggers when import.rs writes the row (same exclusion as
+    // app_id_hash).
+    let reflection_values: Vec<String> = reflection_rows
+        .iter()
+        .flat_map(|(created_at, _, text, updated_at)| [text.clone(), created_at.clone(), updated_at.clone()])
+        .collect();
+    let reflection_values = cipher.decrypt_many(&reflection_values).await?;
     let reflection = reflection_rows
         .into_iter()
-        .zip(reflection_texts)
-        .map(|((created_at, slot_start_at, _, updated_at), text)| import::ImportReflectionRow {
-            created_at,
+        .zip(reflection_values.chunks_exact(3))
+        .map(|((_, slot_start_at, _, _), values)| import::ImportReflectionRow {
+            created_at: values[1].clone(),
             slot_start_at,
-            text,
-            updated_at: Some(updated_at),
+            text: values[0].clone(),
+            updated_at: Some(values[2].clone()),
         })
         .collect();
 
+    let (from, to) = bounds("daily_task_list");
     let task_rows = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT date, content, updated_at FROM daily_task_list WHERE updated_at > ?",
+        "SELECT date, content, updated_at FROM daily_task_list WHERE rev > ? AND rev <= ?",
     )
-    .bind(since)
+    .bind(from)
+    .bind(to)
     .fetch_all(&pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -667,10 +746,12 @@ async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<Syn
         .map(|((date, _, updated_at), content)| import::ImportTaskListRow { date, content, updated_at })
         .collect();
 
+    let (from, to) = bounds("not_to_do_list");
     let not_to_do_rows = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT date, content, updated_at FROM not_to_do_list WHERE updated_at > ?",
+        "SELECT date, content, updated_at FROM not_to_do_list WHERE rev > ? AND rev <= ?",
     )
-    .bind(since)
+    .bind(from)
+    .bind(to)
     .fetch_all(&pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -682,11 +763,13 @@ async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<Syn
         .map(|((date, _, updated_at), content)| import::ImportNotToDoRow { date, content, updated_at })
         .collect();
 
+    let (from, to) = bounds("wellness_check");
     let wellness_rows = sqlx::query_as::<_, (String, String, String, String, String, String)>(
         "SELECT slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at
-         FROM wellness_check WHERE created_at > ?",
+         FROM wellness_check WHERE rev > ? AND rev <= ?",
     )
-    .bind(since)
+    .bind(from)
+    .bind(to)
     .fetch_all(&pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -716,11 +799,13 @@ async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<Syn
         })
         .collect::<Result<Vec<_>, String>>()?;
 
+    let (from, to) = bounds("screen_time_session");
     let screen_time_rows = sqlx::query_as::<_, (String, String, String, String, String, String)>(
         "SELECT app_id, display_name, platform, device_name, started_at, ended_at
-         FROM screen_time_session WHERE started_at > ?",
+         FROM screen_time_session WHERE rev > ? AND rev <= ?",
     )
-    .bind(since)
+    .bind(from)
+    .bind(to)
     .fetch_all(&pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -745,11 +830,13 @@ async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<Syn
         })
         .collect();
 
+    let (from, to) = bounds("bulk_edit_preset");
     let preset_rows = sqlx::query_as::<_, (String, String, String, String, String, String, String)>(
         "SELECT id, name, start_time, end_time, text, created_at, updated_at
-         FROM bulk_edit_preset WHERE updated_at > ?",
+         FROM bulk_edit_preset WHERE rev > ? AND rev <= ?",
     )
-    .bind(since)
+    .bind(from)
+    .bind(to)
     .fetch_all(&pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -775,14 +862,17 @@ async fn build_delta_payload(app: &AppHandle, since: Option<&str>) -> Result<Syn
         })
         .collect();
 
-    Ok(SyncPayload {
-        reflection,
-        daily_task_list,
-        not_to_do_list,
-        wellness_check,
-        screen_time_session,
-        bulk_edit_preset,
-    })
+    Ok((
+        SyncPayload {
+            reflection,
+            daily_task_list,
+            not_to_do_list,
+            wellness_check,
+            screen_time_session,
+            bulk_edit_preset,
+        },
+        upper,
+    ))
 }
 
 async fn apply_payload(app: &AppHandle, payload: &SyncPayload) -> Result<SyncResult, String> {
@@ -987,7 +1077,7 @@ async fn handle_sync_responder(app: AppHandle, mut stream: TcpStream, peer_addr:
     let dialer_id_bytes = read_frame(&mut stream, 256).await.map_err(|e| e.to_string())?;
     let dialer_id = String::from_utf8(dialer_id_bytes).map_err(|e| e.to_string())?;
 
-    let (shared_key_hex, last_sync_at) = load_paired_device_secret(&app, &dialer_id)
+    let shared_key_hex = load_paired_device_secret(&app, &dialer_id)
         .await
         .map_err(|e| format!("sync attempt from unpaired device {dialer_id} ({peer_addr}): {e}"))?;
     let key = hex_decode(&shared_key_hex)?;
@@ -1004,17 +1094,20 @@ async fn handle_sync_responder(app: AppHandle, mut stream: TcpStream, peer_addr:
     write_frame(&mut stream, &buf2[..n]).await.map_err(|e| e.to_string())?;
     let mut transport = hs.into_transport_mode().map_err(|e| e.to_string())?;
 
-    // Captured before either side reads/builds its delta, exactly like the
-    // dialer -- see build_delta_payload's doc comment and sync_with_device.
+    // last_sync_at is no longer the delta cursor (that's `sync_cursor` now),
+    // but it still drives the paired-device list's "last synced" display and
+    // maybe_auto_sync's MIN_AUTO_SYNC_GAP throttle, so it's still recorded.
     let sync_started_at = now_iso();
+    let cursors = load_sync_cursors(&app, &dialer_id).await?;
 
     let incoming: SyncPayload = recv_encrypted_json(&mut stream, &mut transport).await?;
-    let outgoing = build_delta_payload(&app, last_sync_at.as_deref()).await?;
+    let (outgoing, new_cursors) = build_delta_payload(&app, &cursors).await?;
     let sent_count = sync_payload_row_count(&outgoing);
     send_encrypted_json(&mut stream, &mut transport, &outgoing).await?;
 
     let received_count = sync_payload_row_count(&incoming);
     apply_payload(&app, &incoming).await?;
+    save_sync_cursors(&app, &dialer_id, &new_cursors).await?;
     update_last_sync_at(&app, &dialer_id, &sync_started_at).await?;
 
     log::info!("p2p_sync: completed inbound sync with {dialer_id} (sent={sent_count}, received={received_count})");
@@ -1201,6 +1294,16 @@ pub async fn forget_paired_device(app: AppHandle, device_id: String) -> Result<(
         .execute(&pool)
         .await
         .map_err(|e| e.to_string())?;
+    // sync_cursor has no FK to paired_device (sqlx enables foreign_keys by
+    // default, and a cascade would be one more thing to reason about for a
+    // two-line delete), so its rows are cleared explicitly. Leaving them
+    // behind would make a later re-pair silently skip everything the old
+    // pairing had already sent.
+    sqlx::query("DELETE FROM sync_cursor WHERE device_id = ?")
+        .bind(&device_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1235,7 +1338,7 @@ pub async fn sync_with_device(app: AppHandle, device_id: String) -> Result<SyncR
 async fn sync_with_device_inner(app: &AppHandle, device_id: &str) -> Result<SyncResult, String> {
     let peer_addr = resolve_peer(app, device_id).await?;
     log::info!("p2p_sync: sync_with_device: resolved {device_id} at {peer_addr}");
-    let (shared_key_hex, last_sync_at) = load_paired_device_secret(app, device_id).await?;
+    let shared_key_hex = load_paired_device_secret(app, device_id).await?;
     let key = hex_decode(&shared_key_hex)?;
     let self_id = get_or_create_device_id(app).await?;
 
@@ -1261,12 +1364,14 @@ async fn sync_with_device_inner(app: &AppHandle, device_id: &str) -> Result<Sync
     // uses. The responder does the same in handle_sync_responder.
     let sync_started_at = now_iso();
 
-    let outgoing = build_delta_payload(&app, last_sync_at.as_deref()).await?;
+    let cursors = load_sync_cursors(app, device_id).await?;
+    let (outgoing, new_cursors) = build_delta_payload(&app, &cursors).await?;
     let sent_count = sync_payload_row_count(&outgoing);
     send_encrypted_json(&mut stream, &mut transport, &outgoing).await?;
     let incoming: SyncPayload = recv_encrypted_json(&mut stream, &mut transport).await?;
 
     let result = apply_payload(&app, &incoming).await?;
+    save_sync_cursors(&app, device_id, &new_cursors).await?;
     update_last_sync_at(&app, &device_id, &sync_started_at).await?;
 
     Ok(SyncResult { sent_count, ..result })

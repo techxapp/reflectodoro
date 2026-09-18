@@ -26,7 +26,7 @@
     getScreenTimeAppThresholdMinutes,
     getCurrentScreenTimeSession,
     getDeviceName,
-    type ReflectionRow,
+    type ReflectionDisplayRow,
     type ScreenTimeEntry,
     type WellnessSummary,
   } from "$lib/db";
@@ -40,7 +40,7 @@
   };
 
   let selected = $state(new Date());
-  let reflectionRows = $state<ReflectionRow[]>([]);
+  let reflectionRows = $state<ReflectionDisplayRow[]>([]);
   let taskList = $state("");
   let notToDo = $state("");
   let wellnessSummary = $state<WellnessSummary>(EMPTY_WELLNESS_SUMMARY);
@@ -156,7 +156,7 @@
   // against mock (unplanned) placeholders, with no clustering/collapsing.
   interface DaySlotRow {
     slotStartIso: string;
-    row: ReflectionRow | null;
+    row: ReflectionDisplayRow | null;
   }
   const daySlotRows = $derived.by<DaySlotRow[]>(() => {
     const bySlot = new Map(reflectionRows.map((r) => [r.slot_start_at, r]));

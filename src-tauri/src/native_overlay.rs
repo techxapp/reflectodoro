@@ -254,7 +254,14 @@ fn split_reflection_for_slots(text: &str, covered_slots: &[String]) -> Option<Ve
 /// Upserts one slot's already-encrypted text -- mirrors db.ts's `upsertReflectionRow` exactly
 /// (see its doc comment): retrying a failed submit must not re-insert a slot that already
 /// succeeded before the failure, since slot_start_at has no UNIQUE constraint.
-async fn upsert_reflection_row(pool: &SqlitePool, slot: &str, stored_text: &str, created_at: &str) {
+///
+/// `stored_created_at` is ciphertext too, not a plain timestamp: created_at
+/// and updated_at are encrypted at rest as of db.rs migration 28 (see
+/// crypto.rs's module doc for why a plaintext edit time is worth hiding).
+/// Neither column is bound anywhere `rev` isn't doing the work instead, so
+/// storing them opaquely breaks no query. `rev` itself is never written here
+/// -- the migration's triggers own it.
+async fn upsert_reflection_row(pool: &SqlitePool, slot: &str, stored_text: &str, stored_created_at: &str) {
     let existing = sqlx::query_scalar::<_, i64>("SELECT id FROM reflection WHERE slot_start_at = ?")
         .bind(slot)
         .fetch_optional(pool)
@@ -262,21 +269,21 @@ async fn upsert_reflection_row(pool: &SqlitePool, slot: &str, stored_text: &str,
     if matches!(existing, Ok(Some(_))) {
         let _ = sqlx::query("UPDATE reflection SET text = ?, updated_at = ? WHERE slot_start_at = ?")
             .bind(stored_text)
-            .bind(created_at)
+            .bind(stored_created_at)
             .bind(slot)
             .execute(pool)
             .await;
     } else {
-        // updated_at = created_at on a fresh insert -- the P2P sync delta
-        // cursor (p2p_sync.rs) needs a non-null value from the start, same
-        // reasoning as db.ts's saveReflection.
+        // updated_at = created_at on a fresh insert, same reasoning as db.ts's
+        // saveReflection: readers COALESCE the two, so a null here would just
+        // send them back to created_at anyway.
         let _ = sqlx::query(
             "INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES (?, ?, ?, ?)",
         )
-        .bind(created_at)
+        .bind(stored_created_at)
         .bind(slot)
         .bind(stored_text)
-        .bind(created_at)
+        .bind(stored_created_at)
         .execute(pool)
         .await;
     }
@@ -300,13 +307,18 @@ async fn save_reflection(
     text: &str,
 ) -> Result<(), String> {
     let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    // Encrypted once and reused across every slot and across both timestamp
+    // columns. That is one nonce paired with one plaintext copied to several
+    // places, not nonce reuse across different plaintexts -- the same
+    // distinction the shared-ciphertext text path below already relies on.
+    let stored_created_at = cipher.encrypt(&created_at).await?;
     if let Some(lines) = split_reflection_for_slots(text, covered_slots) {
         // Each slot gets genuinely different plaintext now, so each needs its
         // own fresh nonce -- unlike the shared-ciphertext path below, where
         // one nonce/plaintext pair is legitimately reused verbatim.
         for (slot, line) in covered_slots.iter().zip(lines.iter()) {
             let stored = cipher.encrypt(line).await?;
-            upsert_reflection_row(pool, slot, &stored, &created_at).await;
+            upsert_reflection_row(pool, slot, &stored, &stored_created_at).await;
         }
         return Ok(());
     }
@@ -314,7 +326,7 @@ async fn save_reflection(
     // saveReflection for why that isn't nonce reuse.
     let stored = cipher.encrypt(text).await?;
     for slot in covered_slots {
-        upsert_reflection_row(pool, slot, &stored, &created_at).await;
+        upsert_reflection_row(pool, slot, &stored, &stored_created_at).await;
     }
     Ok(())
 }

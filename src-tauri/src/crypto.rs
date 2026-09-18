@@ -1,6 +1,10 @@
 //! Field-level encryption at rest for the user's own typed content --
 //! `reflection.text`, `daily_task_list.content`, and `not_to_do_list.content`
-//! (see CLAUDE.md's "Encryption at rest" for the scope and threat model).
+//! (see CLAUDE.md's "Encryption at rest" for the scope and threat model),
+//! plus `reflection.created_at`/`updated_at`: those carry no prose, but a
+//! plaintext edit timestamp leaks when the user is awake and working, which
+//! is exactly the kind of inference the rest of this module exists to
+//! prevent.
 //!
 //! **Why not SQLCipher / whole-database encryption**: tauri-plugin-sql (v2.4.0,
 //! read from its own source) opens its pool with a bare `Pool::connect(url)` --
@@ -8,9 +12,15 @@
 //! after connecting, and no way to pass custom connect options. Whole-db
 //! encryption would mean forking or vendoring the plugin. Field encryption
 //! needs none of that, and costs nothing in query capability here: no code
-//! path in this app filters, searches, or sorts on the *value* of any of
-//! those three columns (every `WHERE` is on `id`/`slot_start_at`/`date`/
-//! `created_at`/`updated_at`), so an opaque ciphertext blob breaks no query.
+//! path in this app filters, searches, or sorts on the *value* of any
+//! encrypted column (every `WHERE` is on `id`/`slot_start_at`/`date`/`rev`),
+//! so an opaque ciphertext blob breaks no query.
+//!
+//! `created_at`/`updated_at` used to be in that list of things queries run
+//! on -- P2P sync compared them to find changed rows. Encrypting them meant
+//! that cursor had to move off timestamps entirely, which is what
+//! `reflection.rev` and the other synced tables' `rev` columns are for
+//! (db.rs migration 28, p2p_sync.rs's `build_delta_payload`).
 //!
 //! **Format**: `enc1:` + base64(`nonce` ‖ `ciphertext` ‖ `tag`), stored in the
 //! same existing `TEXT` column -- no schema change. The `enc1:` marker is
@@ -418,8 +428,15 @@ const MIGRATED_KEY: &str = "data_encryption_migrated";
 /// happens app-side (decrypt-then-sum) instead -- see CLAUDE.md.
 /// wellness_check's columns are `TEXT` (migration 23) specifically so they
 /// can round-trip through this same generic string-based helper.
-const ENCRYPTED_COLUMNS: [(&str, &str, &str); 7] = [
+/// `reflection`'s two timestamp columns are here so a *fresh* install
+/// encrypts them on its first pass. An install that already set
+/// `MIGRATED_KEY` before they were added skips this list entirely, which is
+/// why they also get their own backfill under
+/// `REFLECTION_TIMESTAMP_MIGRATED_KEY` below.
+const ENCRYPTED_COLUMNS: [(&str, &str, &str); 9] = [
     ("reflection", "id", "text"),
+    ("reflection", "id", "created_at"),
+    ("reflection", "id", "updated_at"),
     ("daily_task_list", "date", "content"),
     ("not_to_do_list", "date", "content"),
     ("wellness_check", "id", "relaxed_eyes"),
@@ -428,14 +445,17 @@ const ENCRYPTED_COLUMNS: [(&str, &str, &str); 7] = [
     ("wellness_check", "id", "washroom"),
 ];
 
-/// Spawned from `lib.rs`'s `setup()`. Runs the original four-table migration
-/// and the `screen_time_session` one (see `SCREEN_TIME_MIGRATED_KEY`) as two
-/// independently retried passes: an install that already has
-/// `MIGRATED_KEY = "true"` from before app names were encrypted would
-/// otherwise skip the screen-time backfill entirely if both shared one flag.
+/// Spawned from `lib.rs`'s `setup()`. Runs the original four-table migration,
+/// the `screen_time_session` one (see `SCREEN_TIME_MIGRATED_KEY`), and the
+/// `reflection` timestamp one (see `REFLECTION_TIMESTAMP_MIGRATED_KEY`) as
+/// independently retried passes, each with its own flag: an install that
+/// already has `MIGRATED_KEY = "true"` from before app names or timestamps
+/// were encrypted would otherwise skip those later backfills entirely if they
+/// all shared one flag.
 pub async fn run_encryption_migration_after_db_ready(app: AppHandle) {
     retry_migration(app.clone(), "data", migrate_once).await;
-    retry_migration(app, "screen_time_session", migrate_screen_time_sessions_once).await;
+    retry_migration(app.clone(), "screen_time_session", migrate_screen_time_sessions_once).await;
+    retry_migration(app, "reflection timestamps", migrate_reflection_timestamps_once).await;
 }
 
 /// Retries on the same cold-start race
@@ -547,7 +567,12 @@ async fn encrypt_existing_rows(
             .try_get::<String, _>(key_column)
             .or_else(|_| row.try_get::<i64, _>(key_column).map(|n| n.to_string()))
             .map_err(|e| format!("couldn't read {table}.{key_column}: {e}"))?;
-        let value: String = row.try_get(value_column).map_err(|e| format!("couldn't read {table}.{value_column}: {e}"))?;
+        // `reflection.updated_at` is nullable (migration 19 backfilled it but
+        // never made it NOT NULL), so read it as an Option and leave NULL
+        // alone -- encrypting it would turn "never edited" into a value.
+        let value: Option<String> =
+            row.try_get(value_column).map_err(|e| format!("couldn't read {table}.{value_column}: {e}"))?;
+        let Some(value) = value else { continue };
         if !value.starts_with(MARKER) {
             pending.push((key, value));
         }
@@ -702,6 +727,156 @@ async fn encrypt_and_hash_screen_time_rows(pool: &sqlx::SqlitePool, cipher: &Fie
     }
 
     Ok(total)
+}
+
+/// `app_setting` key for the one-time backfill of `reflection`'s
+/// `created_at`/`updated_at`. Separate from `MIGRATED_KEY` for exactly the
+/// reason `SCREEN_TIME_MIGRATED_KEY` is: any install that already ran the
+/// original migration has `MIGRATED_KEY = "true"` and would skip these two
+/// columns forever if they only lived in `ENCRYPTED_COLUMNS`.
+const REFLECTION_TIMESTAMP_MIGRATED_KEY: &str = "reflection_timestamp_encryption_migrated";
+
+/// Rows per backfill batch, same reasoning as `SCREEN_TIME_MIGRATION_CHUNK`
+/// (bounded memory, and on Android each batch is a JNI round trip).
+const REFLECTION_TIMESTAMP_MIGRATION_CHUNK: i64 = 500;
+
+/// Unlike `encrypt_existing_rows`, this rewrites *two* columns per row in one
+/// UPDATE rather than one column per pass -- `reflection` is the one table
+/// where both of a row's timestamps move together, and doing them separately
+/// would double the row rewrites (and so double the `rev` churn described
+/// below). `Ok(None)` = already migrated, nothing to do.
+///
+/// **This one deliberately breaks the "never bump the sync cursor" rule that
+/// `encrypt_existing_rows` documents**, because it cannot do otherwise:
+/// migration 28's `AFTER UPDATE` trigger owns `reflection.rev` now, and its
+/// `WHEN NEW.rev = OLD.rev` guard fires precisely when a writer leaves rev
+/// alone -- so there is no way to rewrite a row without advancing it. The
+/// consequence is bounded and one-time: on the first launch after upgrading,
+/// a paired device re-sends its `reflection` history once. The merge logic is
+/// idempotent (per-slot line merge, natural-key dedupe), so this costs LAN
+/// bandwidth on one sync and nothing else. `screen_time_session`, the largest
+/// table, is unaffected -- its own backfill flag is already set on any install
+/// that reaches this one.
+async fn migrate_reflection_timestamps_once(app: AppHandle) -> Result<Option<usize>, String> {
+    let pool = db::open_direct_pool(&app).await?;
+
+    let done: Option<String> = sqlx::query_scalar("SELECT value FROM app_setting WHERE key = ?")
+        .bind(REFLECTION_TIMESTAMP_MIGRATED_KEY)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    if done.as_deref() == Some("true") {
+        return Ok(None);
+    }
+
+    let cipher = FieldCipher::resolve(&app).await?;
+    let total = encrypt_reflection_timestamp_rows(&pool, &cipher).await?;
+
+    sqlx::query(
+        "INSERT INTO app_setting (key, value) VALUES (?, 'true')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(REFLECTION_TIMESTAMP_MIGRATED_KEY)
+    .execute(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(Some(total))
+}
+
+/// Testable core of the timestamp backfill -- takes a pool and cipher
+/// directly so tests can drive it with `FieldCipher::test_fixed()`, the same
+/// split `encrypt_and_hash_screen_time_rows` has.
+///
+/// Selects on the `enc1:` marker rather than a sentinel column, so a row an
+/// earlier run already handled is never revisited and the whole pass stays
+/// re-runnable. Each batch commits in its own transaction: a crash
+/// mid-backfill leaves committed rows fully encrypted and the rest readable
+/// plaintext, never a half-encrypted row.
+async fn encrypt_reflection_timestamp_rows(pool: &sqlx::SqlitePool, cipher: &FieldCipher) -> Result<usize, String> {
+    let mut total = 0usize;
+
+    loop {
+        let rows = sqlx::query(
+            "SELECT id, created_at, updated_at FROM reflection
+             WHERE created_at NOT LIKE 'enc1:%'
+                OR (updated_at IS NOT NULL AND updated_at NOT LIKE 'enc1:%')
+             LIMIT ?",
+        )
+        .bind(REFLECTION_TIMESTAMP_MIGRATION_CHUNK)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("couldn't read reflection for timestamp encryption: {e}"))?;
+        if rows.is_empty() {
+            break;
+        }
+
+        let ids: Vec<i64> = rows
+            .iter()
+            .map(|r| r.try_get("id"))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("couldn't read reflection.id: {e}"))?;
+        let created: Vec<String> = rows
+            .iter()
+            .map(|r| r.try_get("created_at"))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("couldn't read reflection.created_at: {e}"))?;
+        let updated: Vec<Option<String>> = rows
+            .iter()
+            .map(|r| r.try_get("updated_at"))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("couldn't read reflection.updated_at: {e}"))?;
+
+        // One batch per column rather than per row: on Android each call is a
+        // JNI hop into the Keystore. `encrypt` is only applied to values that
+        // aren't already ciphertext, so a partially-migrated row (created_at
+        // done, updated_at not) can't get double-encrypted.
+        let encrypted_created = encrypt_unmarked(cipher, &created).await?;
+        let updated_present: Vec<String> = updated.iter().flatten().cloned().collect();
+        let encrypted_present = encrypt_unmarked(cipher, &updated_present).await?;
+        let mut encrypted_present = encrypted_present.into_iter();
+
+        let mut tx =
+            pool.begin().await.map_err(|e| format!("failed to start reflection timestamp transaction: {e}"))?;
+        for i in 0..rows.len() {
+            let new_updated = match &updated[i] {
+                Some(_) => Some(encrypted_present.next().ok_or("updated_at encryption returned too few values")?),
+                None => None,
+            };
+            sqlx::query("UPDATE reflection SET created_at = ?, updated_at = ? WHERE id = ?")
+                .bind(&encrypted_created[i])
+                .bind(&new_updated)
+                .bind(ids[i])
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| format!("couldn't encrypt a reflection row's timestamps: {e}"))?;
+        }
+        tx.commit().await.map_err(|e| format!("failed to commit reflection timestamp transaction: {e}"))?;
+
+        total += rows.len();
+    }
+
+    Ok(total)
+}
+
+/// Encrypts only the values that aren't already `enc1:`-marked, preserving
+/// order, in a single batched call.
+async fn encrypt_unmarked(cipher: &FieldCipher, values: &[String]) -> Result<Vec<String>, String> {
+    let plain: Vec<String> = values.iter().filter(|v| !v.starts_with(MARKER)).cloned().collect();
+    if plain.is_empty() {
+        return Ok(values.to_vec());
+    }
+    let mut encrypted = cipher.encrypt_many(&plain).await?.into_iter();
+
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        if value.starts_with(MARKER) {
+            out.push(value.clone());
+        } else {
+            out.push(encrypted.next().ok_or("encryption returned too few values")?);
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1164,5 +1339,129 @@ mod tests {
 
         let app_id: String = sqlx::query_scalar("SELECT app_id FROM screen_time_session WHERE id = 1").fetch_one(&pool).await.unwrap();
         assert_eq!(cipher.decrypt(&app_id).await.unwrap(), "chrome.exe", "content must survive verbatim");
+    }
+
+    // --- reflection.created_at / updated_at backfill ----------------------
+
+    async fn seed_reflection(pool: &sqlx::SqlitePool, id: i64, created: &str, updated: Option<&str>) {
+        sqlx::query("INSERT INTO reflection (id, created_at, slot_start_at, text, updated_at) VALUES (?, ?, 'slot', 'text', ?)")
+            .bind(id)
+            .bind(created)
+            .bind(updated)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reflection_timestamp_backfill_encrypts_both_columns() {
+        let pool = migration_test_pool().await;
+        let cipher = FieldCipher::test_fixed();
+        seed_reflection(&pool, 1, "2026-01-01T09:00:00.000Z", Some("2026-01-01T09:30:00.000Z")).await;
+
+        assert_eq!(encrypt_reflection_timestamp_rows(&pool, &cipher).await.unwrap(), 1);
+
+        let row = sqlx::query("SELECT created_at, updated_at FROM reflection WHERE id = 1").fetch_one(&pool).await.unwrap();
+        let created: String = row.get("created_at");
+        let updated: String = row.get("updated_at");
+        assert!(created.starts_with(MARKER), "created_at should be ciphertext");
+        assert!(updated.starts_with(MARKER), "updated_at should be ciphertext");
+        assert_eq!(cipher.decrypt(&created).await.unwrap(), "2026-01-01T09:00:00.000Z");
+        assert_eq!(cipher.decrypt(&updated).await.unwrap(), "2026-01-01T09:30:00.000Z");
+    }
+
+    /// A NULL `updated_at` means "never edited since insert" -- encrypting it
+    /// would turn the absence of a value into a value, and `COALESCE`-style
+    /// readers would stop seeing it as absent.
+    #[tokio::test]
+    async fn reflection_timestamp_backfill_leaves_null_updated_at_null() {
+        let pool = migration_test_pool().await;
+        let cipher = FieldCipher::test_fixed();
+        seed_reflection(&pool, 1, "2026-01-01T09:00:00.000Z", None).await;
+
+        assert_eq!(encrypt_reflection_timestamp_rows(&pool, &cipher).await.unwrap(), 1);
+
+        let updated: Option<String> =
+            sqlx::query_scalar("SELECT updated_at FROM reflection WHERE id = 1").fetch_one(&pool).await.unwrap();
+        assert_eq!(updated, None, "a NULL updated_at must stay NULL");
+    }
+
+    /// The `enc1:` marker, not a sentinel column, is what makes this
+    /// re-runnable -- a crash between chunks must not double-encrypt.
+    #[tokio::test]
+    async fn reflection_timestamp_backfill_is_idempotent() {
+        let pool = migration_test_pool().await;
+        let cipher = FieldCipher::test_fixed();
+        seed_reflection(&pool, 1, "2026-01-01T09:00:00.000Z", Some("2026-01-01T09:30:00.000Z")).await;
+
+        assert_eq!(encrypt_reflection_timestamp_rows(&pool, &cipher).await.unwrap(), 1);
+        assert_eq!(encrypt_reflection_timestamp_rows(&pool, &cipher).await.unwrap(), 0, "already-encrypted rows must not be re-touched");
+
+        let created: String =
+            sqlx::query_scalar("SELECT created_at FROM reflection WHERE id = 1").fetch_one(&pool).await.unwrap();
+        assert_eq!(cipher.decrypt(&created).await.unwrap(), "2026-01-01T09:00:00.000Z", "content must survive verbatim");
+    }
+
+    /// A row half-done by an interrupted earlier run (created_at encrypted,
+    /// updated_at not) has to be finished without re-encrypting the part
+    /// that's already ciphertext.
+    #[tokio::test]
+    async fn reflection_timestamp_backfill_finishes_a_partial_row() {
+        let pool = migration_test_pool().await;
+        let cipher = FieldCipher::test_fixed();
+        let already = cipher.encrypt("2026-01-01T09:00:00.000Z").await.unwrap();
+        seed_reflection(&pool, 1, &already, Some("2026-01-01T09:30:00.000Z")).await;
+
+        assert_eq!(encrypt_reflection_timestamp_rows(&pool, &cipher).await.unwrap(), 1);
+
+        let row = sqlx::query("SELECT created_at, updated_at FROM reflection WHERE id = 1").fetch_one(&pool).await.unwrap();
+        let created: String = row.get("created_at");
+        let updated: String = row.get("updated_at");
+        assert_eq!(created, already, "an already-encrypted value must be left byte-for-byte alone");
+        assert_eq!(cipher.decrypt(&updated).await.unwrap(), "2026-01-01T09:30:00.000Z");
+    }
+
+    /// The whole reason this backfill exists separately from `migrate_once`:
+    /// every existing install already has `data_encryption_migrated = 'true'`,
+    /// so folding these columns into `ENCRYPTED_COLUMNS` alone would silently
+    /// never encrypt them on any real device.
+    #[tokio::test]
+    async fn reflection_timestamp_backfill_is_not_gated_on_the_original_flag() {
+        let pool = migration_test_pool().await;
+        let cipher = FieldCipher::test_fixed();
+        sqlx::query("CREATE TABLE app_setting (key TEXT PRIMARY KEY, value TEXT NOT NULL)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO app_setting (key, value) VALUES (?, 'true')")
+            .bind(MIGRATED_KEY)
+            .execute(&pool)
+            .await
+            .unwrap();
+        seed_reflection(&pool, 1, "2026-01-01T09:00:00.000Z", Some("2026-01-01T09:30:00.000Z")).await;
+
+        // migrate_once would bail here; this pass must not.
+        assert_eq!(encrypt_reflection_timestamp_rows(&pool, &cipher).await.unwrap(), 1);
+        assert_ne!(
+            REFLECTION_TIMESTAMP_MIGRATED_KEY, MIGRATED_KEY,
+            "the two passes must not share a flag or the second never runs"
+        );
+    }
+
+    /// More rows than one chunk, to confirm the loop actually drains rather
+    /// than stopping after the first batch.
+    #[tokio::test]
+    async fn reflection_timestamp_backfill_drains_past_one_chunk() {
+        let pool = migration_test_pool().await;
+        let cipher = FieldCipher::test_fixed();
+        let total = REFLECTION_TIMESTAMP_MIGRATION_CHUNK + 7;
+        for id in 1..=total {
+            seed_reflection(&pool, id, "2026-01-01T09:00:00.000Z", Some("2026-01-01T09:30:00.000Z")).await;
+        }
+
+        assert_eq!(encrypt_reflection_timestamp_rows(&pool, &cipher).await.unwrap(), total as usize);
+
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reflection WHERE created_at NOT LIKE 'enc1:%'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 0, "every row should be encrypted after one pass");
     }
 }

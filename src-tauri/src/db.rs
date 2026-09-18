@@ -612,6 +612,147 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 28,
+            // Replaces P2P sync's timestamp delta cursor with a device-local
+            // monotonic `rev` counter on every synced table (see p2p_sync.rs's
+            // build_delta_payload and CLAUDE.md's "P2P LAN sync").
+            //
+            // Why: reflection.created_at/updated_at are encrypted at rest as
+            // of this release (crypto.rs), and random-nonce ciphertext can't
+            // support the `COALESCE(updated_at, created_at) > ?` inequality the
+            // cursor used to run. A counter also carries no wall-clock
+            // information at all, which is the point -- a plaintext timestamp
+            // column leaks edit times (and so sleep/activity patterns) to
+            // anyone who can read the db file without the key.
+            //
+            // Two bugs the timestamp cursor had, which this also fixes:
+            //   * A backward clock jump (NTP correction, manual change) wrote
+            //     rows with timestamps below last_sync_at that were then
+            //     silently never synced.
+            //   * import.rs stamps a merged row with the *incoming* peer's
+            //     updated_at, so a row received from device A could already sit
+            //     below this device's cursor with device C and never forward to
+            //     it. A local bump on every local write fixes that fan-out.
+            //
+            // Statement order per table is load-bearing: the `rev = rowid`
+            // backfill must run BEFORE the triggers exist, or it would fire the
+            // update trigger once per row. rowid is used rather than each
+            // table's primary key because three of these six are keyed by TEXT
+            // (date / uuid); all six are ordinary rowid tables (none is
+            // WITHOUT ROWID), and rowid is monotonic in insert order.
+            //
+            // The `WHEN NEW.rev = OLD.rev` guard on the update triggers means an
+            // explicit rev write is honored rather than clobbered, and blocks
+            // re-entry if `recursive_triggers` is ever switched on (it is
+            // currently off -- open_direct_pool sets no pragmas, and
+            // tauri-plugin-sql opens its pool with a bare Pool::connect).
+            //
+            // idx_reflection_created_at (migration 1) is dropped: created_at is
+            // ciphertext now, so the index can only ever index random bytes.
+            description: "add monotonic rev counter + triggers to synced tables, add sync_cursor",
+            sql: r#"
+                ALTER TABLE reflection ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+                UPDATE reflection SET rev = rowid;
+                CREATE INDEX idx_reflection_rev ON reflection(rev);
+                CREATE TRIGGER trg_reflection_rev_insert AFTER INSERT ON reflection
+                BEGIN
+                    UPDATE reflection SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM reflection)
+                    WHERE rowid = NEW.rowid;
+                END;
+                CREATE TRIGGER trg_reflection_rev_update AFTER UPDATE ON reflection
+                FOR EACH ROW WHEN NEW.rev = OLD.rev
+                BEGIN
+                    UPDATE reflection SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM reflection)
+                    WHERE rowid = NEW.rowid;
+                END;
+
+                ALTER TABLE daily_task_list ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+                UPDATE daily_task_list SET rev = rowid;
+                CREATE INDEX idx_daily_task_list_rev ON daily_task_list(rev);
+                CREATE TRIGGER trg_daily_task_list_rev_insert AFTER INSERT ON daily_task_list
+                BEGIN
+                    UPDATE daily_task_list SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM daily_task_list)
+                    WHERE rowid = NEW.rowid;
+                END;
+                CREATE TRIGGER trg_daily_task_list_rev_update AFTER UPDATE ON daily_task_list
+                FOR EACH ROW WHEN NEW.rev = OLD.rev
+                BEGIN
+                    UPDATE daily_task_list SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM daily_task_list)
+                    WHERE rowid = NEW.rowid;
+                END;
+
+                ALTER TABLE not_to_do_list ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+                UPDATE not_to_do_list SET rev = rowid;
+                CREATE INDEX idx_not_to_do_list_rev ON not_to_do_list(rev);
+                CREATE TRIGGER trg_not_to_do_list_rev_insert AFTER INSERT ON not_to_do_list
+                BEGIN
+                    UPDATE not_to_do_list SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM not_to_do_list)
+                    WHERE rowid = NEW.rowid;
+                END;
+                CREATE TRIGGER trg_not_to_do_list_rev_update AFTER UPDATE ON not_to_do_list
+                FOR EACH ROW WHEN NEW.rev = OLD.rev
+                BEGIN
+                    UPDATE not_to_do_list SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM not_to_do_list)
+                    WHERE rowid = NEW.rowid;
+                END;
+
+                ALTER TABLE wellness_check ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+                UPDATE wellness_check SET rev = rowid;
+                CREATE INDEX idx_wellness_check_rev ON wellness_check(rev);
+                CREATE TRIGGER trg_wellness_check_rev_insert AFTER INSERT ON wellness_check
+                BEGIN
+                    UPDATE wellness_check SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM wellness_check)
+                    WHERE rowid = NEW.rowid;
+                END;
+                CREATE TRIGGER trg_wellness_check_rev_update AFTER UPDATE ON wellness_check
+                FOR EACH ROW WHEN NEW.rev = OLD.rev
+                BEGIN
+                    UPDATE wellness_check SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM wellness_check)
+                    WHERE rowid = NEW.rowid;
+                END;
+
+                ALTER TABLE screen_time_session ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+                UPDATE screen_time_session SET rev = rowid;
+                CREATE INDEX idx_screen_time_session_rev ON screen_time_session(rev);
+                CREATE TRIGGER trg_screen_time_session_rev_insert AFTER INSERT ON screen_time_session
+                BEGIN
+                    UPDATE screen_time_session SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM screen_time_session)
+                    WHERE rowid = NEW.rowid;
+                END;
+                CREATE TRIGGER trg_screen_time_session_rev_update AFTER UPDATE ON screen_time_session
+                FOR EACH ROW WHEN NEW.rev = OLD.rev
+                BEGIN
+                    UPDATE screen_time_session SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM screen_time_session)
+                    WHERE rowid = NEW.rowid;
+                END;
+
+                ALTER TABLE bulk_edit_preset ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+                UPDATE bulk_edit_preset SET rev = rowid;
+                CREATE INDEX idx_bulk_edit_preset_rev ON bulk_edit_preset(rev);
+                CREATE TRIGGER trg_bulk_edit_preset_rev_insert AFTER INSERT ON bulk_edit_preset
+                BEGIN
+                    UPDATE bulk_edit_preset SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM bulk_edit_preset)
+                    WHERE rowid = NEW.rowid;
+                END;
+                CREATE TRIGGER trg_bulk_edit_preset_rev_update AFTER UPDATE ON bulk_edit_preset
+                FOR EACH ROW WHEN NEW.rev = OLD.rev
+                BEGIN
+                    UPDATE bulk_edit_preset SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM bulk_edit_preset)
+                    WHERE rowid = NEW.rowid;
+                END;
+
+                CREATE TABLE sync_cursor (
+                    device_id TEXT NOT NULL,
+                    table_name TEXT NOT NULL,
+                    last_rev INTEGER NOT NULL,
+                    PRIMARY KEY (device_id, table_name)
+                );
+
+                DROP INDEX IF EXISTS idx_reflection_created_at;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -863,5 +1004,284 @@ mod tests {
                 .unwrap();
         assert!(dedupe_sql.contains("app_id_hash"), "dedupe index should key on app_id_hash now: {dedupe_sql}");
         assert!(!dedupe_sql.contains("(app_id,"), "dedupe index should no longer key on plaintext app_id: {dedupe_sql}");
+    }
+
+    /// Minimal pre-migration-28 shapes for the six synced tables. Only the
+    /// columns migration 28 or its triggers actually touch are modelled --
+    /// this is a trigger/rev test, not a full schema reproduction.
+    async fn pre_migration_28_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        for ddl in [
+            "CREATE TABLE reflection (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                slot_start_at TEXT NOT NULL,
+                text TEXT NOT NULL,
+                updated_at TEXT
+            )",
+            "CREATE INDEX idx_reflection_created_at ON reflection(created_at)",
+            "CREATE TABLE daily_task_list (date TEXT PRIMARY KEY, content TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)",
+            "CREATE TABLE not_to_do_list (date TEXT PRIMARY KEY, content TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)",
+            "CREATE TABLE wellness_check (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slot_start_at TEXT NOT NULL DEFAULT '',
+                relaxed_eyes TEXT NOT NULL DEFAULT '1',
+                exercise TEXT NOT NULL DEFAULT '1',
+                drank_water TEXT NOT NULL DEFAULT '1',
+                washroom TEXT NOT NULL DEFAULT '0',
+                created_at TEXT NOT NULL
+            )",
+            "CREATE TABLE screen_time_session (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_id TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                app_id_hash TEXT NOT NULL DEFAULT '',
+                platform TEXT NOT NULL,
+                device_name TEXT NOT NULL DEFAULT '',
+                started_at TEXT NOT NULL,
+                ended_at TEXT NOT NULL
+            )",
+            "CREATE TABLE bulk_edit_preset (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        pool
+    }
+
+    /// Migration 28 seeds `rev` from rowid *before* creating the triggers, so
+    /// the backfill must not fire them -- and every row must still come out
+    /// with a distinct, non-zero rev for the P2P cursor to be able to order
+    /// them.
+    #[tokio::test]
+    async fn migration_28_backfills_distinct_revs_without_firing_triggers() {
+        let pool = pre_migration_28_pool().await;
+        for slot in ["2026-01-01T09:00:00.000Z", "2026-01-01T09:30:00.000Z", "2026-01-01T10:00:00.000Z"] {
+            sqlx::query("INSERT INTO reflection (created_at, slot_start_at, text) VALUES (?, ?, 'x')")
+                .bind(slot)
+                .bind(slot)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        sqlx::raw_sql(&migration_sql(28)).execute(&pool).await.unwrap();
+
+        let revs: Vec<i64> = sqlx::query_scalar("SELECT rev FROM reflection ORDER BY id").fetch_all(&pool).await.unwrap();
+        assert_eq!(revs, vec![1, 2, 3], "backfill should seed rev from rowid, untouched by the triggers");
+
+        let indexes: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'index'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(
+            !indexes.contains(&"idx_reflection_created_at".to_string()),
+            "created_at is ciphertext now, so its index should be dropped"
+        );
+
+        let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(tables.contains(&"sync_cursor".to_string()), "sync_cursor should exist");
+    }
+
+    /// The triggers are what make `rev` usable as a delta cursor at all: every
+    /// write has to advance it without any write path having to remember to.
+    #[tokio::test]
+    async fn migration_28_triggers_bump_rev_on_insert_and_update() {
+        let pool = pre_migration_28_pool().await;
+        sqlx::raw_sql(&migration_sql(28)).execute(&pool).await.unwrap();
+
+        sqlx::query("INSERT INTO reflection (created_at, slot_start_at, text) VALUES ('a', 'a', 'first')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let rev: i64 = sqlx::query_scalar("SELECT rev FROM reflection WHERE id = 1").fetch_one(&pool).await.unwrap();
+        assert_eq!(rev, 1, "an insert into an empty table should land at rev 1, not the DEFAULT 0");
+
+        sqlx::query("UPDATE reflection SET text = 'edited' WHERE id = 1").execute(&pool).await.unwrap();
+        let bumped: i64 = sqlx::query_scalar("SELECT rev FROM reflection WHERE id = 1").fetch_one(&pool).await.unwrap();
+        assert_eq!(bumped, 2, "an update must advance rev or the edit never syncs");
+
+        // Multi-row INSERT: the trigger is FOR EACH ROW, so each row must get
+        // its own rev rather than all sharing one. db.ts's screen-time batch
+        // writes up to 100 rows in one statement this way.
+        sqlx::query(
+            "INSERT INTO reflection (created_at, slot_start_at, text) VALUES ('b','b','2'), ('c','c','3'), ('d','d','4')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let revs: Vec<i64> = sqlx::query_scalar("SELECT rev FROM reflection WHERE id > 1 ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(revs, vec![3, 4, 5], "each row of a multi-row insert needs its own rev");
+    }
+
+    /// The `WHEN NEW.rev = OLD.rev` guard: a writer that sets rev explicitly
+    /// is honored rather than clobbered. This is also what stops the insert
+    /// trigger's own UPDATE from re-entering the update trigger if
+    /// `recursive_triggers` is ever switched on.
+    #[tokio::test]
+    async fn migration_28_explicit_rev_write_is_not_overwritten() {
+        let pool = pre_migration_28_pool().await;
+        sqlx::raw_sql(&migration_sql(28)).execute(&pool).await.unwrap();
+
+        sqlx::query("INSERT INTO reflection (created_at, slot_start_at, text) VALUES ('a', 'a', 'x')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE reflection SET text = 'y', rev = 99 WHERE id = 1").execute(&pool).await.unwrap();
+
+        let rev: i64 = sqlx::query_scalar("SELECT rev FROM reflection WHERE id = 1").fetch_one(&pool).await.unwrap();
+        assert_eq!(rev, 99, "an explicit rev write should win over the trigger");
+    }
+
+    /// Every synced table needs the same treatment -- a table that silently
+    /// lacked the trigger would stop syncing edits entirely.
+    #[tokio::test]
+    async fn migration_28_covers_every_synced_table() {
+        let pool = pre_migration_28_pool().await;
+        sqlx::raw_sql(&migration_sql(28)).execute(&pool).await.unwrap();
+
+        for table in
+            ["reflection", "daily_task_list", "not_to_do_list", "wellness_check", "screen_time_session", "bulk_edit_preset"]
+        {
+            let columns = sqlx::query(&format!("PRAGMA table_info({table})")).fetch_all(&pool).await.unwrap();
+            assert!(columns.iter().any(|r| r.get::<String, _>("name") == "rev"), "{table} should have a rev column");
+
+            let triggers: Vec<String> =
+                sqlx::query_scalar(&format!("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = '{table}'"))
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap();
+            assert!(triggers.contains(&format!("trg_{table}_rev_insert")), "{table} missing its insert trigger");
+            assert!(triggers.contains(&format!("trg_{table}_rev_update")), "{table} missing its update trigger");
+        }
+    }
+
+    /// Both tables keyed by a TEXT primary key go through the same upsert
+    /// path (`ON CONFLICT(date) DO UPDATE`), where the conflicting write lands
+    /// as an UPDATE -- so the update trigger, not the insert one, is what has
+    /// to advance rev.
+    #[tokio::test]
+    async fn migration_28_upsert_on_text_pk_bumps_rev() {
+        let pool = pre_migration_28_pool().await;
+        sqlx::raw_sql(&migration_sql(28)).execute(&pool).await.unwrap();
+
+        for content in ["first", "second"] {
+            sqlx::query(
+                "INSERT INTO daily_task_list (date, content, updated_at) VALUES ('2026-01-01', ?, 'ts')
+                 ON CONFLICT(date) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
+            )
+            .bind(content)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let rev: i64 = sqlx::query_scalar("SELECT rev FROM daily_task_list WHERE date = '2026-01-01'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rev, 2, "the conflicting upsert lands as an UPDATE and must still advance rev");
+    }
+
+    /// The delta query p2p_sync.rs runs (`WHERE rev > ? AND rev <= ?`) against
+    /// a realistic sequence: sync, then edit an *old* row. Under the previous
+    /// timestamp cursor this was a real bug -- an edit that carried a
+    /// timestamp below the peer's cursor (a row restored from an old export,
+    /// or one received from another peer with its original stamp) sat below
+    /// the cursor forever and never synced. rev advances on the write itself,
+    /// so it can't happen.
+    #[tokio::test]
+    async fn migration_28_rev_cursor_catches_an_edit_to_an_old_row() {
+        let pool = pre_migration_28_pool().await;
+        for i in 1..=3 {
+            sqlx::query("INSERT INTO reflection (created_at, slot_start_at, text) VALUES (?, ?, 'x')")
+                .bind(format!("2020-01-0{i}T00:00:00.000Z"))
+                .bind(format!("2020-01-0{i}T00:00:00.000Z"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::raw_sql(&migration_sql(28)).execute(&pool).await.unwrap();
+
+        // First sync ships everything and parks the cursor at the high mark.
+        let cursor: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(rev), 0) FROM reflection").fetch_one(&pool).await.unwrap();
+        let sent: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reflection WHERE rev > 0 AND rev <= ?")
+            .bind(cursor)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(sent, 3);
+
+        // Nothing changed: the next delta is empty.
+        let next: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reflection WHERE rev > ?")
+            .bind(cursor)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(next, 0, "an unchanged table must produce an empty delta");
+
+        // Edit the *oldest* row -- the one whose timestamps are furthest
+        // behind the cursor.
+        sqlx::query("UPDATE reflection SET text = 'edited' WHERE id = 1").execute(&pool).await.unwrap();
+
+        let after: Vec<i64> = sqlx::query_scalar("SELECT id FROM reflection WHERE rev > ?")
+            .bind(cursor)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(after, vec![1], "editing an old row must put it back in the delta");
+    }
+
+    /// `import.rs` reads `rows_affected() == 0` as a meaningful signal in two
+    /// places -- the screen_time_session duplicate count and the
+    /// bulk_edit_preset stale count, both surfaced to the user in
+    /// `ImportResult`. An AFTER trigger performs an extra UPDATE behind each
+    /// of those statements, so this pins down that the count still reflects
+    /// the outer statement and not the trigger's write.
+    #[tokio::test]
+    async fn migration_28_triggers_do_not_perturb_rows_affected() {
+        let pool = pre_migration_28_pool().await;
+        sqlx::raw_sql(&migration_sql(28)).execute(&pool).await.unwrap();
+
+        // import_screen_time_sessions' dedupe shape: inserts once, then the
+        // identical row must report 0.
+        let insert_if_absent = "INSERT INTO screen_time_session (app_id, display_name, app_id_hash, platform, device_name, started_at, ended_at)
+             SELECT 'enc', '', 'hash', 'windows', 'pc', 's', 'e'
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM screen_time_session
+                 WHERE app_id_hash = 'hash' AND platform = 'windows' AND device_name = 'pc' AND started_at = 's' AND ended_at = 'e'
+             )";
+        let first = sqlx::query(insert_if_absent).execute(&pool).await.unwrap();
+        assert_eq!(first.rows_affected(), 1, "a genuinely new session must report 1, not the trigger's update");
+        let second = sqlx::query(insert_if_absent).execute(&pool).await.unwrap();
+        assert_eq!(second.rows_affected(), 0, "a duplicate session must still report 0 so it's counted as a duplicate");
+
+        // import_bulk_edit_presets' last-write-wins shape: the guarded upsert
+        // must report 0 when the incoming row is staler than what's stored.
+        let upsert = "INSERT INTO bulk_edit_preset (id, name, start_time, end_time, text, created_at, updated_at)
+             VALUES ('p1', 'n', 's', 'e', 't', 'c', ?)
+             ON CONFLICT(id) DO UPDATE SET
+                 name = excluded.name, start_time = excluded.start_time, end_time = excluded.end_time,
+                 text = excluded.text, updated_at = excluded.updated_at
+             WHERE excluded.updated_at > bulk_edit_preset.updated_at";
+        let fresh = sqlx::query(upsert).bind("2026-01-02T00:00:00.000Z").execute(&pool).await.unwrap();
+        assert_eq!(fresh.rows_affected(), 1);
+        let stale = sqlx::query(upsert).bind("2026-01-01T00:00:00.000Z").execute(&pool).await.unwrap();
+        assert_eq!(stale.rows_affected(), 0, "a stale preset must still report 0 so it's counted as stale");
+        let newer = sqlx::query(upsert).bind("2026-01-03T00:00:00.000Z").execute(&pool).await.unwrap();
+        assert_eq!(newer.rows_affected(), 1, "a newer preset must still report 1");
     }
 }

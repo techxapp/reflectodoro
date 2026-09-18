@@ -1576,6 +1576,14 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
+              <p class="timeline-date">Friday, Sep 18, 2026</p>
+              <ul class="timeline-items">
+                <li>Extended encryption at rest to when each reflection was written and last edited. These timestamps were previously readable on disk, and could reveal your sleep and working patterns to anyone with access to the database file &mdash; without decrypting a single entry</li>
+                <li>Rebuilt how device sync works out what changed, fixing three ways entries could silently never reach a paired device: after a system clock change, when passing between three or more paired devices, and when restoring an older backup onto a device that was already paired</li>
+                <li>Added an &ldquo;Export system info&rdquo; button to the About page, so a bug report can include your OS, display and device details without you having to hunt for them</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
               <p class="timeline-date">Thursday, Sep 17, 2026</p>
               <ul class="timeline-items">
                 <li>Extended encryption at rest to your screen time history: the names of the apps you use are now encrypted on disk the same way your reflections and task lists already are</li>
@@ -1621,26 +1629,19 @@
                 <li>Fixed a macOS crash loop on every break screen caused by an invalid AppKit presentation-option combination</li>
               </ul>
             </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Friday, Sep 11, 2026</p>
-              <ul class="timeline-items">
-                <li>Added P2P LAN device pairing and manual sync between two devices on the same wifi, with no server or cloud involved, and fixed several bugs found in live two-device testing</li>
-                <li>Made Settings &rarr; Data import transactional and merge-aware, so a failed import can no longer leave the database partially written</li>
-                <li>Added bulk-edit for reflections across a time range</li>
-                <li>Improved AI crawler visibility for the landing page (robots.txt, llms.txt, structured data)</li>
-              </ul>
-            </div>
             <p class="timeline-tier reveal">Previous 3 weeks</p>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Sep 7 &ndash; 13, 2026</p>
               <ul class="timeline-items">
+                <li>Added P2P LAN device pairing and manual sync between two devices on the same wifi, with no server or cloud involved, and fixed several bugs found in live two-device testing</li>
+                <li>Added bulk-edit for reflections across a time range, and made Settings &rarr; Data import transactional and merge-aware so a failed import can no longer leave the database partially written</li>
                 <li>Added screen time tracking on Windows, showing which apps you spent your day in with friendly app names, and polished the Entries page layout</li>
                 <li>Added full macOS break-screen enforcement (Cmd+Tab blocking, following you across every Space, opt-in menu bar/Dock hiding) and an FAQ section on the landing page</li>
                 <li>Fixed several emergency-exit (breakit) challenge bugs: not accepting Enter to submit on Android, using default settings instead of your saved length/character set on a cold start, and showing a stale value when settings synced in late</li>
                 <li>Fixed reflections being timestamped to the break slot instead of the work slot they were actually about, and being grouped on the Entries page by save time instead of the day they were about</li>
                 <li>Fixed the macOS break screen sometimes not appearing at all due to a window/Space display conflict, the main window's timer freezing after a break ended on Windows, and the tray/dock icon not reopening the window on macOS</li>
                 <li>Fixed log files being silently deleted on rotation instead of archived, and added a way to export logs from the About page</li>
-                <li>Refactored the Settings page UI, and added an FAQ entry on why Reflectodoro is free plus an &ldquo;all releases&rdquo; link on the download page</li>
+                <li>Refactored the Settings page UI, and improved the landing page: an FAQ entry on why Reflectodoro is free, an &ldquo;all releases&rdquo; link on the download page, and better visibility to AI crawlers</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">
