@@ -622,8 +622,18 @@ async fn save_sync_cursors(app: &AppHandle, peer_device_id: &str, cursors: &Sync
     Ok(())
 }
 
+/// `peer.name`/`peer.platform` arrive here as plaintext off the wire (the
+/// `PeerIdentity` JSON exchanged during pairing, already protected in transit
+/// by the surrounding Noise session -- see this module's doc comment) but are
+/// encrypted at rest before landing in `paired_device`, same as every other
+/// prose/identity column (crypto.rs). Encrypted fresh on every call, including
+/// the `ON CONFLICT` update path (re-pairing an already-paired device), so
+/// each write gets its own nonce rather than reusing one.
 async fn save_paired_device(app: &AppHandle, peer: &PeerIdentity, shared_key_hex: &str, paired_at: &str) -> Result<(), String> {
     let pool = db::open_direct_pool(app).await?;
+    let cipher = crate::crypto::FieldCipher::resolve(app).await?;
+    let encrypted_name = cipher.encrypt(&peer.name).await?;
+    let encrypted_platform = cipher.encrypt(&peer.platform).await?;
     sqlx::query(
         "INSERT INTO paired_device (device_id, name, platform, shared_key, paired_at, last_sync_at)
          VALUES (?, ?, ?, ?, ?, NULL)
@@ -632,8 +642,8 @@ async fn save_paired_device(app: &AppHandle, peer: &PeerIdentity, shared_key_hex
             shared_key = excluded.shared_key, paired_at = excluded.paired_at",
     )
     .bind(&peer.device_id)
-    .bind(&peer.name)
-    .bind(&peer.platform)
+    .bind(&encrypted_name)
+    .bind(&encrypted_platform)
     .bind(shared_key_hex)
     .bind(paired_at)
     .execute(&pool)
@@ -1234,15 +1244,28 @@ async fn confirm_pairing_inner(app: &AppHandle, device_id: &str, pin: &str) -> R
 
 /// Every paired device, each annotated with whether it's currently visible
 /// on the LAN (a fresh short browse, not a stored flag).
+///
+/// `name`/`platform` are ciphertext at rest (crypto.rs), which has no usable
+/// ordering, so the `ORDER BY name COLLATE NOCASE` this used to do in SQL
+/// can't run anymore -- decrypt first, then sort the small in-memory list
+/// instead. Cheap here (a user has at most a handful of paired devices),
+/// unlike `bulk_edit_preset.name`, which stays plaintext specifically because
+/// `getBulkEditPresets` sorts a potentially larger list in SQL.
 #[tauri::command]
 pub async fn get_paired_devices(app: AppHandle) -> Result<Vec<PairedDeviceInfo>, String> {
     let pool = db::open_direct_pool(&app).await?;
     let rows = sqlx::query_as::<_, (String, String, String, String, Option<String>, bool)>(
-        "SELECT device_id, name, platform, paired_at, last_sync_at, auto_sync_enabled FROM paired_device ORDER BY name COLLATE NOCASE",
+        "SELECT device_id, name, platform, paired_at, last_sync_at, auto_sync_enabled FROM paired_device",
     )
     .fetch_all(&pool)
     .await
     .map_err(|e| e.to_string())?;
+
+    let cipher = crate::crypto::FieldCipher::resolve(&app).await?;
+    let names: Vec<String> = rows.iter().map(|r| r.1.clone()).collect();
+    let platforms: Vec<String> = rows.iter().map(|r| r.2.clone()).collect();
+    let decrypted_names = cipher.decrypt_many(&names).await?;
+    let decrypted_platforms = cipher.decrypt_many(&platforms).await?;
 
     let online_ids: Vec<String> = browse_lan(&app, BROWSE_WINDOW)
         .await
@@ -1251,13 +1274,17 @@ pub async fn get_paired_devices(app: AppHandle) -> Result<Vec<PairedDeviceInfo>,
         .map(|(d, _)| d.device_id)
         .collect();
 
-    Ok(rows
+    let mut devices: Vec<PairedDeviceInfo> = rows
         .into_iter()
-        .map(|(device_id, name, platform, paired_at, last_sync_at, auto_sync_enabled)| {
+        .zip(decrypted_names)
+        .zip(decrypted_platforms)
+        .map(|(((device_id, _, _, paired_at, last_sync_at, auto_sync_enabled), name), platform)| {
             let online = online_ids.contains(&device_id);
             PairedDeviceInfo { device_id, name, platform, paired_at, last_sync_at, online, auto_sync_enabled }
         })
-        .collect())
+        .collect();
+    devices.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(devices)
 }
 
 /// Flips a paired device's opt-in for `maybe_auto_sync`. Local-only: never

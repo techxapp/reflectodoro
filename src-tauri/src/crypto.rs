@@ -446,16 +446,18 @@ const ENCRYPTED_COLUMNS: [(&str, &str, &str); 9] = [
 ];
 
 /// Spawned from `lib.rs`'s `setup()`. Runs the original four-table migration,
-/// the `screen_time_session` one (see `SCREEN_TIME_MIGRATED_KEY`), and the
-/// `reflection` timestamp one (see `REFLECTION_TIMESTAMP_MIGRATED_KEY`) as
-/// independently retried passes, each with its own flag: an install that
-/// already has `MIGRATED_KEY = "true"` from before app names or timestamps
-/// were encrypted would otherwise skip those later backfills entirely if they
-/// all shared one flag.
+/// the `screen_time_session` one (see `SCREEN_TIME_MIGRATED_KEY`), the
+/// `reflection` timestamp one (see `REFLECTION_TIMESTAMP_MIGRATED_KEY`), and
+/// the `paired_device` one (see `PAIRED_DEVICE_MIGRATED_KEY`) as independently
+/// retried passes, each with its own flag: an install that already has
+/// `MIGRATED_KEY = "true"` from before app names, timestamps, or paired-device
+/// metadata were encrypted would otherwise skip those later backfills
+/// entirely if they all shared one flag.
 pub async fn run_encryption_migration_after_db_ready(app: AppHandle) {
     retry_migration(app.clone(), "data", migrate_once).await;
     retry_migration(app.clone(), "screen_time_session", migrate_screen_time_sessions_once).await;
-    retry_migration(app, "reflection timestamps", migrate_reflection_timestamps_once).await;
+    retry_migration(app.clone(), "reflection timestamps", migrate_reflection_timestamps_once).await;
+    retry_migration(app, "paired_device", migrate_paired_device_once).await;
 }
 
 /// Retries on the same cold-start race
@@ -593,6 +595,51 @@ async fn encrypt_existing_rows(
             .map_err(|e| format!("couldn't encrypt a {table} row: {e}"))?;
     }
     Ok(pending.len())
+}
+
+/// `app_setting` key for the one-time backfill of `paired_device`'s `name`
+/// and `platform`. Separate from `MIGRATED_KEY` for the same reason
+/// `SCREEN_TIME_MIGRATED_KEY` is: any install that already ran the original
+/// migration has `MIGRATED_KEY = "true"` and would skip these two columns
+/// forever if they only lived in `ENCRYPTED_COLUMNS`.
+const PAIRED_DEVICE_MIGRATED_KEY: &str = "paired_device_encryption_migrated";
+
+/// Unlike `screen_time_session`/`reflection`, `paired_device` holds at most a
+/// handful of rows (one per paired peer), so this reuses the generic
+/// `encrypt_existing_rows` helper directly, one call per column, in a single
+/// transaction -- no chunking loop needed. `Ok(None)` = already migrated,
+/// nothing to do.
+async fn migrate_paired_device_once(app: AppHandle) -> Result<Option<usize>, String> {
+    let pool = db::open_direct_pool(&app).await?;
+
+    let done: Option<String> = sqlx::query_scalar("SELECT value FROM app_setting WHERE key = ?")
+        .bind(PAIRED_DEVICE_MIGRATED_KEY)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    if done.as_deref() == Some("true") {
+        return Ok(None);
+    }
+
+    let cipher = FieldCipher::resolve(&app).await?;
+    let mut tx =
+        pool.begin().await.map_err(|e| format!("failed to start paired_device migration transaction: {e}"))?;
+
+    let mut encrypted = 0usize;
+    encrypted += encrypt_existing_rows(&mut tx, &cipher, "paired_device", "device_id", "name").await?;
+    encrypted += encrypt_existing_rows(&mut tx, &cipher, "paired_device", "device_id", "platform").await?;
+
+    sqlx::query(
+        "INSERT INTO app_setting (key, value) VALUES (?, 'true')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(PAIRED_DEVICE_MIGRATED_KEY)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    tx.commit().await.map_err(|e| format!("failed to commit paired_device migration transaction: {e}"))?;
+    Ok(Some(encrypted))
 }
 
 /// `app_setting` key for the one-time backfill of `screen_time_session`'s
@@ -1062,6 +1109,20 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE paired_device (
+                device_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                shared_key TEXT NOT NULL,
+                paired_at TEXT NOT NULL,
+                last_sync_at TEXT,
+                auto_sync_enabled INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         pool
     }
 
@@ -1220,6 +1281,48 @@ mod tests {
             assert!(stored.starts_with(MARKER), "{column} should have been stored encrypted, got: {stored}");
             assert_eq!(cipher.decrypt(&stored).await.unwrap(), plaintext, "{column} must survive the migration verbatim");
         }
+    }
+
+    /// `paired_device` has two encrypted columns sharing one `device_id`-keyed
+    /// row, migrated via two separate `encrypt_existing_rows` calls (mirroring
+    /// how `migrate_paired_device_once` drives them) -- confirms both `name`
+    /// and `platform` migrate independently without disturbing each other or
+    /// the unrelated `shared_key`/`platform`-adjacent columns.
+    #[tokio::test]
+    async fn migration_handles_paired_device_name_and_platform() {
+        let pool = migration_test_pool().await;
+        let cipher = FieldCipher::test_fixed();
+        sqlx::query(
+            "INSERT INTO paired_device (device_id, name, platform, shared_key, paired_at)
+             VALUES ('dev-1', 'Simran''s Laptop', 'windows', 'deadbeef', '2026-01-01T00:00:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        encrypt_existing_rows(&mut tx, &cipher, "paired_device", "device_id", "name").await.unwrap();
+        encrypt_existing_rows(&mut tx, &cipher, "paired_device", "device_id", "platform").await.unwrap();
+        tx.commit().await.unwrap();
+
+        let row = sqlx::query("SELECT name, platform, shared_key FROM paired_device WHERE device_id = 'dev-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let stored_name: String = row.try_get("name").unwrap();
+        let stored_platform: String = row.try_get("platform").unwrap();
+        let shared_key: String = row.try_get("shared_key").unwrap();
+        assert!(stored_name.starts_with(MARKER));
+        assert!(stored_platform.starts_with(MARKER));
+        assert_eq!(cipher.decrypt(&stored_name).await.unwrap(), "Simran's Laptop");
+        assert_eq!(cipher.decrypt(&stored_platform).await.unwrap(), "windows");
+        assert_eq!(shared_key, "deadbeef", "shared_key is out of scope and must stay untouched");
+
+        // Re-running must not double-encrypt (the `enc1:` marker check).
+        let mut tx = pool.begin().await.unwrap();
+        let count = encrypt_existing_rows(&mut tx, &cipher, "paired_device", "device_id", "name").await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(count, 0, "an already-encrypted paired_device.name must not be re-encrypted");
     }
 
     /// A batch mixing already-migrated and not-yet-migrated rows is exactly
