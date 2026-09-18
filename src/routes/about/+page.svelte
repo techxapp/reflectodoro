@@ -22,6 +22,9 @@
   let exportArchiveError = $state("");
   let archiveCount = $state(10);
 
+  let exportSystemInfoStatus = $state<ExportStatus>("idle");
+  let exportSystemInfoError = $state("");
+
   function localDateStamp(): string {
     const d = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
@@ -69,6 +72,25 @@
     } catch (e) {
       exportArchiveError = e instanceof Error ? e.message : String(e);
       exportArchiveStatus = "error";
+    }
+  }
+
+  async function exportSystemInfo() {
+    exportSystemInfoStatus = "idle";
+    exportSystemInfoError = "";
+    try {
+      const dest = await saveDialog({
+        defaultPath: `reflectodoro-system-info-${localDateStamp()}.txt`,
+        filters: [{ name: "Text", extensions: ["txt"] }],
+      });
+      if (!dest) return;
+      exportSystemInfoStatus = "busy";
+      await invoke("export_system_info", { dest });
+      exportSystemInfoStatus = "success";
+      setTimeout(() => (exportSystemInfoStatus = "idle"), 3000);
+    } catch (e) {
+      exportSystemInfoError = e instanceof Error ? e.message : String(e);
+      exportSystemInfoStatus = "error";
     }
   }
 
@@ -188,6 +210,30 @@
         <span class="hint saved">Saved.</span>
       {:else if exportArchiveStatus === "error"}
         <span class="hint error">{exportArchiveError}</span>
+      {/if}
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>System info</h2>
+    <p class="hint">
+      Export a small text file with your OS/version, CPU architecture, display setup, and system
+      theme, to share alongside the log file when debugging a platform-specific issue. No app
+      settings or personal content are included.
+    </p>
+
+    <div class="data-row">
+      <button
+        type="button"
+        disabled={exportSystemInfoStatus === "busy"}
+        onclick={exportSystemInfo}
+      >
+        {exportSystemInfoStatus === "busy" ? "Exporting…" : "Export system info"}
+      </button>
+      {#if exportSystemInfoStatus === "success"}
+        <span class="hint saved">Saved.</span>
+      {:else if exportSystemInfoStatus === "error"}
+        <span class="hint error">{exportSystemInfoError}</span>
       {/if}
     </div>
   </section>

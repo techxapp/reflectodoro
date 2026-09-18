@@ -30,6 +30,14 @@ impl<R: Runtime> AndroidBridge<R> {
         self.0.run_mobile_plugin("getDeviceName", ())
     }
 
+    /// Device model/manufacturer/OS version/screen metrics for the About
+    /// page's "Export system info" report (system_info.rs) -- Android has no
+    /// equivalent of desktop's `os_info` crate or Tauri's monitor API, so
+    /// this reads `Build`/`Resources.getSystem().displayMetrics` directly.
+    pub fn get_system_info(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("getSystemInfo", ())
+    }
+
     /// Starts (or refreshes) `BreakSchedulerService`, which just raises
     /// this process's priority and arms the `AlarmManager` backup -- it
     /// never independently decides phase transitions; `run_scheduler` in

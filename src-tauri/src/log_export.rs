@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager};
 
-fn require_extension(path: &str, ext: &str) -> Result<(), String> {
+/// Also reused by system_info.rs's export command -- same null-CSP
+/// mitigation, different extension.
+pub(crate) fn require_extension(path: &str, ext: &str) -> Result<(), String> {
     let ok = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())

@@ -124,6 +124,10 @@ tauri-plugin-single-instance = "2"
 # (tokio::net) and the pairing/transport crypto (spake2/snow, base
 # [dependencies] above) are NOT platform-gated -- only discovery is.
 mdns-sd = "0.11"
+# system_info.rs: OS name/version string for the About page's "Export system
+# info" report. Desktop only -- Android's OS version comes from
+# Build.VERSION.RELEASE via android_bridge.rs/NativeBridgePlugin.kt instead.
+os_info = "3"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

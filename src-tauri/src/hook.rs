@@ -92,7 +92,7 @@ mod windows_impl {
 }
 
 #[cfg(target_os = "linux")]
-mod linux_impl {
+pub(crate) mod linux_impl {
     //! `XGrabKey`-based suppression for X11 sessions only. Grabbing a key
     //! combo on the root window makes the X server deliver those key events
     //! to us instead of the window manager -- that redirection *is* the
@@ -127,7 +127,9 @@ mod linux_impl {
     static ACTIVE: AtomicBool = AtomicBool::new(false);
     static SENDER: OnceLock<Sender<Command>> = OnceLock::new();
 
-    fn is_x11_session() -> bool {
+    /// Also used by system_info.rs to report the session type in the
+    /// exported system-info file.
+    pub(crate) fn is_x11_session() -> bool {
         match std::env::var("XDG_SESSION_TYPE") {
             Ok(v) => v.eq_ignore_ascii_case("x11"),
             Err(_) => std::env::var("WAYLAND_DISPLAY").is_err(),

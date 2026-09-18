@@ -213,6 +213,27 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(ret)
     }
 
+    /** Device/OS/display fields for the About page's "Export system info"
+     * report (system_info.rs) -- the Android counterpart to desktop's
+     * `os_info` crate and Tauri's monitor API, neither of which has an
+     * equivalent here. `activity.resources.displayMetrics` (rather than the
+     * static `Resources.getSystem()`) reflects this app's own window, which
+     * is what a user debugging a display issue in this app actually cares
+     * about. Called from android_bridge.rs::get_system_info. */
+    @Command
+    fun getSystemInfo(invoke: Invoke) {
+        val metrics = activity.resources.displayMetrics
+        val ret = JSObject()
+        ret.put("model", Build.MODEL)
+        ret.put("manufacturer", Build.MANUFACTURER)
+        ret.put("androidRelease", Build.VERSION.RELEASE)
+        ret.put("sdkInt", Build.VERSION.SDK_INT)
+        ret.put("widthPx", metrics.widthPixels)
+        ret.put("heightPx", metrics.heightPixels)
+        ret.put("densityDpi", metrics.densityDpi)
+        invoke.resolve(ret)
+    }
+
     /** Called from every iteration of Rust's run_scheduler loop (which is
      * capped to run at least every ANDROID_POLL_INTERVAL, 20s, regardless of
      * phase -- see lib.rs). Lets MainActivity.isSchedulerAlive() tell "the

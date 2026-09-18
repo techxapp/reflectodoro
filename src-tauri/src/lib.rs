@@ -15,6 +15,7 @@ mod overlay;
 mod p2p_sync;
 mod screen_time;
 mod state;
+mod system_info;
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -793,6 +794,7 @@ pub fn run() {
             import::import_data,
             log_export::export_last_log_file,
             log_export::export_log_archive,
+            system_info::export_system_info,
             p2p_sync::start_pairing,
             p2p_sync::cancel_pairing,
             p2p_sync::browse_pairing_candidates,
