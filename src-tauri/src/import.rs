@@ -31,7 +31,7 @@ pub struct ImportReflectionRow {
     pub text: String,
     /// Optional so older export files (written before this column existed)
     /// still deserialize -- `import_reflections` falls back to `created_at`
-    /// per row when absent, same as migration 19's backfill for pre-existing
+    /// per row when absent, same as the backfill that introduced the column, for pre-existing
     /// rows. P2P sync (p2p_sync.rs) always sends a real value.
     #[serde(default)]
     pub updated_at: Option<String>,
@@ -375,7 +375,7 @@ pub(crate) async fn import_reflections(
             }
         } else {
             // No existing row: brand-new slot. `rev` is deliberately not named
-            // here -- migration 28's triggers assign this device's own value,
+            // here -- the table's rev triggers assign this device's own value,
             // which is what makes a row received from one peer forward on to
             // another.
             sqlx::query("INSERT INTO reflection (created_at, slot_start_at, text, updated_at) VALUES (?, ?, ?, ?)")
@@ -404,7 +404,7 @@ pub(crate) async fn import_reflections(
 /// any rows a pre-fix double-import already wrote, and would also start
 /// constraining `screen_time.rs`'s normal capture-write path, which this
 /// dedupe has no reason to touch. `idx_screen_time_session_dedupe` (db.rs
-/// migration 16, rebuilt by migration 24) is what keeps this `NOT EXISTS`
+/// keyed on app_id_hash) is what keeps this `NOT EXISTS`
 /// check fast on a table documented as likely to become the largest by row
 /// count.
 ///
@@ -502,7 +502,7 @@ pub(crate) async fn import_screen_time_sessions(
 /// left duplicates on a slot the current import file doesn't touch at all.
 ///
 /// Unlike `import_reflections`, there's no FK to repoint here at all --
-/// `wellness_check.slot_start_at` (migration 17) replaced
+/// `wellness_check.slot_start_at` replaced
 /// `wellness_check.reflection_id` specifically so this dedupe wouldn't need
 /// to remap anything through an id map. Returns how many incoming rows were
 /// skipped (lost the collapse to something else for their slot).
@@ -780,7 +780,7 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
 
     if mode == ImportMode::Replace {
         // Order no longer matters for FK reasons (wellness_check.slot_start_at,
-        // migration 17, replaced the reflection_id FK) -- kept in the same
+        // it replaced the reflection_id FK) -- kept in the same
         // order as before purely because there's no reason to change it.
         sqlx::query("DELETE FROM wellness_check").execute(&mut *tx).await.map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM reflection").execute(&mut *tx).await.map_err(|e| e.to_string())?;
@@ -969,7 +969,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            // TEXT columns (migration 23) so they can hold 'enc1:' ciphertext
+            // TEXT columns so they can hold 'enc1:' ciphertext
             // -- see crypto.rs's ENCRYPTED_COLUMNS.
             "CREATE TABLE wellness_check (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

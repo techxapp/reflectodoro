@@ -4,6 +4,8 @@ mod breakit;
 mod commands;
 mod crypto;
 mod db;
+#[cfg(test)]
+mod db_legacy_fixture;
 mod grid;
 mod hook;
 mod import;
@@ -608,6 +610,50 @@ fn setup_dev_kill_switch(app: &AppHandle) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Last resort when `db::ensure_schema` can't hand the app a usable database.
+///
+/// Both cases are unrecoverable from inside a running app, so this tells the
+/// user what happened in the one place they'll definitely see it -- a native
+/// dialog -- and then exits. Without it the app would carry on into a main
+/// window whose every query fails, with the real reason only in the log file.
+///
+/// Runs `blocking_show` on its own thread, deliberately: it must not be
+/// called on the main thread (it needs the event loop it would be blocking to
+/// pump the dialog), so `.setup()` returns `Ok` and lets the loop start while
+/// this waits. The process exits as soon as the dialog is dismissed, so the
+/// main window never gets far.
+fn show_fatal_database_error(app: &AppHandle, error: &db::SchemaError) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+    let body = match error {
+        // No incremental migrations remain in this build, so the user's own
+        // upgrade path is the fix: the last release that still had them will
+        // bring the database forward, after which this build accepts it.
+        db::SchemaError::Incompatible(detail) => format!(
+            "Your Reflectodoro data was last used by an older version, and this version can't upgrade it directly.\n\n\
+             Please install version 0.13.10 first, open it once so it can finish updating your data, then install this version again.\n\n\
+             Your reflections and settings are safe and untouched.\n\n\
+             Details: {detail}"
+        ),
+        db::SchemaError::Unavailable(detail) => format!(
+            "Reflectodoro couldn't open its database.\n\n\
+             This usually means the file is in use by another copy of the app, the disk is full, or the app doesn't have permission to write to its data folder.\n\n\
+             Details: {detail}"
+        ),
+    };
+
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        handle
+            .dialog()
+            .message(body)
+            .kind(MessageDialogKind::Error)
+            .title("Reflectodoro")
+            .blocking_show();
+        std::process::exit(1);
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebView2's GPU-accelerated compositor loses its DirectX swapchain when
@@ -677,11 +723,15 @@ pub fn run() {
         .manage(AppState::new(dev_mode))
         .manage(p2p_sync::P2pState::new())
         .plugin(tauri_plugin_notification::init())
-        .plugin(
-            tauri_plugin_sql::Builder::default()
-                .add_migrations(db::DB_URL, db::migrations())
-                .build(),
-        )
+        // Deliberately registers NO migrations. This app owns its schema
+        // directly (db::ensure_schema, called from .setup() below), and that
+        // only works because tauri-plugin-sql skips constructing a
+        // sqlx Migrator entirely when no migration list exists for a database
+        // URL -- so the `_sqlx_migrations` rows an existing install still
+        // carries are never read or validated. Calling .add_migrations() here
+        // again would reinstate that validation and hard-fail every existing
+        // install with `VersionMissing`. See db::FULL_SCHEMA_SQL.
+        .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
@@ -822,6 +872,23 @@ pub fn run() {
 
             log::info!("app setup starting, dev_mode={dev_mode}");
 
+            // Creates pomodoro.db and its schema on a fresh install, or
+            // confirms an existing one is already current (see db.rs).
+            //
+            // Blocking, and first: it takes a few milliseconds of local DDL,
+            // and running it here -- before any webview boots -- is what makes
+            // "the database exists and has its final schema" an invariant for
+            // everything after this line, rather than something the rest of
+            // setup has to race the frontend's Database.load() for.
+            if let Err(e) = tauri::async_runtime::block_on(db::ensure_schema(&handle)) {
+                log::error!("database schema check failed: {e}");
+                show_fatal_database_error(&handle, &e);
+                // Returning Ok rather than Err deliberately: the dialog above
+                // is shown from its own thread and needs this event loop
+                // running to paint at all. It exits the process once dismissed.
+                return Ok(());
+            }
+
             #[cfg(desktop)]
             {
                 setup_tray(&handle)?;
@@ -938,16 +1005,6 @@ pub fn run() {
             let p2p_listener_handle = handle.clone();
             tauri::async_runtime::spawn(p2p_sync::run_listener(p2p_listener_handle));
             p2p_sync::advertise_self(&handle);
-
-            // Encrypts any rows written before this feature existed (see
-            // crypto.rs). Spawned with its own retry loop rather than run
-            // inline: like p2p_sync::advertise_self's device_id lookup, this
-            // runs before the frontend's Database.load() has necessarily
-            // created pomodoro.db or applied its migrations. New writes are
-            // encrypted whether or not this has run, and rows it hasn't
-            // reached stay readable, so a session where it never succeeds
-            // degrades to "try again next launch" rather than to data loss.
-            tauri::async_runtime::spawn(crypto::run_encryption_migration_after_db_ready(handle.clone()));
 
             Ok(())
         })

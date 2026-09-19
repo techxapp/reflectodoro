@@ -1581,6 +1581,7 @@
                 <li>Extended encryption at rest to when each reflection was written and last edited. These timestamps were previously readable on disk, and could reveal your sleep and working patterns to anyone with access to the database file &mdash; without decrypting a single entry</li>
                 <li>Rebuilt how device sync works out what changed, fixing three ways entries could silently never reach a paired device: after a system clock change, when passing between three or more paired devices, and when restoring an older backup onto a device that was already paired</li>
                 <li>Added an &ldquo;Export system info&rdquo; button to the About page, so a bug report can include your OS, display and device details without you having to hunt for them</li>
+                <li>Simplified how the app sets up its local database on first launch, and cleaned out the upgrade machinery left over from earlier versions. Existing reflections, settings and pairings are untouched</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">

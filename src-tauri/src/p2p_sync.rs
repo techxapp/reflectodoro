@@ -664,7 +664,7 @@ async fn update_last_sync_at(app: &AppHandle, peer_device_id: &str, sync_started
 }
 
 /// Selects every row each table has gained or had edited since this peer's
-/// last successful sync, using the monotonic `rev` counter migration 28 added
+/// last successful sync, using the monotonic `rev` counter db.rs's schema adds
 /// rather than a timestamp comparison.
 ///
 /// **Why not timestamps**: `reflection.created_at`/`updated_at` are ciphertext

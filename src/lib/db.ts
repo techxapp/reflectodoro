@@ -10,10 +10,10 @@ function getDb() {
   if (!dbPromise) {
     const attempt = Database.load("sqlite:pomodoro.db");
     dbPromise = attempt;
-    // If this load rejects (most commonly: a pending migration can't apply,
-    // e.g. an app_setting row from a cross-version import colliding with a
-    // migration seeding the same key -- see db.rs's migration comments),
-    // clear the cache instead of leaving a rejected promise memoized here
+    // If this load rejects (the database file being unreadable or locked --
+    // no migration runs here anymore; Rust creates and verifies the schema
+    // before any webview boots, see db.rs's ensure_schema), clear the cache
+    // instead of leaving a rejected promise memoized here
     // forever. Without this, EVERY function in this module throws for the
     // rest of the process's life after the first failure, with the app
     // never even retrying -- turning one transient or fixable failure into
@@ -26,9 +26,9 @@ function getDb() {
     // attempt of its own by the time this rejection handler runs, and this
     // must not clobber that newer attempt out from under it.
     attempt.catch((e) => {
-      // Logged, not swallowed: a failed load (most often a migration that
-      // can't apply) otherwise makes every DB-backed feature silently do
-      // nothing, with the only visible symptom being missing data much later.
+      // Logged, not swallowed: a failed load otherwise makes every DB-backed
+      // feature silently do nothing, with the only visible symptom being
+      // missing data much later.
       // plugin-log's Webview target puts this in the same file as the Rust
       // side's, which is what makes it diagnosable from a user's log export.
       void logError(`db: failed to open pomodoro.db: ${e instanceof Error ? e.message : String(e)}`);
@@ -70,8 +70,9 @@ async function encryptField(value: string): Promise<string> {
   return (await encryptFields([value]))[0];
 }
 
-/** Values stored before the one-time migration ran come back unchanged
- * rather than throwing -- see crypto.rs's `enc1:` marker passthrough. */
+/** A value with no `enc1:` marker comes back unchanged rather than throwing
+ * -- see crypto.rs's marker passthrough. Nothing writes one anymore; it's a
+ * safety net for a stray row, not an expected case. */
 async function decryptField(value: string): Promise<string> {
   return (await decryptFields([value]))[0];
 }
@@ -292,8 +293,8 @@ export function splitReflectionForSlots(text: string, coveredSlots: string[]): s
  * created_at/updated_at are encrypted at rest (crypto.rs) -- a plaintext edit
  * time would leak when the user is awake and working even to someone who
  * can't read a single reflection. Nothing queries either column any more;
- * P2P sync finds changed rows via the `rev` counter instead (db.rs migration
- * 28), which the table's triggers maintain, so nothing here writes it. */
+ * P2P sync finds changed rows via the `rev` counter instead (db.rs), which
+ * the table's triggers maintain, so nothing here writes it. */
 async function upsertReflectionRow(
   db: Database,
   slot: string,
@@ -390,8 +391,8 @@ export interface WellnessCheckValues {
 /** Saves a wellness check-in keyed directly on the work slot it's about
  * (`slotStartIso`, the same value as `reflection.slot_start_at`) rather than
  * a `reflection.id` FK -- see CLAUDE.md's "Data model" for why
- * `wellness_check.reflection_id` was replaced with `slot_start_at`
- * (migration 17): it lets Settings -> Data merge-mode import dedupe/collapse
+ * `wellness_check.reflection_id` was replaced with `slot_start_at`:
+ * it lets Settings -> Data merge-mode import dedupe/collapse
  * on the slot directly instead of remapping a foreign key through every
  * reflection-row collapse.
  *
@@ -440,7 +441,7 @@ export interface WellnessSummary {
  * after midnight stays filed under the pomodoro it was actually about
  * instead of leaking onto the next day and disagreeing with the reflections
  * shown beside it on the Entries page. No longer needs a JOIN to reflection
- * for this -- see CLAUDE.md's "Data model" on migration 17.
+ * for this -- see CLAUDE.md's "Data model" on `wellness_check.slot_start_at`.
  *
  * The four boolean columns are ciphertext at rest (see "Encryption at
  * rest" above), so this can no longer let SQLite do the summing with
@@ -533,7 +534,7 @@ export function clusterReflectionRows(rows: ReflectionDisplayRow[]): ReflectionC
  * clusterReflectionRows above, immediately splits it out of its display
  * cluster if the new text no longer matches). Also bumps updated_at, which is
  * now purely a record of when the row was last edited -- P2P sync tracks
- * changes via the `rev` counter (db.rs migration 28) rather than this column,
+ * changes via the `rev` counter (db.rs) rather than this column,
  * and the table's triggers advance rev on this UPDATE without it being named
  * here. Both the text and the timestamp are encrypted, in one batched call. */
 export async function updateReflectionText(id: number, text: string): Promise<void> {
@@ -960,8 +961,9 @@ const FORCE_CLOSE_SHORTCUT_KEY = "force_close_shortcut_enabled";
 
 /**
  * Defaults to enabled if the row is somehow missing (should not happen --
- * migration v3 inserts it for both fresh installs and upgrades -- but a
- * missing setting should never silently disable a kill switch).
+ * db.rs's SEED_SETTINGS creates it on a fresh install and every existing
+ * database already has it -- but a missing setting should never silently
+ * disable a kill switch).
  */
 export async function getForceCloseShortcutEnabled(): Promise<boolean> {
   const db = await getDb();
@@ -1305,7 +1307,7 @@ const SCREEN_TIME_INSERT_CHUNK = 100;
  * than being encrypted -- every reader already treats `""` as "no friendly
  * name, fall back to appId", and encrypting nothing would only cost a
  * decrypt on every later read for no benefit. Mirrors the same rule
- * crypto.rs's screen-time backfill and import.rs's screen-time import use. */
+ * import.rs's screen-time import uses. */
 async function encryptDisplayNames(values: string[]): Promise<string[]> {
   const nonEmptyIndexes: number[] = [];
   const nonEmptyValues: string[] = [];
@@ -1410,9 +1412,8 @@ export interface ScreenTimeEntry {
  * simple and stable, at the cost of a little drift for anyone working through
  * midnight.
  *
- * Grouped by `app_id_hash` (falling back to raw `app_id` for a legacy row the
- * one-time encryption backfill hasn't reached yet, `app_id_hash = ''`), not
- * `app_id` itself -- `app_id`/`display_name` are crypto.rs's usual
+ * Grouped by `app_id_hash`, not `app_id` itself -- `app_id`/`display_name`
+ * are crypto.rs's usual
  * random-nonce ciphertext (see "Encryption at rest"), which never produces
  * the same value twice for the same plaintext, so grouping on it directly
  * would put every session in its own group. `app_id_hash` is the
@@ -1446,7 +1447,7 @@ export async function getScreenTimeForDate(dateStamp: string): Promise<ScreenTim
             SUM((julianday(ended_at) - julianday(started_at)) * 86400000) as ms
      FROM screen_time_session
      WHERE date(started_at, 'localtime') = $1
-     GROUP BY COALESCE(NULLIF(app_id_hash, ''), app_id), platform, device_name
+     GROUP BY app_id_hash, platform, device_name
      ORDER BY ms DESC`,
     [dateStamp],
   );
@@ -1457,36 +1458,13 @@ export async function getScreenTimeForDate(dateStamp: string): Promise<ScreenTim
   const appIds = await decryptFields(rows.map((r) => r.app_id));
   const displayNames = await decryptFields(rows.map((r) => r.display_name || ""));
 
-  // During the transition window before the one-time backfill finishes, a
-  // still-plaintext row (app_id_hash = '') and an already-encrypted row for
-  // the same app can land in two separate SQL groups (one keyed by raw
-  // app_id, one by app_id_hash). Merging here by decrypted identity (a
-  // no-op for the common already-fully-migrated case) is what keeps that
-  // window from double-counting or double-listing an app.
-  const merged = new Map<string, ScreenTimeEntry>();
-  rows.forEach((row, i) => {
-    const key = `${appIds[i]}::${row.platform}::${row.device_name}`;
-    const ms = Math.max(0, Math.round(row.ms ?? 0));
-    const existing = merged.get(key);
-    if (existing) {
-      existing.ms += ms;
-      // displayName is never empty (already defaulted to appId below) -- so
-      // "no real label yet" means it still equals its own fallback.
-      if (existing.displayName === existing.appId && displayNames[i]) {
-        existing.displayName = displayNames[i];
-      }
-    } else {
-      merged.set(key, {
-        appId: appIds[i],
-        displayName: displayNames[i] || appIds[i],
-        platform: row.platform,
-        deviceName: row.device_name,
-        ms,
-      });
-    }
-  });
-
-  return Array.from(merged.values()).sort((a, b) => b.ms - a.ms);
+  return rows.map((row, i) => ({
+    appId: appIds[i],
+    displayName: displayNames[i] || appIds[i],
+    platform: row.platform,
+    deviceName: row.device_name,
+    ms: Math.max(0, Math.round(row.ms ?? 0)),
+  }));
 }
 
 export interface CurrentScreenTimeSession {
@@ -2216,7 +2194,7 @@ export async function attemptAutoSync(): Promise<void> {
 // --- Quote API (end-of-break overlay panel) ------------------------------
 //
 // Blank URL = feature off. Defaults to zenquotes.io's random-quote endpoint,
-// seeded as a real app_setting row by db.rs's migration 21 -- not a
+// seeded as a real app_setting row by db.rs's SEED_SETTINGS -- not a
 // read-side fallback here, so clearing the field in Settings genuinely
 // disables it (an explicit saved "" is never overridden). The URL itself is
 // stored here (plain app_setting, read by the overlay page), but the actual

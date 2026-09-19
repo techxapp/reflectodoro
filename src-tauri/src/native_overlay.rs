@@ -256,7 +256,7 @@ fn split_reflection_for_slots(text: &str, covered_slots: &[String]) -> Option<Ve
 /// succeeded before the failure, since slot_start_at has no UNIQUE constraint.
 ///
 /// `stored_created_at` is ciphertext too, not a plain timestamp: created_at
-/// and updated_at are encrypted at rest as of db.rs migration 28 (see
+/// and updated_at are encrypted at rest (see
 /// crypto.rs's module doc for why a plaintext edit time is worth hiding).
 /// Neither column is bound anywhere `rev` isn't doing the work instead, so
 /// storing them opaquely breaks no query. `rev` itself is never written here
