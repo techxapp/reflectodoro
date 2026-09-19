@@ -167,6 +167,73 @@ fn app_policy_and_active() -> Option<(isize, bool)> {
     Some((app.activationPolicy().0, app.isActive()))
 }
 
+/// The Space/level half of `configure_window`, split out so it can also run on
+/// the still-hidden window before `.show()` (see `prepare_window_before_show`).
+/// Idempotent -- both call sites apply exactly the same flags.
+fn apply_space_behavior(ns_window: &NSWindow) -> NSWindowCollectionBehavior {
+    let behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
+        | NSWindowCollectionBehavior::FullScreenAuxiliary
+        | NSWindowCollectionBehavior::Stationary
+        | NSWindowCollectionBehavior::IgnoresCycle;
+    ns_window.setCollectionBehavior(behavior);
+    ns_window.setLevel(NSScreenSaverWindowLevel);
+    behavior
+}
+
+/// Applies the collection behavior and window level while the overlay is still
+/// hidden, so they are already in effect at the moment `.show()` orders the
+/// window in.
+///
+/// This is load-bearing, not a tidy-up. The WindowServer decides which Space a
+/// window belongs to when it is *ordered in*, and it makes that decision from
+/// the state in effect at that instant. `enter_kiosk_mode`'s `configure_window`
+/// runs after `.show()`, so on the very first break of a process the window was
+/// ordered in with Tauri's default collection behavior -- which cannot join
+/// another app's full-screen Space -- and got parked on a desktop Space instead.
+/// Re-applying `CanJoinAllSpaces` a moment later does not move an
+/// already-ordered-in window (`orderFrontRegardless` raises a window within its
+/// current Space; it does not re-assign Spaces), which is exactly the
+/// `isVisible=true isOnActiveSpace=false` pair seen in a real user's log with
+/// every other readback correct. `force_space_replacement` is the recovery for
+/// when this still loses the race against the async activation-policy switch.
+///
+/// Queued onto the main thread, like `enter_kiosk_mode` -- Tauri runs queued
+/// main-thread work in order, so this lands before the `.show()` that follows it
+/// at the call site.
+pub fn prepare_window_before_show(win: &WebviewWindow) {
+    let win_for_closure = win.clone();
+    if let Err(e) = win.run_on_main_thread(move || match win_for_closure.ns_window() {
+        Ok(ptr) => {
+            // SAFETY: same as configure_window.
+            let ns_window: &NSWindow = unsafe { &*(ptr as *mut NSWindow) };
+            let behavior = apply_space_behavior(ns_window);
+            log::info!(
+                "macos_overlay::prepare_window_before_show: set collectionBehavior={:?} level={:?} on the hidden window (readback: collectionBehavior={:?} level={:?} app(policy,active)={:?})",
+                behavior,
+                NSScreenSaverWindowLevel,
+                ns_window.collectionBehavior(),
+                ns_window.level(),
+                app_policy_and_active()
+            );
+        }
+        Err(e) => log::warn!("macos_overlay::prepare_window_before_show: ns_window() failed: {e:?}"),
+    }) {
+        log::warn!("macos_overlay::prepare_window_before_show: run_on_main_thread failed: {e:?}");
+    }
+}
+
+/// Ordering a visible window out and straight back in is the only way to make
+/// the WindowServer re-decide which Space it belongs to. Used when the overlay
+/// is confirmed to have landed off the active Space despite the accessory
+/// policy and `CanJoinAllSpaces` both being in effect by then -- the window was
+/// placed before one of them landed, and nothing short of re-ordering it moves
+/// it afterwards. Costs a single frame of flicker in the case where the overlay
+/// is currently invisible to the user anyway.
+fn force_space_replacement(ns_window: &NSWindow) {
+    ns_window.orderOut(None);
+    ns_window.orderFrontRegardless();
+}
+
 /// SAFETY: `ptr` comes from `WebviewWindow::ns_window()`, which returns the
 /// live `NSWindow*` backing this window for as long as the window exists --
 /// borrowed, not owned, so no release here.
@@ -175,12 +242,7 @@ fn app_policy_and_active() -> Option<(isize, bool)> {
 /// Space, dev_mode or not, `macos_hide_menu_bar_dock_enabled` or not.
 fn configure_window(ptr: *mut c_void) {
     let ns_window: &NSWindow = unsafe { &*(ptr as *mut NSWindow) };
-    let behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
-        | NSWindowCollectionBehavior::FullScreenAuxiliary
-        | NSWindowCollectionBehavior::Stationary
-        | NSWindowCollectionBehavior::IgnoresCycle;
-    ns_window.setCollectionBehavior(behavior);
-    ns_window.setLevel(NSScreenSaverWindowLevel);
+    let behavior = apply_space_behavior(ns_window);
     // Unlike tao's makeKeyAndOrderFront, this orders front even while another
     // app (e.g. a full-screen video player) is still the active one.
     ns_window.orderFrontRegardless();
@@ -227,10 +289,25 @@ fn reassert_front_after_delay(win: &WebviewWindow) {
                 #[allow(deprecated)]
                 NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
             }
+            // The actual repair, not just a diagnostic. By now the accessory
+            // policy has had REASSERT_DELAY to land, so if the window is still
+            // off the active Space it is because it was *ordered in* before
+            // that policy (or the collection behavior) took effect, and no
+            // amount of re-ordering front will move it -- only re-ordering it
+            // in will. Checked rather than done unconditionally so the normal
+            // path costs nothing and never flickers.
+            let on_active_space = ns_window.isOnActiveSpace();
+            if !on_active_space {
+                log::warn!(
+                    "macos_overlay::reassert_front_after_delay: overlay is off the active Space -- ordering it out and back in to force the WindowServer to re-place it"
+                );
+                force_space_replacement(ns_window);
+            }
             log::info!(
-                "macos_overlay::reassert_front_after_delay: isVisible={} isOnActiveSpace={} app(policy,active)={:?}",
+                "macos_overlay::reassert_front_after_delay: isVisible={} isOnActiveSpace={} (before re-place: {}) app(policy,active)={:?}",
                 ns_window.isVisible(),
                 ns_window.isOnActiveSpace(),
+                on_active_space,
                 app_policy_and_active()
             );
         }) {

@@ -129,6 +129,11 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
             {
                 crate::macos_overlay::enter_accessory_policy(app);
                 crate::macos_overlay::cover_current_monitor(&win);
+                // Collection behavior/level must also be in place *before* the
+                // window is ordered in -- the WindowServer picks the window's
+                // Space at order-in time and will not move it afterwards. See
+                // prepare_window_before_show's doc comment.
+                crate::macos_overlay::prepare_window_before_show(&win);
             }
             // Previously `let _ = ...`, silently discarding a failure here --
             // this is exactly the step in the middle of the "overlay didn't

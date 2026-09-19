@@ -46,6 +46,14 @@
   let isMacos = $state(false);
   // Defaults to true so nothing flashes before the real check resolves.
   let mediaKeyPermissionGranted = $state(true);
+  // Set once the user has actually pressed the grant button this session. A
+  // request that comes back still-not-granted means macOS never showed a
+  // prompt, which on this (unsigned, ad-hoc-signed) build almost always means
+  // a stale TCC row from a previous build's code signature -- TCC keys grants
+  // to the exact binary, so an update leaves an entry that the new build can
+  // never satisfy and that suppresses the prompt. Pressing the button again
+  // cannot fix that; removing the old entry can, so say so instead.
+  let mediaKeyPermissionRequested = $state(false);
   let taskListContent = $state("");
   let notToDoContent = $state("");
   let pairedDevices = $state<PairedDeviceInfo[]>([]);
@@ -135,6 +143,7 @@
 
   async function requestMediaKeyPermission() {
     await invoke("request_media_key_permission");
+    mediaKeyPermissionRequested = true;
     await refreshMediaKeyPermission();
   }
 
@@ -327,6 +336,16 @@
         <button class="toggle permission-button" onclick={requestMediaKeyPermission}>
           Grant Accessibility access…
         </button>
+        {#if mediaKeyPermissionRequested}
+          <p class="hint">
+            Still not granted — macOS didn't show a prompt. That usually means an
+            old Reflectodoro entry is stuck in System Settings → Privacy &amp;
+            Security → Accessibility: select Reflectodoro there, remove it with
+            the “−” button, then press Grant again. If it still won't take, run
+            <code>tccutil reset PostEvent com.reflectodoro.app</code> in Terminal
+            and reopen Reflectodoro.
+          </p>
+        {/if}
       {/if}
     {/if}
   </section>
