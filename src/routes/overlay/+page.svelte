@@ -296,7 +296,7 @@
       const prevSlot = overlayState?.current_slot_start;
       overlayState = event.payload;
       void logInfo(
-        `[overlay] event: open=${overlayState.open} slot=${overlayState.current_slot_start} challenge=${JSON.stringify(overlayState.breakit_challenge)}`,
+        `[overlay] event: open=${overlayState.open} slot=${overlayState.current_slot_start}`,
       );
       if (overlayState.current_slot_start !== prevSlot) {
         breakitInput = "";
@@ -329,7 +329,7 @@
 
     overlayState = await invoke<OverlayState>("get_overlay_state");
     void logInfo(
-      `[overlay] fallback invoke: open=${overlayState.open} slot=${overlayState.current_slot_start} challenge=${JSON.stringify(overlayState.breakit_challenge)}`,
+      `[overlay] fallback invoke: open=${overlayState.open} slot=${overlayState.current_slot_start}`,
     );
     // Started immediately after the fallback invoke resolves -- deliberately
     // *before* refreshQuote below, which hits an external, user-configured
