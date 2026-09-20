@@ -53,7 +53,7 @@
   let screenTimeLoaded = $state(false);
   let screenTimeTrackingOn = $state(true);
   let screenTimeThresholdMinutes = $state(5);
-  // Windows and Android are the only platforms capturing focus so far --
+  // Windows, Android and macOS are the only platforms capturing focus so far --
   // without this the empty state on the others reads as "you did nothing
   // today" rather than "nothing is recording yet".
   let captureSupported = $state(true);
@@ -568,7 +568,7 @@
     window.addEventListener("focus", onWindowFocus);
     document.addEventListener("visibilitychange", onEntriesVisibilityChange);
     const os = await invoke<string>("current_os");
-    captureSupported = os === "windows" || os === "android";
+    captureSupported = os === "windows" || os === "android" || os === "macos";
     isAndroid = os === "android";
     await refreshUsageAccess();
   });

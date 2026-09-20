@@ -161,6 +161,8 @@ keyring = { version = "3", features = ["windows-native"] }
 # builds -- release uses panic = "abort", see Cargo.toml's [profile.release]).
 objc2 = { version = "0.6.4", features = ["exception"] }
 objc2-app-kit = "0.3.2"
+# NSNotificationCenter observer block in screen_time.rs (already in the lockfile transitively).
+block2 = "0.6.2"
 objc2-core-graphics = "0.3.2"
 objc2-foundation = "0.3.2"
 # See the Windows block above for why the backend feature is explicit. macOS

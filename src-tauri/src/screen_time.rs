@@ -41,12 +41,16 @@
 //! `can_query_usage_stats`/`request_usage_stats_permission` follow that same
 //! shape.
 //!
-//! macOS / Linux: not implemented yet -- `install_watcher` is a documented
-//! no-op on those, so everything else (buffering, flushing, the Settings
-//! toggle, the Entries breakdown) is already wired and simply has nothing
-//! feeding it until those land. Planned mechanisms, per the plan doc: macOS
-//! `NSWorkspace.didActivateApplicationNotification`, Linux X11
-//! `_NET_ACTIVE_WINDOW` property watching (no Wayland equivalent, same
+//! macOS: push-based, like Windows. An observer on `NSWorkspace`'s own
+//! notification center for `NSWorkspaceDidActivateApplicationNotification`
+//! resolves the activated `NSRunningApplication` to its bundle id
+//! (`app_id`) and `localizedName` (`display_name`). No permission at all --
+//! no Accessibility/Screen Recording, since only the app's identity is read.
+//!
+//! Linux: not implemented yet -- `install_watcher` is a documented no-op,
+//! so everything else (buffering, flushing, the Settings toggle, the Entries
+//! breakdown) is already wired and simply has nothing feeding it. Planned:
+//! X11 `_NET_ACTIVE_WINDOW` property watching (no Wayland equivalent, same
 //! protocol-level wall hook.rs already documents).
 //!
 //! **Self-exclusion is mandatory on every platform**: Reflectodoro's own
@@ -709,11 +713,95 @@ mod platform_impl {
     }
 }
 
-/// macOS/Linux capture isn't built yet -- see the module doc for the planned
-/// mechanism on each. Everything else (buffering, flushing, the Settings
+/// Linux capture isn't built yet -- see the module doc for the planned
+/// mechanism. Everything else (buffering, flushing, the Settings
 /// toggle, the Entries breakdown) is already platform-agnostic and simply
 /// has nothing feeding it here.
-#[cfg(not(any(windows, target_os = "android")))]
+#[cfg(target_os = "macos")]
+mod platform_impl {
+    use super::{record_focus_change, FocusedApp};
+    use block2::RcBlock;
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::{
+        NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
+        NSWorkspaceDidActivateApplicationNotification,
+    };
+    use objc2_foundation::NSNotification;
+    use std::ptr::NonNull;
+    use std::sync::Once;
+    use tauri::AppHandle;
+
+    static INSTALLED: Once = Once::new();
+
+    /// `None` for our own process (same self-exclusion as Windows' pid check,
+    /// so the break overlay/main window closes the previous app's session
+    /// without ever appearing in the user's breakdown) or an app with no
+    /// usable identifier. `app_id` is the bundle id, the stable grouping key;
+    /// `display_name` is `localizedName`, a best-effort label.
+    fn resolve(app: &NSRunningApplication) -> Option<FocusedApp> {
+        if app.processIdentifier() as u32 == std::process::id() {
+            return None;
+        }
+        let display_name = app.localizedName().map(|s| s.to_string()).unwrap_or_default();
+        let app_id = app
+            .bundleIdentifier()
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| Some(display_name.clone()).filter(|s| !s.is_empty()))?;
+        Some(FocusedApp { app_id, display_name })
+    }
+
+    fn record(app: Option<Retained<NSRunningApplication>>) {
+        record_focus_change(app.and_then(|a| resolve(&a)));
+    }
+
+    /// Cheap enough to call on demand -- one `frontmostApplication` read.
+    pub fn resync_current_focus(_app: &AppHandle) {
+        record(NSWorkspace::sharedWorkspace().frontmostApplication());
+    }
+
+    /// Push-based like Windows' `SetWinEventHook`: no polling, and no
+    /// permission (no Accessibility/Screen Recording -- only the app's
+    /// identity is read, never window titles).
+    pub fn install_watcher(_app: AppHandle) {
+        INSTALLED.call_once(|| {
+            let workspace = NSWorkspace::sharedWorkspace();
+            // Seed with whatever is already frontmost, so the app doesn't
+            // have to wait for the first switch to start attributing time.
+            record(workspace.frontmostApplication());
+
+            let block = RcBlock::new(|note: NonNull<NSNotification>| {
+                // SAFETY: AppKit hands the block a valid notification for the
+                // duration of the call.
+                let note = unsafe { note.as_ref() };
+                let app = note.userInfo().and_then(|info| {
+                    let obj: Retained<AnyObject> =
+                        unsafe { info.objectForKey(NSWorkspaceApplicationKey) }?;
+                    obj.downcast::<NSRunningApplication>().ok()
+                });
+                record(app);
+            });
+            // NSWorkspace posts on its own center, not the default one. A nil
+            // queue runs the block synchronously on the posting thread.
+            let token = unsafe {
+                workspace.notificationCenter().addObserverForName_object_queue_usingBlock(
+                    Some(NSWorkspaceDidActivateApplicationNotification),
+                    None,
+                    None,
+                    &block,
+                )
+            };
+            // The observer lives for the whole process; dropping the token
+            // (or the block) would silently stop delivery.
+            std::mem::forget(token);
+            std::mem::forget(block);
+            log::info!("screen_time: NSWorkspace activation observer installed");
+        });
+    }
+}
+
+#[cfg(not(any(windows, target_os = "android", target_os = "macos")))]
 mod platform_impl {
     use tauri::AppHandle;
 

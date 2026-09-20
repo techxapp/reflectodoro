@@ -1025,7 +1025,7 @@
 
     {#if osResolved && !isWindows && !isAndroid}
       <p class="hint warning">
-        Not captured on this platform yet &mdash; Windows and Android are the only ones recording
+        Not captured on this platform yet &mdash; Windows, macOS and Android are the only ones recording
         so far. The setting is here, but nothing lands until support for this platform ships.
       </p>
     {/if}
