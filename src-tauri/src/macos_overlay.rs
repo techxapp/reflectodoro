@@ -6,16 +6,22 @@
 //!
 //! - **Always on, no Settings toggle** (same as the rest of the overlay's
 //!   enforcement -- fullscreen/always-on-top aren't toggleable either):
-//!   - The process switches to the *accessory* activation policy for the
-//!     duration of a break (`enter_accessory_policy`, restored to regular in
-//!     `exit_kiosk_mode`). Since macOS 10.14 a regular (Dock-icon) app's
-//!     windows can't float over *another app's* full-screen Space whatever
-//!     their collection behavior or level -- Electron's `visibleOnFullScreen`
-//!     works around the same restriction the same way. Confirmed from a real
-//!     user's log: every readback below matched and `is_visible()` was true,
-//!     yet the overlay stayed hidden behind a full-screen video until the user
-//!     left full screen. Side effect: no Dock icon or Cmd+Tab entry while a
-//!     break is open.
+//!   - The overlay window is **created** while the process is temporarily an
+//!     *accessory* app (`with_accessory_policy`, wrapped around the build in
+//!     `overlay::precreate_windows`). Since macOS 10.14 a regular (Dock-icon)
+//!     app's windows can't float over *another app's* full-screen Space -- and
+//!     the measurements in `with_accessory_policy`'s doc comment show that
+//!     eligibility is fixed at window-*creation* time, so switching the policy
+//!     later cannot rescue a window that was born under `Regular`. This is the
+//!     load-bearing step; everything below is necessary but not sufficient.
+//!   - The process *also* switches to the accessory policy for the duration of
+//!     a break (`enter_accessory_policy`, restored to regular in
+//!     `exit_kiosk_mode`). That is no longer what makes the overlay cover a
+//!     full-screen Space (see above) -- it is kept because
+//!     `presentationOptions` (the Cmd+Tab block) only applies while this app is
+//!     active, and because an app with a Dock icon mid-break would otherwise
+//!     offer the user a Cmd+Tab entry back out. Side effect: no Dock icon or
+//!     Cmd+Tab entry while a break is open.
 //!   - `NSWindowCollectionBehavior` (`CanJoinAllSpaces` + `FullScreenAuxiliary`)
 //!     makes the overlay follow the user to any Space. `FullScreenAuxiliary`
 //!     only lifts the window into a full-screen Space if its `NSWindow.level`
@@ -82,11 +88,105 @@ const REASSERT_DELAY: Duration = Duration::from_secs(1);
 
 /// Must run before the overlay's `.show()` -- see the module doc. Tauri queues
 /// this onto the main thread in order with the show/focus calls after it.
+///
+/// **Not** what lets the overlay cover another app's full-screen Space: that is
+/// decided when the window is *created* (see `with_accessory_policy`). This is
+/// kept for `presentationOptions`/Cmd+Tab, and is hoisted above the window
+/// lookup in `spawn_or_update_overlay` so the rare rebuild path there also
+/// creates its window under the accessory policy.
 pub fn enter_accessory_policy(app: &AppHandle) {
     log::info!("macos_overlay::enter_accessory_policy: switching to Accessory activation policy");
     if let Err(e) = app.set_activation_policy(ActivationPolicy::Accessory) {
         log::error!("macos_overlay::enter_accessory_policy: set_activation_policy failed: {e:?}");
     }
+}
+
+/// `NSApplicationActivationPolicy::Accessory`'s raw value, for comparing
+/// against `app_policy_and_active()`'s readback.
+const POLICY_ACCESSORY: isize = 1;
+
+/// Builds a window while the process is temporarily an *accessory* app, then
+/// restores the policy that was in effect before.
+///
+/// **This, not the collection behavior, is what decides whether the overlay can
+/// ever cover another app's full-screen Space.** Measured directly on this Mac
+/// with a standalone AppKit probe (a second app put *itself* into real
+/// fullscreen, so no permissions were involved), each run verified externally
+/// via `CGWindowListCopyWindowInfo(.optionOnScreenOnly)` -- which lists only
+/// windows on the *active* Space -- rather than trusting AppKit's own
+/// readbacks:
+///
+/// | window created while process was | policy at show time | on the full-screen Space? |
+/// |----------------------------------|---------------------|---------------------------|
+/// | `Regular`                        | `Accessory`         | **no**                    |
+/// | `Regular`                        | `Accessory` (+ `TransformProcessType`, `setCanHide:NO`, re-ordering, retries) | **no** |
+/// | `Accessory`                      | `Accessory`         | yes                       |
+/// | `Accessory`                      | `Regular`           | yes                       |
+///
+/// So the WindowServer fixes a window's eligibility to join a full-screen Space
+/// when the `NSWindow` is **created**, from the process's activation policy at
+/// that instant -- not when the window is ordered in, and not from anything
+/// re-applied afterwards. A window born under `Regular` is permanently
+/// ineligible; a window born under `Accessory` stays eligible even after the
+/// process goes back to `Regular`.
+///
+/// That is exactly why the previous fix (switch to `Accessory`, apply
+/// `CanJoinAllSpaces` before `.show()`, re-order the window in on failure) could
+/// not work: `precreate_windows` builds the overlay at app start, while the
+/// process is still `Regular`, and nothing after that point can undo it.
+/// A real user's log showed every readback correct -- policy 1, behavior 337,
+/// level 1000, `isVisible=true` -- and `isOnActiveSpace=false` anyway, with
+/// `force_space_replacement` firing and changing nothing.
+///
+/// The wrap is deliberately narrow (create-time only) so the app keeps its Dock
+/// icon and Cmd+Tab entry outside of breaks: per the table above, the policy at
+/// *show* time is irrelevant to Space membership.
+///
+/// Must be called on the main thread to be correct. `AppHandle::set_activation_policy`
+/// goes through `tauri-runtime-wry`'s `send_user_message`, which runs the message
+/// **inline** when the caller is the main thread and only *queues* it otherwise
+/// (`tauri-runtime-wry-2.11.4/src/lib.rs:239`) -- so off the main thread the
+/// switch may not have landed by the time `build` creates the window, which is
+/// the one thing this function exists to guarantee. Logged rather than enforced,
+/// since the ordering still usually holds (the queued policy message is
+/// processed before the queued window-creation message).
+pub fn with_accessory_policy<R>(app: &AppHandle, build: impl FnOnce() -> R) -> R {
+    let previous = app_policy_and_active().map(|(policy, _)| policy);
+    if previous.is_none() {
+        log::warn!(
+            "macos_overlay::with_accessory_policy: not on the main thread -- the activation-policy switch is queued rather than applied inline, so the window may be created under the old policy"
+        );
+    }
+    if let Err(e) = app.set_activation_policy(ActivationPolicy::Accessory) {
+        log::error!(
+            "macos_overlay::with_accessory_policy: set_activation_policy(Accessory) failed: {e:?} -- the window built below will not be able to cover another app's full-screen Space"
+        );
+    }
+
+    let built = build();
+
+    // Restored only if the process wasn't already Accessory. It normally is
+    // not (this runs at app start, from `.setup()`), but the overlay can also
+    // be rebuilt mid-break by `spawn_or_update_overlay`'s fallback path, and
+    // dropping back to Regular there would undo `enter_accessory_policy` in
+    // the middle of a live break.
+    if previous != Some(POLICY_ACCESSORY) {
+        match app.set_activation_policy(ActivationPolicy::Regular) {
+            Ok(()) => log::info!(
+                "macos_overlay::with_accessory_policy: window built under Accessory, policy restored to Regular (readback: {:?})",
+                app_policy_and_active()
+            ),
+            Err(e) => log::error!(
+                "macos_overlay::with_accessory_policy: set_activation_policy(Regular) failed: {e:?} -- the app may be left with no Dock icon"
+            ),
+        }
+    } else {
+        log::info!(
+            "macos_overlay::with_accessory_policy: window built under Accessory, policy left as-is (was already Accessory)"
+        );
+    }
+
+    built
 }
 
 /// Substitute for real fullscreen (see module doc for why real fullscreen is
@@ -120,12 +220,32 @@ pub fn cover_current_monitor(win: &WebviewWindow) {
         monitor.position(),
         monitor.size()
     );
-    if let Err(e) = win.set_position(Position::Physical(*monitor.position())) {
-        log::warn!("macos_overlay::cover_current_monitor: set_position failed: {e:?}");
-    }
+    // Size *before* position, and the order is load-bearing on macOS. AppKit
+    // frames are bottom-left origin, so tao converts the top-left position
+    // handed to `set_position` using the window's height *at that moment*, and
+    // a later `set_size` then grows the window upwards from its fixed
+    // bottom-left corner. Positioning first therefore placed the overlay using
+    // the 800x600 default it still had, and the resize to full height pushed
+    // its top edge off-screen by exactly (screen height - 600): measured on a
+    // 1920x1080 screen as `y=-480 h=1080` in CGWindowList, i.e. the overlay
+    // covered only the top 600px and left the bottom 480px of the desktop --
+    // and whatever app was under it -- fully visible and clickable during a
+    // break. Sizing first makes the conversion use the final height, landing
+    // the window at y=0.
     if let Err(e) = win.set_size(Size::Physical(*monitor.size())) {
         log::warn!("macos_overlay::cover_current_monitor: set_size failed: {e:?}");
     }
+    if let Err(e) = win.set_position(Position::Physical(*monitor.position())) {
+        log::warn!("macos_overlay::cover_current_monitor: set_position failed: {e:?}");
+    }
+    // Logged as an outcome, not just an attempt (see CLAUDE.md's note on
+    // silently-discarded Results): this is the pair that says whether the
+    // overlay actually ended up covering the screen.
+    log::info!(
+        "macos_overlay::cover_current_monitor: after resize/move, outer_position={:?} outer_size={:?}",
+        win.outer_position(),
+        win.outer_size()
+    );
 }
 
 /// Runs on the overlay's main-thread dispatch. `hide_menu_bar_and_dock` is
@@ -222,13 +342,18 @@ pub fn prepare_window_before_show(win: &WebviewWindow) {
     }
 }
 
-/// Ordering a visible window out and straight back in is the only way to make
-/// the WindowServer re-decide which Space it belongs to. Used when the overlay
-/// is confirmed to have landed off the active Space despite the accessory
-/// policy and `CanJoinAllSpaces` both being in effect by then -- the window was
-/// placed before one of them landed, and nothing short of re-ordering it moves
-/// it afterwards. Costs a single frame of flicker in the case where the overlay
-/// is currently invisible to the user anyway.
+/// Ordering a visible window out and straight back in makes the WindowServer
+/// re-decide which Space the window belongs to, for the case where it landed on
+/// the wrong *desktop* Space.
+///
+/// Kept as a cheap last-ditch recovery, but deliberately no longer treated as
+/// the fix for the full-screen case: measured on a real Mac, this does **not**
+/// rescue a window that was created while the process was `Regular` -- such a
+/// window is permanently ineligible for a full-screen Space and re-ordering it
+/// in changes nothing (a real user's log shows exactly that, this firing and
+/// `isOnActiveSpace` still reading false straight afterwards). See
+/// `with_accessory_policy`. Costs a single frame of flicker in the case where
+/// the overlay is currently invisible to the user anyway.
 fn force_space_replacement(ns_window: &NSWindow) {
     ns_window.orderOut(None);
     ns_window.orderFrontRegardless();

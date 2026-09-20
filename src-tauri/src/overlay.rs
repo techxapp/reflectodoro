@@ -42,6 +42,18 @@ pub async fn wait_for_webview_warmup(app: &AppHandle) {
 pub fn precreate_windows(app: &AppHandle) {
     if app.get_webview_window(OVERLAY_LABEL).is_none() {
         log::info!("precreate_windows: building {OVERLAY_LABEL}");
+        // macOS: whether this window will ever be allowed onto another app's
+        // full-screen Space is decided *here*, when the NSWindow is created,
+        // by the process's activation policy at this instant -- not later, when
+        // the break opens. Building it under the accessory policy (and handing
+        // the Dock icon straight back) is the whole fix for "the break screen
+        // didn't interrupt my full-screen app". See
+        // macos_overlay::with_accessory_policy for the measurements.
+        #[cfg(target_os = "macos")]
+        crate::macos_overlay::with_accessory_policy(app, || {
+            build_overlay_window(app, false);
+        });
+        #[cfg(not(target_os = "macos"))]
         build_overlay_window(app, false);
     }
     if app.get_webview_window(CHECKIN_LABEL).is_none() {
@@ -104,6 +116,16 @@ fn build_overlay_window(app: &AppHandle, visible: bool) -> WebviewWindow {
 pub async fn spawn_or_update_overlay(app: &AppHandle) {
     #[cfg(desktop)]
     {
+        // Hoisted above the lookup/rebuild below (it used to sit inside the
+        // `!is_visible` block): on the fallback path where the overlay window
+        // has to be rebuilt, the window must be *created* under the accessory
+        // policy or it can never cover another app's full-screen Space -- see
+        // macos_overlay::with_accessory_policy. A no-op when the process is
+        // already Accessory, which is the case for every subsequent call
+        // within one break.
+        #[cfg(target_os = "macos")]
+        crate::macos_overlay::enter_accessory_policy(app);
+
         let win = match app.get_webview_window(OVERLAY_LABEL) {
             Some(win) => win,
             None => build_overlay_window(app, false),
@@ -120,14 +142,13 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
         log::info!("spawn_or_update_overlay: overlay window is_visible={is_visible:?}");
 
         if !is_visible.unwrap_or(false) {
-            // Both must happen before `.show()`. The accessory policy is what
-            // lets the window appear over another app's full-screen Space at
-            // all (see macos_overlay.rs); covering the screen is the macOS
-            // substitute for the `.fullscreen(true)` skipped above, and doing
-            // it after `.show()` would flash the previous small frame first.
+            // Covering the screen is the macOS substitute for the
+            // `.fullscreen(true)` skipped above, and doing it after `.show()`
+            // would flash the previous small frame first. (The accessory-policy
+            // switch that used to live here now runs above, before the window
+            // can be rebuilt.)
             #[cfg(target_os = "macos")]
             {
-                crate::macos_overlay::enter_accessory_policy(app);
                 crate::macos_overlay::cover_current_monitor(&win);
                 // Collection behavior/level must also be in place *before* the
                 // window is ordered in -- the WindowServer picks the window's
