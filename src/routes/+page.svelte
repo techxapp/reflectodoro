@@ -455,8 +455,58 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 20px;
-    max-width: 900px;
+    max-width: 1200px;
     margin: 0 auto;
+  }
+
+  /* Large windows: scale the type/padding up alongside the wider cap so the
+     cards fill the space instead of floating in it. min-width only, so small
+     windows and Android keep the base sizes (the max-width: 600px block below
+     still wins there). */
+  @media (min-width: 1200px) {
+    .page {
+      padding: 32px;
+      gap: 28px;
+    }
+
+    .card {
+      padding: 32px;
+    }
+
+    .label,
+    .sub,
+    .hint,
+    .permission-button,
+    .sync-button {
+      font-size: 14px;
+    }
+
+    .big {
+      font-size: 64px;
+    }
+
+    h2 {
+      font-size: 18px;
+    }
+
+    .toggle,
+    .pomodoro-select {
+      font-size: 16px;
+      padding: 12px 20px;
+    }
+
+    textarea {
+      font-size: 16px;
+      padding: 12px 14px;
+    }
+
+    .paired-device-name {
+      font-size: 16px;
+    }
+
+    label.checkbox {
+      font-size: 15px;
+    }
   }
 
   @media (max-width: 600px) {

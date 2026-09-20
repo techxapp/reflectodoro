@@ -245,8 +245,19 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
-    max-width: 840px;
+    max-width: 1200px;
     margin: 0 auto;
+  }
+
+  /* Large windows: scale the whole page (text, controls, spacing) up together
+     rather than overriding each hard-coded px size. The cap is divided by the
+     same factor so the rendered width stays 1200px. min-width only, so small
+     windows and Android keep the base sizes. */
+  @media (min-width: 1200px) {
+    .page {
+      zoom: 1.15;
+      max-width: calc(1200px / 1.15);
+    }
   }
 
   .card {
