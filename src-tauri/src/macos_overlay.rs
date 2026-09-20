@@ -75,7 +75,7 @@ use std::time::Duration;
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
-    NSApplication, NSApplicationPresentationOptions, NSScreenSaverWindowLevel, NSWindow,
+    NSApplication, NSApplicationPresentationOptions, NSScreen, NSScreenSaverWindowLevel, NSWindow,
     NSWindowCollectionBehavior,
 };
 use tauri::{ActivationPolicy, AppHandle, Manager, Position, Size, WebviewWindow};
@@ -196,7 +196,7 @@ pub fn with_accessory_policy<R>(app: &AppHandle, build: impl FnOnce() -> R) -> R
 /// back to the primary monitor if the window isn't associated with one yet
 /// (e.g. its first-ever show). Must be called before `.show()` -- calling it
 /// after would flash the window at its previous (small default) frame first.
-pub fn cover_current_monitor(win: &WebviewWindow) {
+pub fn cover_current_monitor(win: &WebviewWindow, hide_menu_bar_and_dock: bool) {
     let monitor = match win.current_monitor() {
         Ok(Some(m)) => Some(m),
         Ok(None) => {
@@ -232,10 +232,19 @@ pub fn cover_current_monitor(win: &WebviewWindow) {
     // and whatever app was under it -- fully visible and clickable during a
     // break. Sizing first makes the conversion use the final height, landing
     // the window at y=0.
-    if let Err(e) = win.set_size(Size::Physical(*monitor.size())) {
+    // With the menu bar/Dock toggle off, cover only the screen's visibleFrame
+    // (everything but the menu bar and Dock) so both stay visible; toggle on
+    // (or any lookup failure) keeps the full monitor bounds.
+    let (target_pos, target_size) = if hide_menu_bar_and_dock {
+        (*monitor.position(), *monitor.size())
+    } else {
+        visible_frame_physical(win, &monitor)
+            .unwrap_or((*monitor.position(), *monitor.size()))
+    };
+    if let Err(e) = win.set_size(Size::Physical(target_size)) {
         log::warn!("macos_overlay::cover_current_monitor: set_size failed: {e:?}");
     }
-    if let Err(e) = win.set_position(Position::Physical(*monitor.position())) {
+    if let Err(e) = win.set_position(Position::Physical(target_pos)) {
         log::warn!("macos_overlay::cover_current_monitor: set_position failed: {e:?}");
     }
     // Logged as an outcome, not just an attempt (see CLAUDE.md's note on
@@ -246,6 +255,72 @@ pub fn cover_current_monitor(win: &WebviewWindow) {
         win.outer_position(),
         win.outer_size()
     );
+}
+
+/// How many menu-bar-heights of the screen's top edge stay uncovered when the
+/// menu bar/Dock toggle is off (the menu bar itself counts as the first), so
+/// the tray icon's menu (Quit) stays reachable if a break gets stuck.
+const UNCOVERED_TOP_ROWS: f64 = 5.0;
+
+/// The monitor's `NSScreen.visibleFrame` (screen minus menu bar and Dock) in
+/// tao's coordinate space: top-left origin, physical pixels. `None` if the
+/// matching screen can't be found, in which case the caller covers the whole
+/// monitor. NSScreen is main-thread-only, so off the main thread this hops
+/// over and waits briefly.
+fn visible_frame_physical(
+    win: &WebviewWindow,
+    monitor: &tauri::window::Monitor,
+) -> Option<(tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>)> {
+    let mpos = *monitor.position();
+    let msize = *monitor.size();
+    let scale = monitor.scale_factor();
+    let compute = move || -> Option<(tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>)> {
+        let mtm = MainThreadMarker::new()?;
+        let screens = NSScreen::screens(mtm);
+        let primary_h = screens.iter().next()?.frame().size.height;
+        for screen in screens.iter() {
+            let f = screen.frame();
+            let px = (f.origin.x * scale).round() as i32;
+            let py = ((primary_h - (f.origin.y + f.size.height)) * scale).round() as i32;
+            let pw = (f.size.width * scale).round() as i64;
+            let ph = (f.size.height * scale).round() as i64;
+            if (px - mpos.x).abs() > 2
+                || (py - mpos.y).abs() > 2
+                || (pw - msize.width as i64).abs() > 2
+                || (ph - msize.height as i64).abs() > 2
+            {
+                continue;
+            }
+            let v = screen.visibleFrame();
+            // Menu-bar-row height in points; the top inset is the menu bar
+            // (notched Macs make it taller), with a fallback for when the
+            // menu bar is auto-hidden and the inset reads 0.
+            let top_inset = (f.origin.y + f.size.height) - (v.origin.y + v.size.height);
+            let row_h = if top_inset > 1.0 { top_inset } else { 24.0 };
+            let extra = row_h * (UNCOVERED_TOP_ROWS - 1.0);
+            let vx = (v.origin.x * scale).round() as i32;
+            let vy = ((primary_h - (v.origin.y + v.size.height) + extra) * scale).round() as i32;
+            let vw = (v.size.width * scale).round().max(1.0) as u32;
+            let vh = ((v.size.height - extra) * scale).round().max(1.0) as u32;
+            return Some((
+                tauri::PhysicalPosition::new(vx, vy),
+                tauri::PhysicalSize::new(vw, vh),
+            ));
+        }
+        None
+    };
+    let result = if MainThreadMarker::new().is_some() {
+        compute()
+    } else {
+        let (tx, rx) = std::sync::mpsc::channel();
+        win.run_on_main_thread(move || {
+            let _ = tx.send(compute());
+        })
+        .ok()?;
+        rx.recv_timeout(Duration::from_millis(500)).ok().flatten()
+    };
+    log::info!("macos_overlay::visible_frame_physical: {result:?}");
+    result
 }
 
 /// Runs on the overlay's main-thread dispatch. `hide_menu_bar_and_dock` is

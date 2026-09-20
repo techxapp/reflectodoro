@@ -149,7 +149,10 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
             // can be rebuilt.)
             #[cfg(target_os = "macos")]
             {
-                crate::macos_overlay::cover_current_monitor(&win);
+                crate::macos_overlay::cover_current_monitor(
+                    &win,
+                    crate::MACOS_HIDE_MENU_BAR_DOCK_ENABLED.load(Ordering::SeqCst),
+                );
                 // Collection behavior/level must also be in place *before* the
                 // window is ordered in -- the WindowServer picks the window's
                 // Space at order-in time and will not move it afterwards. See
