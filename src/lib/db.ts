@@ -1072,6 +1072,62 @@ export async function loadAndSyncMacosHideMenuBarDockSetting(): Promise<boolean>
   return enabled;
 }
 
+// --- macOS media-pause mechanism (Settings) ----------------------------
+// macOS pauses media through the private MediaRemote framework by default,
+// which needs no permission at all. This forces the legacy synthetic
+// media-key path instead, which does need Accessibility (post-event) access.
+// Off by default -- an escape hatch for a Mac where MediaRemote resolves but
+// does nothing, not something a user should normally need. The *automatic*
+// fallback (MediaRemote's symbol failing to resolve at all) is separate and
+// doesn't go through this key -- see media.rs's select_macos_pause_strategy.
+// Registered/stored unconditionally like the other toggles so the Settings
+// page needs no platform branching just to persist a value.
+
+const MACOS_MEDIA_KEY_FALLBACK_KEY = "macos_media_key_fallback_enabled";
+
+export async function getMacosMediaKeyFallbackEnabled(): Promise<boolean> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [MACOS_MEDIA_KEY_FALLBACK_KEY],
+  );
+  // Defaults false here as well as in SEED_SETTINGS: an install that predates
+  // this key simply has no row, and must get the permission-free default.
+  return (rows[0]?.value ?? "false") === "true";
+}
+
+export async function saveMacosMediaKeyFallbackEnabled(enabled: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [MACOS_MEDIA_KEY_FALLBACK_KEY, String(enabled)],
+  );
+  await syncMacosMediaKeyFallbackToBackend(enabled);
+}
+
+export async function syncMacosMediaKeyFallbackToBackend(enabled: boolean): Promise<void> {
+  await invoke("set_macos_media_key_fallback_enabled", { enabled });
+}
+
+/** Call once on app boot (main window) so Rust's in-memory flag matches SQLite. */
+export async function loadAndSyncMacosMediaKeyFallbackSetting(): Promise<boolean> {
+  const enabled = await getMacosMediaKeyFallbackEnabled();
+  await syncMacosMediaKeyFallbackToBackend(enabled);
+  return enabled;
+}
+
+/** What a break would actually do to pause media right now (see media.rs). */
+export type MediaPauseStatus = {
+  backend: "mediaremote" | "media_key" | "other";
+  mediaRemoteAvailable: boolean;
+  postEventGranted: boolean;
+};
+
+export async function getMediaPauseStatus(): Promise<MediaPauseStatus> {
+  return await invoke<MediaPauseStatus>("get_media_pause_status");
+}
+
 // --- Android break-notification persistence toggle (Settings) ----------
 // Android only in effect (see overlay.rs's spawn_or_update_overlay /
 // BreakScheduling.kt's postBreakNotification) -- whether the break
@@ -2064,6 +2120,7 @@ export async function importData(
     await loadAndSyncForceCloseShortcutSetting();
     await loadAndSyncOverlayAutoClose();
     await loadAndSyncMediaPauseOnBreakSetting();
+    await loadAndSyncMacosMediaKeyFallbackSetting();
     await loadAndSyncScreenTimeTrackingSetting();
     await loadAndSyncMediaToggleGuard();
     // device_name is read through a process-lifetime cache (see

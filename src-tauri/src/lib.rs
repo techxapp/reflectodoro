@@ -193,12 +193,37 @@ pub(crate) static SCREEN_TIME_TRACKING_ENABLED: AtomicBool = AtomicBool::new(tru
 /// desktop than anything else this app does.
 pub(crate) static MACOS_HIDE_MENU_BAR_DOCK_ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// Forces macOS's media pause onto the legacy synthetic-media-key path, which
+/// needs Accessibility (post-event) access, instead of the permission-free
+/// MediaRemote default. Backed by `app_setting.macos_media_key_fallback_enabled`;
+/// same load/push pattern as `MEDIA_PAUSE_ON_BREAK_ENABLED`. Defaults to
+/// `false` -- an escape hatch for a Mac where MediaRemote resolves but does
+/// nothing, not something a user should ever need to find. Note the automatic
+/// fallback (MediaRemote's symbol failing to resolve) is separate and does not
+/// go through this flag; see media.rs's `select_macos_pause_strategy`.
+pub(crate) static MACOS_MEDIA_KEY_FALLBACK_ENABLED: AtomicBool = AtomicBool::new(false);
+
 /// macOS-only media-toggle guard state (see media.rs's macos_impl module): the
 /// RFC3339 UTC time the last synthetic Play/Pause key was actually posted.
 /// Written by media.rs itself, and persisted to `app_setting.last_toggle_time`
 /// by the frontend via the `media-toggle://recorded` event so it survives a
 /// crash/relaunch mid-break.
+///
+/// Media-key path only. The MediaRemote default never writes this, so on a
+/// normal install it -- and `app_setting.last_toggle_time` -- simply stop
+/// advancing. That is correct, not a regression: the guard exists to stop a
+/// second *toggle* within one break, and MediaRemote sends an explicit,
+/// idempotent pause instead.
 pub(crate) static LAST_MEDIA_TOGGLE_AT: Mutex<Option<String>> = Mutex::new(None);
+
+/// macOS-only: the RFC3339 UTC time the user last pressed "Play" on the break
+/// screen's media control. Stops a mid-break overlay re-show (relaunch,
+/// suspend-resume) from immediately re-pausing what the user deliberately
+/// resumed -- the MediaRemote path's counterpart to
+/// `already_toggled_this_break`. Deliberately in-memory only: unlike
+/// `LAST_MEDIA_TOGGLE_AT` there is no `app_setting` row behind it, since
+/// losing it on relaunch just means the next break pauses normally.
+pub(crate) static MEDIA_USER_RESUMED_AT: Mutex<Option<String>> = Mutex::new(None);
 
 /// How long after a break ends the overlay force-closes even without a
 /// reflection. Backed by `app_setting.overlay_auto_close_minutes`; the
@@ -918,6 +943,11 @@ pub fn run() {
             commands::set_break_notification_persistent_enabled,
             commands::get_macos_hide_menu_bar_dock_enabled,
             commands::set_macos_hide_menu_bar_dock_enabled,
+            commands::get_macos_media_key_fallback_enabled,
+            commands::set_macos_media_key_fallback_enabled,
+            commands::get_media_pause_status,
+            commands::overlay_media_play,
+            commands::overlay_media_pause,
             commands::get_screen_time_tracking_enabled,
             commands::set_screen_time_tracking_enabled,
             commands::get_current_session_snapshot,

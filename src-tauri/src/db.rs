@@ -293,6 +293,7 @@ const SEED_SETTINGS: &[(&str, &str)] = &[
     ("media_pause_on_break_enabled", "true"),
     ("break_notification_persistent_enabled", "true"),
     ("macos_hide_menu_bar_dock_enabled", "false"),
+    ("macos_media_key_fallback_enabled", "false"),
     ("screen_time_tracking_enabled", "true"),
     ("device_name", ""),
     ("screen_time_app_threshold_minutes", "5"),

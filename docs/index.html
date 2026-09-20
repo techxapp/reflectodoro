@@ -1578,6 +1578,8 @@
             <div class="timeline-entry reveal">
               <p class="timeline-date">Sunday, Sep 20, 2026</p>
               <ul class="timeline-items">
+                <li>macOS now pauses your media during a break without asking for any permission at all. Until now this needed Accessibility access, which quietly stopped working after most updates and had to be re-granted by hand &mdash; and because it worked by sending a Play/Pause key, it could just as easily un-pause something you had paused yourself. The new method pauses rather than toggles, so it can't do that. The old method is still there as a switch in Settings if you ever need it</li>
+                <li>Added Pause and Resume buttons to the break screen on macOS, so you can silence music or bring it back without hunting for the app behind the break screen</li>
                 <li>Fixed the macOS break screen still not interrupting full-screen apps &mdash; the one remaining case where a break could pass you by entirely while you watched a video. The break screen is now prepared in a way that lets macOS place it over a full-screen app at all, which no amount of adjusting it afterwards could achieve</li>
                 <li>Fixed the macOS break screen covering only the top portion of the display, leaving the bottom of your desktop visible and clickable during a break</li>
                 <li>Added an automated test that puts a real full-screen app on screen and checks the break screen actually covers it, judged from outside the app &mdash; this bug looked completely fine from the inside three times running</li>
