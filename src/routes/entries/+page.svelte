@@ -46,6 +46,10 @@
   let wellnessSummary = $state<WellnessSummary>(EMPTY_WELLNESS_SUMMARY);
   let calendarMonth = $state(new Date());
   let loading = $state(false);
+  // Set when a load rejects (e.g. decrypt failure) so the page shows the
+  // problem instead of sitting on "Loading..." forever.
+  let loadError = $state<string | null>(null);
+  let screenTimeError = $state<string | null>(null);
   let expandedClusters = $state<Set<number>>(new Set());
   let editingId = $state<number | null>(null);
   let editText = $state("");
@@ -176,19 +180,26 @@
 
   async function load() {
     loading = true;
+    loadError = null;
     const stamp = selectedStamp;
     const generation = ++loadGeneration;
-    const [r, t, n, w] = await Promise.all([
-      getReflectionsForDate(stamp),
-      getTaskList(stamp),
-      getNotToDoList(stamp),
-      getWellnessSummaryForDate(stamp),
-    ]);
-    if (generation !== loadGeneration) return;
-    reflectionRows = r;
-    taskList = t;
-    notToDo = n;
-    wellnessSummary = w;
+    try {
+      const [r, t, n, w] = await Promise.all([
+        getReflectionsForDate(stamp),
+        getTaskList(stamp),
+        getNotToDoList(stamp),
+        getWellnessSummaryForDate(stamp),
+      ]);
+      if (generation !== loadGeneration) return;
+      reflectionRows = r;
+      taskList = t;
+      notToDo = n;
+      wellnessSummary = w;
+    } catch (e) {
+      if (generation !== loadGeneration) return;
+      console.error("entries: load failed", e);
+      loadError = e instanceof Error ? e.message : String(e);
+    }
     loading = false;
   }
 
@@ -485,15 +496,27 @@
     const stamp = selectedStamp;
     const forToday = stamp === localDateStamp(new Date());
     const generation = ++screenTimeGeneration;
-    const [enabled, entries, deviceName, current, thresholdMinutes] = await Promise.all([
-      getScreenTimeTrackingEnabled(),
-      getScreenTimeForDate(stamp),
-      getDeviceName(),
-      // Only today can have an in-progress session to blend in; asking on any
-      // other day would attribute the currently-focused app to that day.
-      forToday ? getCurrentScreenTimeSession() : Promise.resolve(null),
-      getScreenTimeAppThresholdMinutes(),
-    ]);
+    screenTimeError = null;
+    let enabled: boolean, entries: ScreenTimeEntry[], deviceName: string;
+    let current: Awaited<ReturnType<typeof getCurrentScreenTimeSession>>;
+    let thresholdMinutes: number;
+    try {
+      [enabled, entries, deviceName, current, thresholdMinutes] = await Promise.all([
+        getScreenTimeTrackingEnabled(),
+        getScreenTimeForDate(stamp),
+        getDeviceName(),
+        // Only today can have an in-progress session to blend in; asking on any
+        // other day would attribute the currently-focused app to that day.
+        forToday ? getCurrentScreenTimeSession() : Promise.resolve(null),
+        getScreenTimeAppThresholdMinutes(),
+      ]);
+    } catch (e) {
+      if (generation !== screenTimeGeneration) return;
+      console.error("entries: screen time load failed", e);
+      screenTimeError = e instanceof Error ? e.message : String(e);
+      screenTimeLoaded = true;
+      return;
+    }
     if (generation !== screenTimeGeneration) return;
 
     let blended = entries;
@@ -637,6 +660,11 @@
          status banners. -->
     {#if !screenTimeLoaded}
       <p class="hint">Loading&hellip;</p>
+    {:else if screenTimeError}
+      <p class="load-error" role="alert">
+        Couldn't load screen time: {screenTimeError}
+        <button onclick={() => void loadScreenTime()}>Retry</button>
+      </p>
     {:else if screenTime.length === 0 && !screenTimeTrackingOn}
       <p class="hint">
         Tracking is off. Turn it on in <a href="/settings">Settings</a> to see where your day went.
@@ -690,6 +718,11 @@
 
     {#if loading}
       <p class="hint">Loading...</p>
+    {:else if loadError}
+      <p class="load-error" role="alert">
+        Couldn't load this day's entries: {loadError}
+        <button onclick={() => void load()}>Retry</button>
+      </p>
     {:else}
       {#if wellnessSummary.total > 0}
         <div class="wellness-summary">
@@ -1579,6 +1612,14 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .load-error {
+    color: #c0392b;
+    font-size: 0.9rem;
+    margin: 0.5rem 0;
+  }
+  .load-error button {
+    margin-left: 0.5rem;
+  }
   .hint {
     color: var(--text-dim);
     font-size: 13px;
