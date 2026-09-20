@@ -53,6 +53,65 @@ fn resolve_dev_mode() -> bool {
     }
 }
 
+/// Testing aid, off unless `POMODORO_FORCE_BREAK_ON_START=1` is set in the
+/// environment: makes `run_scheduler`'s **first** iteration treat the current
+/// slot as a `Break`, so the overlay opens within a few seconds of launch
+/// instead of at the next real `:25`/`:55` boundary.
+///
+/// `npm run tauri dev` restarts the app on every Rust change, so exporting this
+/// once gives you a break screen on every rebuild -- the intended way to iterate
+/// on overlay behavior (and what `tools/macos-fullscreen-overlay-test` drives to
+/// check, automatically, that the overlay actually covers another app's
+/// full-screen Space).
+///
+/// Only the first iteration is forced: the break then ends at the current
+/// slot's real boundary and the grid carries on untouched, so this can't leave
+/// the app stuck in a permanent break. It deliberately reads the environment
+/// rather than a Settings/`app_setting` key -- it is a developer switch, not a
+/// user-facing feature, and nothing should be able to turn it on by accident on
+/// a real install.
+fn force_break_on_start() -> bool {
+    matches!(std::env::var("POMODORO_FORCE_BREAK_ON_START").as_deref(), Ok("1"))
+}
+
+/// Seconds to wait before firing a `POMODORO_FORCE_BREAK_ON_START` break
+/// (`POMODORO_FORCE_BREAK_DELAY_S`, default 0).
+///
+/// Exists because a break that fires the instant the app finishes booting can't
+/// reproduce the full-screen bug at all: launching the app shows its main
+/// window, which makes macOS switch away from whatever full-screen Space you
+/// were on, so the overlay then opens over an ordinary desktop and passes for
+/// the wrong reason. A delay lets the app settle first and the screen be
+/// arranged (full-screen app opened, Space switched to) before the break
+/// arrives -- the order a real break happens in.
+///
+/// Implemented as a plain sleep before `run_scheduler`'s loop, so the grid
+/// simply isn't evaluated for that long. Acceptable for a developer-only
+/// switch; it is why this reads the environment rather than being a setting.
+fn force_break_delay() -> StdDuration {
+    let secs = std::env::var("POMODORO_FORCE_BREAK_DELAY_S")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    StdDuration::from_secs(secs)
+}
+
+/// How long a `POMODORO_FORCE_BREAK_ON_START` break is held open for, in
+/// minutes (`POMODORO_FORCE_BREAK_MINUTES`, default 2).
+///
+/// Without a floor, a forced break inherits the *real* slot's end, which can be
+/// seconds away -- launch the app at `:29:55` and the overlay opens and closes
+/// again before you can look at it, which is exactly what the first automated
+/// run of this did. Applied as a minimum, never a maximum, so it can only
+/// extend the break, and only on the forced iteration.
+fn force_break_minutes() -> i64 {
+    std::env::var("POMODORO_FORCE_BREAK_MINUTES")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|m| *m > 0)
+        .unwrap_or(2)
+}
+
 pub(crate) static POMODORO_ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// Epoch-millis resume time for an active "snooze" (Pomodoro mode
@@ -134,12 +193,37 @@ pub(crate) static SCREEN_TIME_TRACKING_ENABLED: AtomicBool = AtomicBool::new(tru
 /// desktop than anything else this app does.
 pub(crate) static MACOS_HIDE_MENU_BAR_DOCK_ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// Forces macOS's media pause onto the legacy synthetic-media-key path, which
+/// needs Accessibility (post-event) access, instead of the permission-free
+/// MediaRemote default. Backed by `app_setting.macos_media_key_fallback_enabled`;
+/// same load/push pattern as `MEDIA_PAUSE_ON_BREAK_ENABLED`. Defaults to
+/// `false` -- an escape hatch for a Mac where MediaRemote resolves but does
+/// nothing, not something a user should ever need to find. Note the automatic
+/// fallback (MediaRemote's symbol failing to resolve) is separate and does not
+/// go through this flag; see media.rs's `select_macos_pause_strategy`.
+pub(crate) static MACOS_MEDIA_KEY_FALLBACK_ENABLED: AtomicBool = AtomicBool::new(false);
+
 /// macOS-only media-toggle guard state (see media.rs's macos_impl module): the
 /// RFC3339 UTC time the last synthetic Play/Pause key was actually posted.
 /// Written by media.rs itself, and persisted to `app_setting.last_toggle_time`
 /// by the frontend via the `media-toggle://recorded` event so it survives a
 /// crash/relaunch mid-break.
+///
+/// Media-key path only. The MediaRemote default never writes this, so on a
+/// normal install it -- and `app_setting.last_toggle_time` -- simply stop
+/// advancing. That is correct, not a regression: the guard exists to stop a
+/// second *toggle* within one break, and MediaRemote sends an explicit,
+/// idempotent pause instead.
 pub(crate) static LAST_MEDIA_TOGGLE_AT: Mutex<Option<String>> = Mutex::new(None);
+
+/// macOS-only: the RFC3339 UTC time the user last pressed "Play" on the break
+/// screen's media control. Stops a mid-break overlay re-show (relaunch,
+/// suspend-resume) from immediately re-pausing what the user deliberately
+/// resumed -- the MediaRemote path's counterpart to
+/// `already_toggled_this_break`. Deliberately in-memory only: unlike
+/// `LAST_MEDIA_TOGGLE_AT` there is no `app_setting` row behind it, since
+/// losing it on relaunch just means the next break pauses normally.
+pub(crate) static MEDIA_USER_RESUMED_AT: Mutex<Option<String>> = Mutex::new(None);
 
 /// How long after a break ends the overlay force-closes even without a
 /// reflection. Backed by `app_setting.overlay_auto_close_minutes`; the
@@ -277,6 +361,18 @@ pub(crate) fn apply_pomodoro_enabled(app: &AppHandle, enabled: bool) {
 async fn run_scheduler(app: AppHandle) {
     let mut last_phase: Option<Phase> = None;
     let mut expected_wake: Option<DateTime<Local>> = None;
+    // Consumed by the first iteration only -- see force_break_on_start.
+    let mut force_break_pending = force_break_on_start();
+    if force_break_pending {
+        let delay = force_break_delay();
+        log::info!(
+            "scheduler: POMODORO_FORCE_BREAK_ON_START=1 -- opening a break regardless of the wall-clock grid, after a {}s delay",
+            delay.as_secs()
+        );
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+    }
 
     loop {
         let now = Local::now();
@@ -345,7 +441,24 @@ async fn run_scheduler(app: AppHandle) {
             }
         }
 
-        let slot = grid::slot_for(now);
+        let mut slot = grid::slot_for(now);
+
+        // Testing aid only (see force_break_on_start): overrides the phase for
+        // one iteration. `slot.end` is deliberately left as the real work
+        // slot's end, so the forced break closes itself at the next genuine
+        // boundary and `last_phase` rejoins the normal grid from there.
+        if force_break_pending {
+            force_break_pending = false;
+            slot.phase = Phase::Break;
+            let floor = now + chrono::Duration::minutes(force_break_minutes());
+            if slot.end < floor {
+                slot.end = floor;
+            }
+            log::info!(
+                "scheduler: forced Break for this iteration (POMODORO_FORCE_BREAK_ON_START), holding it open until {}",
+                slot.end.to_rfc3339()
+            );
+        }
 
         if last_phase != Some(slot.phase) {
             log::info!(
@@ -830,6 +943,11 @@ pub fn run() {
             commands::set_break_notification_persistent_enabled,
             commands::get_macos_hide_menu_bar_dock_enabled,
             commands::set_macos_hide_menu_bar_dock_enabled,
+            commands::get_macos_media_key_fallback_enabled,
+            commands::set_macos_media_key_fallback_enabled,
+            commands::get_media_pause_status,
+            commands::overlay_media_play,
+            commands::overlay_media_pause,
             commands::get_screen_time_tracking_enabled,
             commands::set_screen_time_tracking_enabled,
             commands::get_current_session_snapshot,

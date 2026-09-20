@@ -16,7 +16,7 @@ use crate::screen_time;
 use crate::state::{AppState, OverlayState};
 use crate::{
     apply_pomodoro_enabled, BREAK_NOTIFICATION_PERSISTENT_ENABLED, FORCE_CLOSE_SHORTCUT_ENABLED,
-    LAST_MEDIA_TOGGLE_AT, MACOS_HIDE_MENU_BAR_DOCK_ENABLED,
+    LAST_MEDIA_TOGGLE_AT, MACOS_HIDE_MENU_BAR_DOCK_ENABLED, MACOS_MEDIA_KEY_FALLBACK_ENABLED,
     MEDIA_PAUSE_ON_BREAK_ENABLED, OVERLAY_AUTO_CLOSE_MINUTES, POMODORO_ENABLED,
     POMODORO_SNOOZE_MINUTES, POMODORO_SNOOZE_UNTIL_MS, SCREEN_TIME_TRACKING_ENABLED,
     SNOOZE_MAX_MINUTES, SNOOZE_MIN_MINUTES,
@@ -487,6 +487,64 @@ pub fn get_media_key_permission_granted() -> bool {
 #[tauri::command]
 pub async fn request_media_key_permission() {
     crate::media::request_media_key_permission();
+}
+
+/// Mirrors app_setting.macos_media_key_fallback_enabled -- loaded and pushed
+/// here by the frontend on boot and on every Settings save (see
+/// loadAndSyncMacosMediaKeyFallbackSetting in db.ts). Registered
+/// unconditionally (not `#[cfg(target_os = "macos")]`) so the frontend can
+/// call it on any platform without a per-platform invoke gate; the flag is
+/// simply never read off macOS (see media.rs).
+#[tauri::command]
+pub fn get_macos_media_key_fallback_enabled() -> bool {
+    MACOS_MEDIA_KEY_FALLBACK_ENABLED.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+pub fn set_macos_media_key_fallback_enabled(enabled: bool) {
+    MACOS_MEDIA_KEY_FALLBACK_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+/// What a break would actually do to pause media right now.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaPauseStatus {
+    /// "mediaremote" | "media_key" | "other" (every non-macOS platform).
+    pub backend: &'static str,
+    /// macOS: whether MRMediaRemoteSendCommand resolved at all.
+    pub media_remote_available: bool,
+    /// macOS post-event (Accessibility) access; always true elsewhere, since
+    /// no other platform gates media pause on a permission.
+    pub post_event_granted: bool,
+}
+
+/// Deliberately recomputed on every call rather than cached: the Settings
+/// fallback toggle changes `backend` at runtime, and the main window uses this
+/// to decide whether to show the Accessibility grant button at all.
+#[tauri::command]
+pub fn get_media_pause_status() -> MediaPauseStatus {
+    MediaPauseStatus {
+        backend: crate::media::pause_backend(),
+        media_remote_available: crate::media::media_remote_available(),
+        post_event_granted: crate::media::media_key_permission_granted(),
+    }
+}
+
+/// Break-screen media controls (macOS only in practice -- everywhere else
+/// these are stubs returning false, and the overlay hides the control).
+///
+/// Two narrow commands rather than one taking a raw command id: nothing should
+/// let a webview hand an arbitrary integer to a private framework, and these
+/// self-document at the call site. `true` means the command was dispatched,
+/// NOT that playback actually changed -- that is unknowable (see media.rs).
+#[tauri::command]
+pub fn overlay_media_play() -> bool {
+    crate::media::media_remote_play()
+}
+
+#[tauri::command]
+pub fn overlay_media_pause() -> bool {
+    crate::media::media_remote_pause()
 }
 
 /// Mirrors app_setting.screen_time_tracking_enabled -- loaded and pushed here

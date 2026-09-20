@@ -43,6 +43,16 @@
   let comingNextText = $state<string | null>(null);
   let quoteApiUrl = $state<string | null>(null);
   let quoteText = $state<string | null>(null);
+  // Break-screen media control. Shown only where MediaRemote actually
+  // resolved (macOS), since that's the only platform that can play/pause
+  // another app's media from here without a permission.
+  let mediaControlAvailable = $state(false);
+  let mediaControlBusy = $state(false);
+  // Cleared per break. Never says "Paused"/"Playing": whether the command
+  // actually changed playback is genuinely unknowable (MediaRemote's
+  // now-playing getters are entitlement-walled since macOS 15.4).
+  let mediaControlSent = $state<string | null>(null);
+  let mediaControlSentTimer: ReturnType<typeof setTimeout> | null = null;
   let nowTick = $state(Date.now());
   // Submit-path state: guards against a double-submit racing two INSERTs for
   // the same slot, surfaces a save failure instead of leaving the user
@@ -275,8 +285,40 @@
     await invoke("dev_force_close");
   }
 
+  // Two explicit buttons rather than one toggle, deliberately: the break
+  // screen covers the player, so any assumed play/pause state would drift the
+  // moment the user hit a hardware media key -- and a button that said
+  // "Pause" while media was already paused would *resume* it, which is the
+  // exact blind-toggle failure the MediaRemote path exists to avoid. Both
+  // commands are idempotent, so neither can ever be wrong.
+  async function sendMediaCommand(command: "play" | "pause") {
+    mediaControlBusy = true;
+    try {
+      await invoke<boolean>(command === "play" ? "overlay_media_play" : "overlay_media_pause");
+      mediaControlSent = command === "play" ? "Resume sent" : "Pause sent";
+      if (mediaControlSentTimer) clearTimeout(mediaControlSentTimer);
+      mediaControlSentTimer = setTimeout(() => (mediaControlSent = null), 2000);
+    } catch (e) {
+      // Never let a media failure disturb the break screen.
+      void logInfo(`[overlay] media command failed: ${e}`);
+    } finally {
+      mediaControlBusy = false;
+    }
+  }
+
   onMount(async () => {
     devMode = await invoke<boolean>("is_dev_mode");
+    // Gates on availability, not on the selected pause backend: MediaRemote
+    // play/pause works regardless of which mechanism paused at break start,
+    // so a user who forced the media-key fallback still gets a working
+    // control here.
+    try {
+      mediaControlAvailable = (
+        await invoke<{ mediaRemoteAvailable: boolean }>("get_media_pause_status")
+      ).mediaRemoteAvailable;
+    } catch {
+      mediaControlAvailable = false;
+    }
     quoteApiUrl = (await getQuoteApiUrl()) || null;
 
     // Listener attached BEFORE the fallback invoke below -- mirrors
@@ -302,6 +344,7 @@
         breakitInput = "";
         saveError = null;
         showEscapeHatch = false;
+        mediaControlSent = null;
         // The overlay window sits `hidden` between breaks (up to 25 minutes),
         // during which Chromium/WebKit can throttle this component's
         // setInterval-driven `nowTick` (background timer throttling) --
@@ -368,6 +411,7 @@
   });
 
   onDestroy(() => {
+    if (mediaControlSentTimer) clearTimeout(mediaControlSentTimer);
     unlisten?.();
     unlistenTasks?.();
     unlistenNotToDo?.();
@@ -487,6 +531,35 @@
         ></textarea>
         <p class="hint">Auto-saves as you type.</p>
       </section>
+
+      {#if mediaControlAvailable}
+        <section class="panel side">
+          <h2>Media</h2>
+          <div class="media-buttons">
+            <button
+              type="button"
+              class="media-button"
+              disabled={mediaControlBusy}
+              onclick={() => sendMediaCommand("pause")}
+            >
+              Pause
+            </button>
+            <button
+              type="button"
+              class="media-button"
+              disabled={mediaControlBusy}
+              onclick={() => sendMediaCommand("play")}
+            >
+              Resume
+            </button>
+          </div>
+          {#if mediaControlSent}
+            <p class="hint ok">{mediaControlSent}</p>
+          {:else}
+            <p class="hint">Reflectodoro can't tell what's playing, so pick the one you want.</p>
+          {/if}
+        </section>
+      {/if}
 
       {#if quoteText}
         <section class="panel side quote-panel">
@@ -677,6 +750,20 @@
     font-size: 14px;
     opacity: 0.85;
     margin-top: 20px;
+  }
+
+  .media-buttons {
+    display: flex;
+    gap: 8px;
+  }
+
+  .media-button {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .media-button:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.16);
   }
 
   .escape-hatch {

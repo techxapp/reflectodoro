@@ -18,6 +18,8 @@
     loadAndSyncBreakNotificationPersistentSetting,
     loadAndSyncMediaToggleGuard,
     loadAndSyncMacosHideMenuBarDockSetting,
+    loadAndSyncMacosMediaKeyFallbackSetting,
+    getMediaPauseStatus,
     listenForTaskListUpdates,
     listenForNotToDoListUpdates,
     listenForMediaToggleRecorded,
@@ -46,6 +48,14 @@
   let isMacos = $state(false);
   // Defaults to true so nothing flashes before the real check resolves.
   let mediaKeyPermissionGranted = $state(true);
+  // Which mechanism a break would actually use to pause media. null until the
+  // first status read resolves -- same no-flash reasoning as the default
+  // above, and load-bearing here: the Accessibility grant button must never
+  // appear on the (default) MediaRemote path, which needs no permission.
+  let mediaPauseBackend = $state<string | null>(null);
+  // Distinguishes "the user chose the media-key path" from "this Mac can't
+  // use MediaRemote at all", which need different explanations.
+  let mediaRemoteAvailable = $state<boolean | null>(null);
   // Set once the user has actually pressed the grant button this session. A
   // request that comes back still-not-granted means macOS never showed a
   // prompt, which on this (unsigned, ad-hoc-signed) build almost always means
@@ -136,15 +146,21 @@
     }
   }
 
-  async function refreshMediaKeyPermission() {
+  // One round trip for both the effective backend and the permission state:
+  // the two are only ever read together, and the backend can change at any
+  // time from Settings, so it must be re-read rather than cached from boot.
+  async function refreshMediaPauseStatus() {
     if (!isMacos) return;
-    mediaKeyPermissionGranted = await invoke<boolean>("get_media_key_permission_granted");
+    const status = await getMediaPauseStatus();
+    mediaPauseBackend = status.backend;
+    mediaRemoteAvailable = status.mediaRemoteAvailable;
+    mediaKeyPermissionGranted = status.postEventGranted;
   }
 
   async function requestMediaKeyPermission() {
     await invoke("request_media_key_permission");
     mediaKeyPermissionRequested = true;
-    await refreshMediaKeyPermission();
+    await refreshMediaPauseStatus();
   }
 
   // Same fallback as settings/+page.svelte's deviceLabel -- device_name is
@@ -214,7 +230,7 @@
   // already delivers, and the Rust side no-ops cheaply when nothing is
   // opted in or nothing is due yet.
   function onWindowFocus() {
-    void refreshMediaKeyPermission();
+    void refreshMediaPauseStatus();
     void attemptAutoSync();
   }
 
@@ -230,7 +246,11 @@
     mediaPauseOnBreakEnabled = await loadAndSyncMediaPauseOnBreakSetting();
     mediaPauseOnBreakLoaded = true;
     isMacos = (await invoke<string>("current_os")) === "macos";
-    await refreshMediaKeyPermission();
+    // Must push the saved fallback flag into Rust BEFORE reading the status
+    // below: get_media_pause_status computes the effective backend from that
+    // in-memory flag, which starts at its default until this runs.
+    await loadAndSyncMacosMediaKeyFallbackSetting();
+    await refreshMediaPauseStatus();
     await loadAndSyncBreakNotificationPersistentSetting();
     await loadAndSyncMediaToggleGuard();
     await loadAndSyncMacosHideMenuBarDockSetting();
@@ -331,8 +351,16 @@
       >
         {mediaPauseOnBreakEnabled ? "Pause media on break: On" : "Pause media on break: Off"}
       </button>
-      {#if isMacos && mediaPauseOnBreakEnabled && !mediaKeyPermissionGranted}
-        <p class="hint">macOS needs Accessibility access for Reflectodoro to pause media.</p>
+      <!-- Only ever shown on the media-key path. The default MediaRemote path
+           needs no permission at all, so asking for one there would be a
+           prompt for something the app never uses. `mediaPauseBackend` stays
+           null until the status read resolves, so nothing flashes first. -->
+      {#if isMacos && mediaPauseOnBreakEnabled && mediaPauseBackend === "media_key" && !mediaKeyPermissionGranted}
+        <p class="hint">
+          {mediaRemoteAvailable === false
+            ? "This Mac can't use the permission-free method, so Reflectodoro needs Accessibility access to pause media."
+            : "You've switched on the media-key method, which needs Accessibility access to pause media."}
+        </p>
         <button class="toggle permission-button" onclick={requestMediaKeyPermission}>
           Grant Accessibility access…
         </button>

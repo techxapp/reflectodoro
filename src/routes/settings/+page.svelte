@@ -25,6 +25,9 @@
     getCheckinAutoCloseMinutes,
     saveCheckinAutoCloseMinutes,
     getMacosHideMenuBarDockEnabled,
+    getMacosMediaKeyFallbackEnabled,
+    saveMacosMediaKeyFallbackEnabled,
+    getMediaPauseStatus,
     saveMacosHideMenuBarDockEnabled,
     getScreenTimeTrackingEnabled,
     saveScreenTimeTrackingEnabled,
@@ -92,6 +95,13 @@
   let macosHideMenuBarDockEnabled = $state(false);
   let macosHideMenuBarDockLoaded = $state(false);
   let macosHideMenuBarDockBusy = $state(false);
+
+  let macosMediaKeyFallbackEnabled = $state(false);
+  let macosMediaKeyFallbackLoaded = $state(false);
+  let macosMediaKeyFallbackBusy = $state(false);
+  // Whether the permission-free path is even usable on this Mac, so the copy
+  // below can say "you turned this on" vs "this Mac can't do it the easy way".
+  let mediaRemoteAvailable = $state<boolean | null>(null);
 
   let screenTimeTrackingEnabled = $state(true);
   let screenTimeTrackingLoaded = $state(false);
@@ -341,6 +351,12 @@
   });
 
   onMount(async () => {
+    macosMediaKeyFallbackEnabled = await getMacosMediaKeyFallbackEnabled();
+    macosMediaKeyFallbackLoaded = true;
+    mediaRemoteAvailable = (await getMediaPauseStatus()).mediaRemoteAvailable;
+  });
+
+  onMount(async () => {
     breakNotificationPersistentEnabled = await getBreakNotificationPersistentEnabled();
     breakNotificationPersistentLoaded = true;
   });
@@ -525,6 +541,17 @@
       macosHideMenuBarDockEnabled = next;
     } finally {
       macosHideMenuBarDockBusy = false;
+    }
+  }
+
+  async function toggleMacosMediaKeyFallback() {
+    const next = !macosMediaKeyFallbackEnabled;
+    macosMediaKeyFallbackBusy = true;
+    try {
+      await saveMacosMediaKeyFallbackEnabled(next);
+      macosMediaKeyFallbackEnabled = next;
+    } finally {
+      macosMediaKeyFallbackBusy = false;
     }
   }
 
@@ -859,6 +886,31 @@
         way the Dock auto-hides for the duration of a break &mdash; macOS won't let an app block
         Cmd+Tab without that. Like the rest of the break screen, it's a strong deterrent, not an
         absolute lock: Activity Monitor/Force Quit always still works.
+      </p>
+    {/if}
+
+    {#if isMacos && macosMediaKeyFallbackLoaded}
+      <div class="data-row">
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={macosMediaKeyFallbackEnabled}
+            disabled={macosMediaKeyFallbackBusy}
+            onchange={toggleMacosMediaKeyFallback}
+          />
+          Pause media the old way (needs Accessibility access)
+        </label>
+      </div>
+      <p class="hint">
+        {#if mediaRemoteAvailable === false}
+          This Mac can't use the permission-free method, so Reflectodoro is already falling back to
+          the old one automatically &mdash; you don't need this switch.
+        {:else}
+          Leave this off. Reflectodoro normally pauses media through a method that needs no
+          permission at all. Turning this on switches to sending a Play/Pause key instead, which
+          needs Accessibility access and is a blind toggle &mdash; it can resume media you'd
+          already paused yourself. Only worth trying if media isn't pausing on your breaks.
+        {/if}
       </p>
     {/if}
   </section>
