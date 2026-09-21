@@ -128,6 +128,13 @@ mdns-sd = "0.11"
 # info" report. Desktop only -- Android's OS version comes from
 # Build.VERSION.RELEASE via android_bridge.rs/NativeBridgePlugin.kt instead.
 os_info = "3"
+# key_store.rs: the password-protected key file. argon2 derives the key-
+# encryption key from the user's password (Argon2id, memory-hard, so a stolen
+# key file can't be brute-forced cheaply); zeroize wipes the password and
+# derived key from memory once used. Desktop only -- Android's key is a
+# non-exportable Keystore key with no file to protect.
+argon2 = "0.5"
+zeroize = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

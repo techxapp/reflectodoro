@@ -8,6 +8,7 @@
   import { check } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
   import { isOnboardingCompleted, listenForScreenTimeSessionBatches } from "$lib/db";
+  import KeyUnlockModal from "$lib/KeyUnlockModal.svelte";
 
   let { children } = $props();
 
@@ -181,6 +182,9 @@
     </main>
   </div>
 {/if}
+
+<!-- Every window, special ones included: see KeyUnlockModal's doc comment. -->
+<KeyUnlockModal />
 
 <style>
   .app-shell {

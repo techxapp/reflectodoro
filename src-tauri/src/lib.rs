@@ -9,6 +9,7 @@ mod db_legacy_fixture;
 mod grid;
 mod hook;
 mod import;
+mod key_store;
 mod log_export;
 mod macos_overlay;
 mod media;
@@ -919,6 +920,7 @@ pub fn run() {
             commands::mark_reflection_entered,
             commands::report_reflection_save_failure,
             commands::close_after_save_failure,
+            commands::close_overlay_key_locked,
             commands::breakit_attempt,
             commands::dev_force_close,
             commands::get_enabled,
@@ -960,6 +962,16 @@ pub fn run() {
             commands::request_usage_stats_permission,
             commands::fetch_quote,
             import::import_data,
+            key_store::get_key_storage_status,
+            key_store::retry_key_resolution,
+            key_store::unlock_key_file,
+            key_store::set_key_file_password,
+            key_store::change_key_file_password,
+            key_store::migrate_key_to_file,
+            key_store::migrate_key_to_vault,
+            key_store::reveal_encryption_key,
+            key_store::restore_encryption_key,
+            key_store::reset_encryption_key,
             log_export::export_last_log_file,
             log_export::export_log_archive,
             system_info::export_system_info,
@@ -1009,6 +1021,17 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
+                // Settle where the encryption key lives (and whether it needs
+                // a password) now, rather than on the first encrypted read:
+                // the unlock prompt then shows as soon as a window mounts, and
+                // screen_time's flush knows to hold batches while locked.
+                // Async and not awaited -- a vault read can block on a
+                // Keychain prompt, which must not stall startup.
+                let key_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    key_store::ensure_resolved(&key_handle).await;
+                });
+
                 setup_tray(&handle)?;
                 setup_dev_kill_switch(&handle)?;
 

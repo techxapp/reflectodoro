@@ -60,8 +60,6 @@ use hmac::{Hmac, Mac};
 #[cfg(not(target_os = "android"))]
 use sha2::Sha256;
 use tauri::AppHandle;
-#[cfg(not(target_os = "android"))]
-use tokio::sync::OnceCell;
 
 /// Marks a stored value as ciphertext this module produced. Anything without
 /// it is treated as plaintext and passed through untouched.
@@ -75,7 +73,7 @@ const MARKER: &str = "enc1:";
 const NONCE_LEN: usize = 24;
 
 #[cfg(not(target_os = "android"))]
-const KEY_LEN: usize = 32;
+pub(crate) const KEY_LEN: usize = 32;
 
 /// HKDF `info` label for the HMAC subkey that backs
 /// `screen_time_session.app_id_hash` (see `FieldCipher::blind_index_many`).
@@ -88,19 +86,6 @@ const KEY_LEN: usize = 32;
 /// `HMAC_KEY_ALIAS`) rather than deriving anything from the AEAD key.
 #[cfg(not(target_os = "android"))]
 const BLIND_INDEX_HKDF_INFO: &[u8] = b"reflectodoro/screen_time/app_id_hash/v1";
-
-/// Identifies this app's entry in the OS credential store. Deliberately the
-/// same bundle identifier used for `app_config_dir()`/`app_log_dir()`.
-#[cfg(not(target_os = "android"))]
-const KEYRING_SERVICE: &str = "com.reflectodoro.app";
-#[cfg(not(target_os = "android"))]
-const KEYRING_ENTRY: &str = "db-encryption-key";
-
-/// Filename of the fallback key, alongside `pomodoro.db` in
-/// `app_config_dir()`. Only written when the OS credential store is
-/// unavailable or demonstrably not persisting (see `load_or_create_key`).
-#[cfg(not(target_os = "android"))]
-const KEY_FILE: &str = "encryption.key";
 
 // --- Cipher handle ---------------------------------------------------------
 
@@ -126,7 +111,10 @@ pub struct FieldCipher {
 impl FieldCipher {
     #[cfg(not(target_os = "android"))]
     pub async fn resolve(app: &AppHandle) -> Result<Self, String> {
-        Ok(Self { key: *key(app).await? })
+        // Where the key lives (OS vault or password-protected file) and
+        // whether it's unlocked is key_store.rs's business; a locked key
+        // surfaces here as its `KEY_LOCKED:` error.
+        Ok(Self { key: crate::key_store::key(app).await? })
     }
 
     #[cfg(target_os = "android")]
@@ -252,7 +240,7 @@ fn encrypt_with_key(key: &[u8; KEY_LEN], plaintext: &str) -> Result<String, Stri
 }
 
 #[cfg(not(target_os = "android"))]
-fn decrypt_with_key(key: &[u8; KEY_LEN], stored: &str) -> Result<String, String> {
+pub(crate) fn decrypt_with_key(key: &[u8; KEY_LEN], stored: &str) -> Result<String, String> {
     let Some(encoded) = stored.strip_prefix(MARKER) else {
         return Ok(stored.to_string());
     };
@@ -271,142 +259,6 @@ fn decrypt_with_key(key: &[u8; KEY_LEN], stored: &str) -> Result<String, String>
         .decrypt(nonce.into(), ciphertext)
         .map_err(|_| "decryption failed (wrong key, or the stored value was modified)".to_string())?;
     String::from_utf8(plaintext).map_err(|e| format!("decrypted value is not valid UTF-8: {e}"))
-}
-
-// --- Key material (desktop) ------------------------------------------------
-
-#[cfg(not(target_os = "android"))]
-static KEY: OnceCell<[u8; KEY_LEN]> = OnceCell::const_new();
-
-/// Cached for the process lifetime: on Linux this is a D-Bus round trip to
-/// the Secret Service, which has no business running on every reflection
-/// save. Same `OnceCell` shape `native_overlay::pool` already uses.
-#[cfg(not(target_os = "android"))]
-async fn key(app: &AppHandle) -> Result<&'static [u8; KEY_LEN], String> {
-    KEY.get_or_try_init(|| async {
-        let app = app.clone();
-        // keyring's access is synchronous and can block (D-Bus, Keychain),
-        // so it stays off the async runtime's worker threads.
-        tauri::async_runtime::spawn_blocking(move || load_or_create_key(&app))
-            .await
-            .map_err(|e| format!("key load task failed: {e}"))?
-    })
-    .await
-}
-
-/// Order matters here. The OS store is checked first so an existing key is
-/// always found where it was put; the key file is checked *second* rather
-/// than being a last resort only, so a device that already fell back once
-/// keeps using the same key on every later launch instead of oscillating
-/// between the two stores (which would leave half the rows unreadable).
-#[cfg(not(target_os = "android"))]
-fn load_or_create_key(app: &AppHandle) -> Result<[u8; KEY_LEN], String> {
-    match keyring_get() {
-        Ok(Some(key)) => return Ok(key),
-        Ok(None) => {}
-        Err(e) => log::warn!("crypto: OS credential store unreadable ({e}); trying the key file"),
-    }
-
-    if let Some(key) = file_get(app)? {
-        return Ok(key);
-    }
-
-    let key = random_key();
-    // Verified, not assumed: keyring built without a real backend silently
-    // substitutes an in-memory store, and a key that evaporates on exit
-    // would mean a fresh key every launch and every already-encrypted row
-    // becoming permanently unreadable. A store that can't hand the value
-    // back immediately is treated as no store at all.
-    match keyring_set_verified(&key) {
-        Ok(()) => {
-            log::info!("crypto: generated a new at-rest key and stored it in the OS credential store");
-            Ok(key)
-        }
-        Err(e) => {
-            log::warn!(
-                "crypto: OS credential store did not persist the key ({e}); \
-                 falling back to a key file in the app config dir"
-            );
-            file_put(app, &key)?;
-            Ok(key)
-        }
-    }
-}
-
-#[cfg(not(target_os = "android"))]
-fn random_key() -> [u8; KEY_LEN] {
-    use chacha20poly1305::aead::rand_core::RngCore;
-    let mut key = [0u8; KEY_LEN];
-    OsRng.fill_bytes(&mut key);
-    key
-}
-
-#[cfg(not(target_os = "android"))]
-fn keyring_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, KEYRING_ENTRY).map_err(|e| e.to_string())
-}
-
-/// `Ok(None)` means "no entry yet" (a first run), which is not an error --
-/// distinct from `Err`, which means the store itself couldn't be reached.
-#[cfg(not(target_os = "android"))]
-fn keyring_get() -> Result<Option<[u8; KEY_LEN]>, String> {
-    match keyring_entry()?.get_password() {
-        Ok(encoded) => decode_key(&encoded).map(Some),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-#[cfg(not(target_os = "android"))]
-fn keyring_set_verified(key: &[u8; KEY_LEN]) -> Result<(), String> {
-    keyring_entry()?.set_password(&BASE64.encode(key)).map_err(|e| e.to_string())?;
-    // Deliberately a fresh Entry, not the one just written through: reading
-    // back via the same handle could be satisfied by an in-process cache and
-    // would prove nothing about persistence.
-    match keyring_get()? {
-        Some(stored) if stored == *key => Ok(()),
-        Some(_) => Err("credential store returned a different key than was just written".to_string()),
-        None => Err("credential store reported no entry immediately after writing one".to_string()),
-    }
-}
-
-#[cfg(not(target_os = "android"))]
-fn key_file_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    use tauri::Manager;
-    let dir = app.path().app_config_dir().map_err(|e| format!("no app config dir: {e}"))?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("couldn't create app config dir: {e}"))?;
-    Ok(dir.join(KEY_FILE))
-}
-
-#[cfg(not(target_os = "android"))]
-fn file_get(app: &AppHandle) -> Result<Option<[u8; KEY_LEN]>, String> {
-    let path = key_file_path(app)?;
-    match std::fs::read_to_string(&path) {
-        Ok(encoded) => decode_key(encoded.trim()).map(Some),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("couldn't read key file: {e}")),
-    }
-}
-
-#[cfg(not(target_os = "android"))]
-fn file_put(app: &AppHandle, key: &[u8; KEY_LEN]) -> Result<(), String> {
-    let path = key_file_path(app)?;
-    std::fs::write(&path, BASE64.encode(key)).map_err(|e| format!("couldn't write key file: {e}"))?;
-    // Windows already restricts %APPDATA% to the owning user by default ACL;
-    // Unix umasks vary enough to be worth setting explicitly.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("couldn't restrict key file permissions: {e}"))?;
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "android"))]
-fn decode_key(encoded: &str) -> Result<[u8; KEY_LEN], String> {
-    let bytes = BASE64.decode(encoded).map_err(|e| format!("stored key is not valid base64: {e}"))?;
-    bytes.try_into().map_err(|_| "stored key is not the expected length".to_string())
 }
 
 #[cfg(test)]

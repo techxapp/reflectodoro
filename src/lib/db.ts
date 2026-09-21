@@ -1769,7 +1769,9 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
     db.select<TaskListRow[]>(`SELECT date, content, updated_at FROM daily_task_list`),
     db.select<NotToDoRow[]>(`SELECT date, content, updated_at FROM not_to_do_list`),
     includeSettings
-      ? db.select<SettingRow[]>(`SELECT key, value FROM app_setting`)
+      ? // encryption_key_location is where *this* device's key lives
+        // (key_store.rs) -- meaningless, and harmful, on another device.
+        db.select<SettingRow[]>(`SELECT key, value FROM app_setting WHERE key <> 'encryption_key_location'`)
       : Promise.resolve([]),
     db.select<{ slot_start_at: string; relaxed_eyes: string; exercise: string; drank_water: string; washroom: string; created_at: string }[]>(
       `SELECT slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at FROM wellness_check`,
@@ -2302,4 +2304,72 @@ export async function saveQuoteApiUrl(url: string): Promise<void> {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [QUOTE_API_URL_KEY, url],
   );
+}
+
+// --- Encryption key storage (desktop; see key_store.rs) ---------------------
+
+export type KeyStorageStatus = {
+  /** Where the key lives; "keystore" on Android, "none" while unsettled. */
+  mode: "vault" | "password_file" | "keystore" | "none";
+  state: "unlocked" | "locked" | "needs_password" | "key_missing";
+  /** needs_password because an old, unprotected key file was found. */
+  legacy: boolean;
+  vaultAvailable: boolean;
+};
+
+export type KeyLocation = "vault" | "file";
+
+/** Emitted by Rust whenever the key's state changes. */
+export const KEY_STATE_EVENT = "crypto://state";
+
+export const MIN_KEY_PASSWORD_CHARS = 8;
+
+/** True for the error every encrypted read/write returns while the key is
+ * locked (key_store.rs's LOCKED_PREFIX), as opposed to a real failure. */
+export function isKeyLockedError(e: unknown): boolean {
+  return String(e).startsWith("KEY_LOCKED:");
+}
+
+export function getKeyStorageStatus(): Promise<KeyStorageStatus> {
+  return invoke<KeyStorageStatus>("get_key_storage_status");
+}
+
+export function retryKeyResolution(): Promise<void> {
+  return invoke("retry_key_resolution");
+}
+
+export function unlockKeyFile(password: string): Promise<void> {
+  return invoke("unlock_key_file", { password });
+}
+
+export function setKeyFilePassword(password: string): Promise<void> {
+  return invoke("set_key_file_password", { password });
+}
+
+export function changeKeyFilePassword(oldPassword: string, newPassword: string): Promise<void> {
+  return invoke("change_key_file_password", { oldPassword, newPassword });
+}
+
+export function migrateKeyToFile(password: string): Promise<void> {
+  return invoke("migrate_key_to_file", { password });
+}
+
+export function migrateKeyToVault(): Promise<void> {
+  return invoke("migrate_key_to_vault");
+}
+
+/** The raw key as base64, for the user to back up. `password` is required
+ * when the key lives in the password-protected file. */
+export function revealEncryptionKey(password?: string): Promise<string> {
+  return invoke<string>("reveal_encryption_key", { password: password ?? null });
+}
+
+/** Rejects a key that doesn't decrypt this device's existing data. */
+export function restoreEncryptionKey(key: string, target: KeyLocation, password?: string): Promise<void> {
+  return invoke("restore_encryption_key", { key, target, password: password ?? null });
+}
+
+/** A brand-new key: everything encrypted under the old one becomes unreadable. */
+export function resetEncryptionKey(target: KeyLocation, password?: string): Promise<void> {
+  return invoke("reset_encryption_key", { target, password: password ?? null });
 }

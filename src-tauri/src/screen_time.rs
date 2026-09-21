@@ -287,6 +287,13 @@ pub fn current_session_elapsed_ms() -> Option<(String, String, i64)> {
 /// Ships everything buffered as one event. No-op (no emit at all) when
 /// nothing accumulated, which is the common case for a quiet minute.
 fn drain_and_emit(app: &AppHandle) {
+    // Held, not dropped, while the encryption key is locked: the main
+    // window's save would fail to encrypt, and its error is only logged, so
+    // the batch would be lost for good. It goes out on the first tick after
+    // the user unlocks.
+    if crate::key_store::is_locked() {
+        return;
+    }
     let batch = {
         let mut pending = PENDING_FLUSH.lock().unwrap();
         if pending.is_empty() {

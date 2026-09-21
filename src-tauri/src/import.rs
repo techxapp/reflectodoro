@@ -815,7 +815,9 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
         import_bulk_edit_presets(&mut tx, &cipher, &data.bulk_edit_preset, mode).await?;
 
     if include_settings {
-        for row in &data.app_setting {
+        // Where this device's encryption key lives is never another
+        // device's call (see key_store::LOCATION_SETTING).
+        for row in data.app_setting.iter().filter(|r| r.key != crate::key_store::LOCATION_SETTING) {
             let sql = if mode == ImportMode::Merge {
                 "INSERT INTO app_setting (key, value) VALUES (?, ?)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value"

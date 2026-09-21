@@ -51,6 +51,27 @@
     type DiscoveredDevice,
     type PairedDeviceInfo,
   } from "$lib/db";
+  import EncryptionKeyCard from "$lib/EncryptionKeyCard.svelte";
+
+  /** Settings -> Advanced is collapsed by default; the open/closed choice is
+   * a per-viewer convenience, so browser storage (which can throw or come
+   * back empty) is fine and only ever a nicety. */
+  const ADVANCED_OPEN_KEY = "settings.advancedOpen";
+  let advancedOpen = $state(false);
+  try {
+    advancedOpen = localStorage.getItem(ADVANCED_OPEN_KEY) === "1";
+  } catch {
+    // storage unavailable -- stay collapsed
+  }
+
+  function toggleAdvanced() {
+    advancedOpen = !advancedOpen;
+    try {
+      localStorage.setItem(ADVANCED_OPEN_KEY, advancedOpen ? "1" : "0");
+    } catch {
+      // storage unavailable -- the toggle still works for this visit
+    }
+  }
 
   let length = $state(15);
   let includeSpecial = $state(false);
@@ -1255,6 +1276,26 @@
       </div>
     {/if}
   </section>
+
+  <!-- Last on the page by design: set-once, rarely-needed controls. -->
+  <button
+    type="button"
+    class="advanced-toggle"
+    aria-expanded={advancedOpen}
+    aria-controls="advanced-settings"
+    onclick={toggleAdvanced}
+  >
+    {advancedOpen ? "Hide advanced settings" : "Advanced settings"}
+  </button>
+  {#if advancedOpen}
+    <div id="advanced-settings" class="advanced">
+      {#if !isAndroid}
+        <EncryptionKeyCard />
+      {:else}
+        <p class="hint">No advanced settings on this device yet.</p>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -1456,6 +1497,19 @@
 
   button.danger {
     background: #d9534f;
+  }
+
+  button.advanced-toggle {
+    align-self: flex-start;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+
+  .advanced {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
   }
 
   h3 {
