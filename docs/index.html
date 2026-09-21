@@ -1013,7 +1013,7 @@
           <div class="section-head reveal">
             <span class="eyebrow">Features</span>
             <h2>Small app. Stubborn on purpose.</h2>
-            <p>Everything below runs locally on your machine &mdash; there is no server, no account and no sync.</p>
+            <p>Everything below runs locally on your machine &mdash; there is no server, no account.</p>
           </div>
 
           <div class="bento">
@@ -1065,7 +1065,7 @@
             <div class="card span-2 reveal">
               <div class="ico" aria-hidden="true">&#128187;</div>
               <h3>Fully local &amp; private</h3>
-              <p>Every reflection lives in a SQLite file on your device. No cloud, no account.  </p>
+              <p>Every reflection lives in a SQLite file on your device with encryption at rest. No cloud, no account.  </p>
             </div>
 
             <div class="card span-2 reveal">
@@ -1332,7 +1332,7 @@
                   <td class="yes">&#10003;</td>
                 </tr>
                 <tr>
-                  <td>Wall-clock grid (fixed :00/:25/:30/:55 slots, not a rolling timer)</td>
+                  <td>Fixed Wall-clock slots (not a rolling timer)</td>
                   <td class="yes">&#10003;</td>
                   <td class="no">&#10007;</td>
                   <td class="no">&#10007;</td>
@@ -1364,6 +1364,46 @@
                   <td class="yes">&#10003;</td>
                 </tr>
                 <tr>
+                  <td>Your entries encrypted at rest on your device</td>
+                  <td class="yes">&#10003;</td>
+                  <td class="no">&#10007;<span class="table-note">Only in-transit encryption documented</span></td>
+                  <td class="partial">&#10003;<span class="table-note">Profile content only, per its privacy policy</span></td>
+                  <td class="no">&#10007;<span class="table-note">Only in-transit encryption documented</span></td>
+                  <td class="no">&#10007;<span class="table-note">Probabily No</span></td>
+                </tr>
+                <tr>
+                  <td>Is your data visible to the app maker?</td>
+                  <td class="yes">No<span class="table-note">No server; it never leaves your device automatically.</span></td>
+                  <td class="no">Yes<span class="table-note">Account &amp; content stored on its servers, per store listing</span></td>
+                  <td class="partial">If you sign in<span class="table-note">Synced tasks are stored server-side; local mode isn't</span></td>
+                  <td class="partial">Partly<span class="table-note">Device ID &amp; synced plans; blocking stays local</span></td>
+                  <td class="yes">Probabily No<span class="table-note">No account mentioned</span></td>
+                </tr>
+                <tr>
+                  <td>Analyzes your data (cloud-side)?</td>
+                  <td class="yes">No<span class="table-note">Nothing is sent anywhere to analyze</span></td>
+                  <td class="partial">Usage &amp; diagnostics<span class="table-note">Collected, per store listing</span></td>
+                  <td class="partial">Usage &amp; crash analytics<span class="table-note">Says task content isn't read</span></td>
+                  <td class="partial">Usage analytics<span class="table-note">&ldquo;Analysing website and service use&rdquo;</span></td>
+                  <td class="yes">Probabily No</td>
+                </tr>
+                <tr>
+                  <td>Shares data with third parties?</td>
+                  <td class="yes">No<span class="table-note">Nothing you write leaves your device</span></td>
+                  <td class="no">Yes<span class="table-note">Email shared for marketing, per store listing</span></td>
+                  <td class="no">Yes<span class="table-note">Firebase, Bugly, payment providers</span></td>
+                  <td class="no">Yes<span class="table-note">Google Analytics, Meta Pixel, Clarity (website)</span></td>
+                  <td class="yes">Probabily No</td>
+                </tr>
+                <tr>
+                  <td>Local-only mode available?</td>
+                  <td class="yes">Always<span class="table-note">Local is the only mode; LAN sync is optional</span></td>
+                  <td class="partial">Not documented</td>
+                  <td class="yes">&#10003;<span class="table-note">Local mode, no account; no sync</span></td>
+                  <td class="yes">&#10003;<span class="table-note">Blocking works without an account</span></td>
+                  <td class="yes">Config file only<span class="table-note">No account mentioned</span></td>
+                </tr>
+                <tr>
                   <td>Open source</td>
                   <td class="yes">&#10003;</td>
                   <td class="no">&#10007;</td>
@@ -1375,7 +1415,7 @@
             </table>
           </div>
           <p class="cta-note" style="margin-top:14px">
-            Based on each app's public store listings and docs as of September 2026 &mdash; features and pricing
+            Generated based on each app's public store listings and docs as of September 2026 by AI (Information might be in-correct); features and pricing
             change, so check the vendor's own site before deciding. Not affiliated with or endorsed by any app
             listed above.
           </p>
@@ -1471,7 +1511,7 @@
             <details class="faq-item reveal">
               <summary>Is my data private?</summary>
               <div class="faq-answer">
-                <p>Everything is stored locally in a SQLite file on your device &mdash; there's no account, no
+                <p>Everything is stored locally in a SQLite file on your device with encryption at rest &mdash; there's no account, no
                    server, and nothing is uploaded on cloud.</p>
               </div>
             </details>
@@ -1529,9 +1569,8 @@
             <details class="faq-item reveal">
               <summary>Is Reflectodoro completely free?</summary>
               <div class="faq-answer">
-                <p>Reflectodoro is in early release, and every feature it has today is free. Premium features
-                   are planned but not built yet &mdash; nothing currently in the app is being held back or
-                   paywalled.</p>
+                <p>Reflectodoro is in early release, and every feature it has today is free as of now.
+                  Page will be updated when any feature/app is paywalled in future.</p>
               </div>
             </details>
           </div>
