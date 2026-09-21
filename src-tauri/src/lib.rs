@@ -174,6 +174,15 @@ pub(crate) static MEDIA_PAUSE_ON_BREAK_ENABLED: AtomicBool = AtomicBool::new(tru
 /// break, not just to politely mention it.
 pub(crate) static BREAK_NOTIFICATION_PERSISTENT_ENABLED: AtomicBool = AtomicBool::new(true);
 
+/// Android only: whether the native break overlay hides itself while a phone
+/// or VoIP call is ringing/active (see NativeOverlayManager.kt's call
+/// auto-hide). Backed by `app_setting.hide_overlay_on_call_enabled`; same
+/// load/push pattern as `BREAK_NOTIFICATION_PERSISTENT_ENABLED`. Defaults to
+/// `true`: an overlay covering the incoming-call screen is the worse failure.
+/// Read once per break (passed into `trigger_break_screen`), so toggling it
+/// mid-break takes effect from the next break.
+pub(crate) static HIDE_OVERLAY_ON_CALL_ENABLED: AtomicBool = AtomicBool::new(true);
+
 /// Whether foreground-app focus tracking is running (see screen_time.rs).
 /// Backed by `app_setting.screen_time_tracking_enabled`; same load/push
 /// pattern as `MEDIA_PAUSE_ON_BREAK_ENABLED`. Defaults to `true` here too,
@@ -943,6 +952,8 @@ pub fn run() {
             commands::request_media_key_permission,
             commands::get_break_notification_persistent_enabled,
             commands::set_break_notification_persistent_enabled,
+            commands::get_hide_overlay_on_call_enabled,
+            commands::set_hide_overlay_on_call_enabled,
             commands::get_macos_hide_menu_bar_dock_enabled,
             commands::set_macos_hide_menu_bar_dock_enabled,
             commands::get_macos_media_key_fallback_enabled,

@@ -20,6 +20,8 @@
     saveForceCloseShortcutEnabled,
     getBreakNotificationPersistentEnabled,
     saveBreakNotificationPersistentEnabled,
+    getHideOverlayOnCallEnabled,
+    saveHideOverlayOnCallEnabled,
     getOverlayAutoCloseMinutes,
     saveOverlayAutoCloseMinutes,
     getCheckinAutoCloseMinutes,
@@ -106,6 +108,9 @@
   let breakNotificationPersistentEnabled = $state(true);
   let breakNotificationPersistentLoaded = $state(false);
   let breakNotificationPersistentBusy = $state(false);
+  let hideOverlayOnCallEnabled = $state(true);
+  let hideOverlayOnCallLoaded = $state(false);
+  let hideOverlayOnCallBusy = $state(false);
 
   let isMacos = $state(false);
   let isWindows = $state(false);
@@ -380,6 +385,8 @@
   onMount(async () => {
     breakNotificationPersistentEnabled = await getBreakNotificationPersistentEnabled();
     breakNotificationPersistentLoaded = true;
+    hideOverlayOnCallEnabled = await getHideOverlayOnCallEnabled();
+    hideOverlayOnCallLoaded = true;
   });
 
   onMount(async () => {
@@ -551,6 +558,17 @@
       breakNotificationPersistentEnabled = next;
     } finally {
       breakNotificationPersistentBusy = false;
+    }
+  }
+
+  async function toggleHideOverlayOnCall() {
+    const next = !hideOverlayOnCallEnabled;
+    hideOverlayOnCallBusy = true;
+    try {
+      await saveHideOverlayOnCallEnabled(next);
+      hideOverlayOnCallEnabled = next;
+    } finally {
+      hideOverlayOnCallBusy = false;
     }
   }
 
@@ -879,6 +897,24 @@
       <p class="hint">
         Only affects a break that starts while you're using another app &mdash; it can't wake or
         take over a locked screen.
+      </p>
+    {/if}
+
+    {#if isAndroid && hideOverlayOnCallLoaded}
+      <div class="data-row">
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={hideOverlayOnCallEnabled}
+            disabled={hideOverlayOnCallBusy}
+            onchange={toggleHideOverlayOnCall}
+          />
+          Hide the break screen during phone calls
+        </label>
+      </div>
+      <p class="hint">
+        While a call is ringing or in progress, the break screen steps aside so you can answer,
+        and returns when the call ends. Applies from the next break.
       </p>
     {/if}
 

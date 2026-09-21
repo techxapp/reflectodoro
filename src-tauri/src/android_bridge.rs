@@ -70,14 +70,21 @@ impl<R: Runtime> AndroidBridge<R> {
     /// show the instant it's created rather than a blank frame. Deliberately
     /// not a full-screen-intent/auto-launch -- see that static's doc comment
     /// for why.
-    pub fn trigger_break_screen(&self, persistent: bool, state: Value) -> Result<Value, PluginInvokeError> {
+    /// `hide_on_call` mirrors HIDE_OVERLAY_ON_CALL_ENABLED (native overlay
+    /// only): whether it steps aside while a call is ringing/active.
+    pub fn trigger_break_screen(
+        &self,
+        persistent: bool,
+        hide_on_call: bool,
+        state: Value,
+    ) -> Result<Value, PluginInvokeError> {
         // Sent as a JSON string, not a nested object: Kotlin treats it as
         // opaque (just relaying it into the overlay WebView via
         // JSONObject.quote), so there's no need for a typed Jackson class
         // matching OverlayState's shape on that side.
         self.0.run_mobile_plugin(
             "triggerBreakScreen",
-            serde_json::json!({ "persistent": persistent, "state": state.to_string() }),
+            serde_json::json!({ "persistent": persistent, "hideOnCall": hide_on_call, "state": state.to_string() }),
         )
     }
 

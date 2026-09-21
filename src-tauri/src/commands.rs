@@ -16,6 +16,7 @@ use crate::screen_time;
 use crate::state::{AppState, OverlayState};
 use crate::{
     apply_pomodoro_enabled, BREAK_NOTIFICATION_PERSISTENT_ENABLED, FORCE_CLOSE_SHORTCUT_ENABLED,
+    HIDE_OVERLAY_ON_CALL_ENABLED,
     LAST_MEDIA_TOGGLE_AT, MACOS_HIDE_MENU_BAR_DOCK_ENABLED, MACOS_MEDIA_KEY_FALLBACK_ENABLED,
     MEDIA_PAUSE_ON_BREAK_ENABLED, OVERLAY_AUTO_CLOSE_MINUTES, POMODORO_ENABLED,
     POMODORO_SNOOZE_MINUTES, POMODORO_SNOOZE_UNTIL_MS, SCREEN_TIME_TRACKING_ENABLED,
@@ -792,6 +793,19 @@ pub fn get_break_notification_persistent_enabled() -> bool {
 #[tauri::command]
 pub fn set_break_notification_persistent_enabled(enabled: bool) {
     BREAK_NOTIFICATION_PERSISTENT_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+/// Mirrors app_setting.hide_overlay_on_call_enabled -- same load/push
+/// pattern as the break-notification toggle above (see
+/// loadAndSyncHideOverlayOnCallSetting in db.ts). Android only in effect.
+#[tauri::command]
+pub fn get_hide_overlay_on_call_enabled() -> bool {
+    HIDE_OVERLAY_ON_CALL_ENABLED.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+pub fn set_hide_overlay_on_call_enabled(enabled: bool) {
+    HIDE_OVERLAY_ON_CALL_ENABLED.store(enabled, Ordering::SeqCst);
 }
 
 /// Only available when dev_mode is on -- bypasses the unlock formula entirely.

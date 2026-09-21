@@ -292,6 +292,7 @@ const SEED_SETTINGS: &[(&str, &str)] = &[
     ("wellness_text_exclusions", "Washroom"),
     ("media_pause_on_break_enabled", "true"),
     ("break_notification_persistent_enabled", "true"),
+    ("hide_overlay_on_call_enabled", "true"),
     ("macos_hide_menu_bar_dock_enabled", "false"),
     ("macos_media_key_fallback_enabled", "false"),
     ("screen_time_tracking_enabled", "true"),

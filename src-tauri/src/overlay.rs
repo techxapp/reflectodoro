@@ -230,8 +230,9 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
         crate::native_overlay::refresh_coming_next_text(app).await;
         let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
         let persistent = crate::BREAK_NOTIFICATION_PERSISTENT_ENABLED.load(Ordering::SeqCst);
+        let hide_on_call = crate::HIDE_OVERLAY_ON_CALL_ENABLED.load(Ordering::SeqCst);
         let state_json = overlay_state_json_for_android(app);
-        if let Err(e) = bridge.trigger_break_screen(persistent, state_json) {
+        if let Err(e) = bridge.trigger_break_screen(persistent, hide_on_call, state_json) {
             log::error!("trigger_break_screen failed: {e:?}");
         }
         // Fetched in the background (up to 5s) rather than awaited, so the

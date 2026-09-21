@@ -1193,6 +1193,43 @@ export async function loadAndSyncBreakNotificationPersistentSetting(): Promise<b
   return enabled;
 }
 
+// --- Android "hide break screen on call" toggle (Settings) -------------
+// Android only in effect (NativeOverlayManager.kt's call auto-hide). On by
+// default. Rust reads it once per break, so a change applies from the next
+// break.
+
+const HIDE_OVERLAY_ON_CALL_KEY = "hide_overlay_on_call_enabled";
+
+export async function getHideOverlayOnCallEnabled(): Promise<boolean> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [HIDE_OVERLAY_ON_CALL_KEY],
+  );
+  return (rows[0]?.value ?? "true") === "true";
+}
+
+export async function saveHideOverlayOnCallEnabled(enabled: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [HIDE_OVERLAY_ON_CALL_KEY, String(enabled)],
+  );
+  await syncHideOverlayOnCallToBackend(enabled);
+}
+
+export async function syncHideOverlayOnCallToBackend(enabled: boolean): Promise<void> {
+  await invoke("set_hide_overlay_on_call_enabled", { enabled });
+}
+
+/** Call once on app boot (main window) so Rust's in-memory flag matches SQLite. */
+export async function loadAndSyncHideOverlayOnCallSetting(): Promise<boolean> {
+  const enabled = await getHideOverlayOnCallEnabled();
+  await syncHideOverlayOnCallToBackend(enabled);
+  return enabled;
+}
+
 // --- macOS media-toggle guard (see media.rs's macos_impl module) -------
 //
 // Windows' media pause queries actual playback state, so it never needs

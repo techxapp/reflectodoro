@@ -1273,7 +1273,7 @@
                 <tr>
                   <td>Custom API Support</td>
                   <td class="yes">&#10003;</td>
-                  <td class="no">&#10007;<span class="table-note">Planned</span></td>
+                  <td class="yes">&#10003;</td>
                   <td class="yes">&#10003;</td>
                   <td class="yes">&#10003;</td>
                 </tr>
@@ -1578,7 +1578,7 @@
             <div class="timeline-entry reveal">
               <p class="timeline-date">Monday, Sep 21, 2026</p>
               <ul class="timeline-items">
-                <li>The end-of-break quote panel now works on Android too, fetched in the background so it never delays your break screen, and the Quote API URL is configurable in Android Settings</li>
+                <li>Android break screen improvements: the end-of-break quote panel now works there too (fetched in the background so it never delays your break, with the Quote API URL configurable in Settings), and the break screen now steps aside when a phone or VoIP call rings or is active, then returns when the call ends</li>
                 <li>You can now protect your encryption key with a password instead of the system password vault, and move it back and forth from a new Advanced settings section. If the vault refuses access, the app asks for a password rather than falling back to an unprotected key file &mdash; and on macOS it stops asking for Keychain access again on every launch once you've said no. If a break arrives before you've unlocked, you can skip that break from the password prompt</li>
                 <li>Added a way to show and copy your encryption key for safekeeping in a password manager, and to restore it later &mdash; checked against your existing entries first, so a mistyped key can never lock you out of your own data</li>
                 <li>The app no longer creates a brand-new key when it can't reach the one your entries were saved with &mdash; which could quietly make every past entry unreadable. It now tells you, and lets you try again or restore your backed-up key</li>

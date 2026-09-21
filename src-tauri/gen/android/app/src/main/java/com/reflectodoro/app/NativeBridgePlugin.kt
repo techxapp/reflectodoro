@@ -41,6 +41,9 @@ import app.tauri.plugin.Plugin
 @InvokeArg
 class TriggerBreakScreenArgs {
     var persistent: Boolean = true
+    // Mirrors app_setting.hide_overlay_on_call_enabled; see
+    // NativeOverlayManager's call auto-hide.
+    var hideOnCall: Boolean = true
     // JSON-encoded OverlayState (+ dev_mode) -- opaque to Kotlin, just
     // relayed into the native overlay's WebView as-is. See
     // overlay_state_json_for_android in overlay.rs.
@@ -505,7 +508,7 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         val args = invoke.parseArgs(TriggerBreakScreenArgs::class.java)
         postBreakNotification(activity, args.persistent)
         if (canDrawOverlaysGranted()) {
-            NativeOverlayManager.show(activity, args.state, overlayChannel)
+            NativeOverlayManager.show(activity, args.state, overlayChannel, args.hideOnCall)
         }
         invoke.resolve(JSObject())
     }

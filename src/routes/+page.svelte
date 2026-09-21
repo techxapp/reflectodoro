@@ -16,6 +16,7 @@
     loadAndSyncMediaPauseOnBreakSetting,
     saveMediaPauseOnBreakEnabled,
     loadAndSyncBreakNotificationPersistentSetting,
+    loadAndSyncHideOverlayOnCallSetting,
     loadAndSyncMediaToggleGuard,
     loadAndSyncMacosHideMenuBarDockSetting,
     loadAndSyncMacosMediaKeyFallbackSetting,
@@ -252,6 +253,7 @@
     await loadAndSyncMacosMediaKeyFallbackSetting();
     await refreshMediaPauseStatus();
     await loadAndSyncBreakNotificationPersistentSetting();
+    await loadAndSyncHideOverlayOnCallSetting();
     await loadAndSyncMediaToggleGuard();
     await loadAndSyncMacosHideMenuBarDockSetting();
     await loadAndSyncScreenTimeTrackingSetting();

@@ -4,9 +4,13 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Gravity
+import android.view.View
 import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
@@ -57,10 +61,113 @@ object NativeOverlayManager {
   // app when nothing was actually submitted.
   private const val WATCHDOG_TIMEOUT_MS = 20 * 60 * 1000L
 
+  // Call auto-hide (see startCallMonitoring). The overlay is a full-screen
+  // window drawn above every Activity, including the dialer's incoming-call
+  // screen, so without this a call arriving mid-break would leave the user
+  // unable to reach Answer. While a call is ringing/active the overlay is
+  // hidden and made untouchable; it comes back when the call ends. Rust's
+  // OverlayState and schedule_auto_close are untouched and keep running: if
+  // the break plus its grace period elapses during the call, Rust's own
+  // close path calls hide() and there is simply nothing left to restore.
+  private const val TAG = "NativeOverlayManager"
+
+  // Only used below API 31, where AudioManager.OnModeChangedListener doesn't
+  // exist. Tighter than lib.rs's 20s ANDROID_POLL_INTERVAL on purpose: a
+  // ringtone lasts ~30s, so a 20s poll could leave the overlay covering the
+  // call screen for most of the ring. One binder int read per tick, only
+  // while the overlay is showing, on an uptime-based Handler (no wakelock).
+  private const val CALL_POLL_INTERVAL_MS = 5_000L
+
+  private var audioManager: AudioManager? = null
+
+  // Typed Any? so this class never names an API 31 type in a field
+  // signature on older devices.
+  private var modeListener: Any? = null
+  private var callPollRunnable: Runnable? = null
+  private var hiddenForCall = false
+
   fun isShowing(): Boolean = webView != null
 
+  // Ringtone/in-call covers cellular; in-communication covers VoIP
+  // (WhatsApp/Meet/Zoom).
+  private fun isCallMode(mode: Int): Boolean =
+    mode == AudioManager.MODE_RINGTONE ||
+      mode == AudioManager.MODE_IN_CALL ||
+      mode == AudioManager.MODE_IN_COMMUNICATION
+
+  /** Main thread only. Keeps the same WebView attached (so a half-typed
+   * reflection and the breakit state survive) and just makes it invisible
+   * and untouchable -- an invisible view alone would still leave the window
+   * itself swallowing touches meant for the call UI. */
+  private fun setHiddenForCall(hidden: Boolean) {
+    val wv = webView ?: return
+    val wm = windowManager ?: return
+    if (hidden == hiddenForCall) return
+    hiddenForCall = hidden
+    try {
+      val lp = wv.layoutParams as? WindowManager.LayoutParams ?: return
+      val mask = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+      lp.flags = if (hidden) lp.flags or mask else lp.flags and mask.inv()
+      wv.visibility = if (hidden) View.GONE else View.VISIBLE
+      wm.updateViewLayout(wv, lp)
+      Log.i(TAG, "call auto-hide: overlay ${if (hidden) "hidden" else "restored"}")
+    } catch (e: Exception) {
+      Log.w(TAG, "call auto-hide: updateViewLayout failed", e)
+    }
+  }
+
+  private fun startCallMonitoring(context: Context) {
+    try {
+      val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+      audioManager = am
+      // A break that opens mid-call starts hidden.
+      setHiddenForCall(isCallMode(am.mode))
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val listener = AudioManager.OnModeChangedListener { mode ->
+          setHiddenForCall(isCallMode(mode))
+        }
+        am.addOnModeChangedListener(context.mainExecutor, listener)
+        modeListener = listener
+        Log.i(TAG, "call monitoring: registered mode listener")
+      } else {
+        val poll = object : Runnable {
+          override fun run() {
+            if (webView == null) return
+            setHiddenForCall(isCallMode(am.mode))
+            mainHandler.postDelayed(this, CALL_POLL_INTERVAL_MS)
+          }
+        }
+        callPollRunnable = poll
+        mainHandler.postDelayed(poll, CALL_POLL_INTERVAL_MS)
+        Log.i(TAG, "call monitoring: started ${CALL_POLL_INTERVAL_MS}ms poll")
+      }
+    } catch (e: Exception) {
+      // Never let call monitoring take down the overlay itself.
+      Log.w(TAG, "call monitoring: failed to start", e)
+    }
+  }
+
+  private fun stopCallMonitoring() {
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        (modeListener as? AudioManager.OnModeChangedListener)?.let {
+          audioManager?.removeOnModeChangedListener(it)
+        }
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "call monitoring: failed to unregister", e)
+    }
+    callPollRunnable?.let { mainHandler.removeCallbacks(it) }
+    modeListener = null
+    callPollRunnable = null
+    audioManager = null
+    hiddenForCall = false
+    Log.i(TAG, "call monitoring: stopped")
+  }
+
   @SuppressLint("SetJavaScriptEnabled")
-  fun show(context: Context, stateJson: String, channel: Channel?) {
+  fun show(context: Context, stateJson: String, channel: Channel?, hideOnCall: Boolean = true) {
     mainHandler.post {
       if (webView != null) {
         pushState(stateJson)
@@ -142,6 +249,8 @@ object NativeOverlayManager {
       }
       webView = wv
       windowManager = wm
+      // Off by the Settings toggle: no listener/poll registered at all.
+      if (hideOnCall) startCallMonitoring(appContext)
 
       // See WATCHDOG_TIMEOUT_MS's doc comment. Identity-checked against `wv`
       // when it fires so a callback scheduled for an overlay that already
@@ -220,6 +329,7 @@ object NativeOverlayManager {
         // the window manager's perspective, which is the state we want
         // `webView`/`windowManager` to reflect below regardless.
       } finally {
+        stopCallMonitoring()
         wv.destroy()
         webView = null
         windowManager = null
