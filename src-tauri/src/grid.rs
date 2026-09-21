@@ -1,4 +1,5 @@
 use chrono::{DateTime, Duration as ChronoDuration, Local, LocalResult, NaiveDateTime, TimeZone, Timelike};
+// `Mode` below is the schedule selector (Normal / Concentration).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -92,27 +93,121 @@ fn resolve_local<Tz: TimeZone>(tz: &Tz, mut naive: NaiveDateTime) -> DateTime<Tz
 }
 
 /// Sessions are pinned to fixed wall-clock boundaries, not "N minutes from app start":
-/// :00-:25 work, :25-:30 break, :30-:55 work, :55-:00 break.
+/// :00-:25 work, :25-:30 break, :30-:55 work, :55-:00 break. (Normal mode.)
 pub fn slot_for(now: DateTime<Local>) -> Slot {
-    let m = now.minute();
-    let (phase, start_min, end_min) = if m < 25 {
-        (Phase::Work, 0, 25)
-    } else if m < 30 {
-        (Phase::Break, 25, 30)
-    } else if m < 55 {
-        (Phase::Work, 30, 55)
-    } else {
-        (Phase::Break, 55, 60)
+    slot_for_mode(now, Mode::Normal)
+}
+
+/// Which wall-clock schedule is in effect. `Normal` is the original
+/// 25/5/25/5 grid; `Concentration` is work :00-:25, break :25:00-:25:30 (30s),
+/// work :25:30-:50, break :50-:00 (10min).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    #[default]
+    Normal,
+    Concentration,
+}
+
+impl Mode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Mode::Normal => "normal",
+            Mode::Concentration => "concentration",
+        }
+    }
+
+    /// Unknown/blank values fall back to Normal so a bad row can't break scheduling.
+    pub fn parse(s: &str) -> Mode {
+        if s.trim().eq_ignore_ascii_case("concentration") {
+            Mode::Concentration
+        } else {
+            Mode::Normal
+        }
+    }
+}
+
+/// Builds "today's wall-clock HH:mm:ss" for `now`'s hour; same DST handling as `at_minute`.
+fn at_minute_sec(now: DateTime<Local>, minute: u32, sec: u32) -> DateTime<Local> {
+    let naive = now
+        .naive_local()
+        .date()
+        .and_hms_opt(now.hour(), minute, sec)
+        .expect("hour/minute/second in valid range");
+    resolve_local(&Local, naive)
+}
+
+pub fn slot_for_mode(now: DateTime<Local>, mode: Mode) -> Slot {
+    // (phase, start (min, sec), end (min, sec)); end minute 60 = top of next hour.
+    let (phase, start, end): (Phase, (u32, u32), (u32, u32)) = match mode {
+        Mode::Normal => {
+            let m = now.minute();
+            if m < 25 {
+                (Phase::Work, (0, 0), (25, 0))
+            } else if m < 30 {
+                (Phase::Break, (25, 0), (30, 0))
+            } else if m < 55 {
+                (Phase::Work, (30, 0), (55, 0))
+            } else {
+                (Phase::Break, (55, 0), (60, 0))
+            }
+        }
+        Mode::Concentration => {
+            let s = now.minute() * 60 + now.second();
+            if s < 25 * 60 {
+                (Phase::Work, (0, 0), (25, 0))
+            } else if s < 25 * 60 + 30 {
+                (Phase::Break, (25, 0), (25, 30))
+            } else if s < 50 * 60 {
+                (Phase::Work, (25, 30), (50, 0))
+            } else {
+                (Phase::Break, (50, 0), (60, 0))
+            }
+        }
     };
 
-    let start = at_minute(now, start_min);
-    let end = if end_min == 60 {
+    let start_dt = at_minute_sec(now, start.0, start.1);
+    let end_dt = if end.0 == 60 {
         at_minute(now, 0) + ChronoDuration::hours(1)
     } else {
-        at_minute(now, end_min)
+        at_minute_sec(now, end.0, end.1)
     };
 
-    Slot { phase, start, end }
+    Slot { phase, start: start_dt, end: end_dt }
+}
+
+/// Mode-aware `preceding_work_slot_start_iso`. Reflections always live on the
+/// fixed :00/:30 slot grid, in both modes. Concentration breaks start at :25:00
+/// and :50:00; a break starting in :00-:29 maps to that hour's :00 slot, one
+/// starting in :30-:59 maps to :30 (so the :50 break -> :30, and the :25:30
+/// work stretch is still filed under the :30 slot).
+pub fn preceding_work_slot_start_iso_for(break_slot_start_iso: &str, mode: Mode) -> Option<String> {
+    match mode {
+        Mode::Normal => preceding_work_slot_start_iso(break_slot_start_iso),
+        Mode::Concentration => {
+            let dt = DateTime::parse_from_rfc3339(break_slot_start_iso).ok()?;
+            let slot_min = if dt.minute() < 30 { 0 } else { 30 };
+            Some(hour_start(dt)?.checked_add_signed(ChronoDuration::minutes(slot_min))?.to_rfc3339())
+        }
+    }
+}
+
+/// Mode-aware `next_work_slot_start_iso`, on the same :00/:30 grid: after a
+/// break starting in :00-:29 the next slot is that hour's :30, after one
+/// starting in :30-:59 it is the next hour's :00.
+pub fn next_work_slot_start_iso_for(break_slot_start_iso: &str, mode: Mode) -> Option<String> {
+    match mode {
+        Mode::Normal => next_work_slot_start_iso(break_slot_start_iso),
+        Mode::Concentration => {
+            let dt = DateTime::parse_from_rfc3339(break_slot_start_iso).ok()?;
+            let fwd = if dt.minute() < 30 { 30 } else { 60 };
+            Some(hour_start(dt)?.checked_add_signed(ChronoDuration::minutes(fwd))?.to_rfc3339())
+        }
+    }
+}
+
+fn hour_start(dt: DateTime<chrono::FixedOffset>) -> Option<DateTime<chrono::FixedOffset>> {
+    dt.with_minute(0)?.with_second(0)?.with_nanosecond(0)
 }
 
 #[cfg(test)]
@@ -153,6 +248,48 @@ mod tests {
         assert_eq!(slot.phase, Phase::Work);
         assert_eq!(slot.start, local(10, 30));
         assert_eq!(slot.end, local(10, 55));
+    }
+
+    fn local_hms(h: u32, m: u32, s: u32) -> DateTime<Local> {
+        let naive = chrono::NaiveDate::from_ymd_opt(2026, 3, 10)
+            .unwrap()
+            .and_hms_opt(h, m, s)
+            .unwrap();
+        resolve_local(&Local, naive)
+    }
+
+    #[test]
+    fn concentration_bands() {
+        let c = Mode::Concentration;
+        let s = slot_for_mode(local_hms(10, 24, 59), c);
+        assert_eq!((s.phase, s.start, s.end), (Phase::Work, local_hms(10, 0, 0), local_hms(10, 25, 0)));
+        let s = slot_for_mode(local_hms(10, 25, 0), c);
+        assert_eq!((s.phase, s.start, s.end), (Phase::Break, local_hms(10, 25, 0), local_hms(10, 25, 30)));
+        let s = slot_for_mode(local_hms(10, 25, 30), c);
+        assert_eq!((s.phase, s.start, s.end), (Phase::Work, local_hms(10, 25, 30), local_hms(10, 50, 0)));
+        let s = slot_for_mode(local_hms(10, 50, 0), c);
+        assert_eq!((s.phase, s.start, s.end), (Phase::Break, local_hms(10, 50, 0), local_hms(11, 0, 0)));
+        let s = slot_for_mode(local_hms(10, 59, 59), c);
+        assert_eq!(s.phase, Phase::Break);
+    }
+
+    #[test]
+    fn concentration_preceding_and_next_work_slots() {
+        let c = Mode::Concentration;
+        let short = slot_for_mode(local_hms(10, 25, 10), c).start_iso();
+        // Reflections stay on the :00/:30 grid: break at :25 -> :00, break at :50 -> :30.
+        assert_eq!(preceding_work_slot_start_iso_for(&short, c).unwrap(), local_hms(10, 0, 0).to_rfc3339());
+        assert_eq!(next_work_slot_start_iso_for(&short, c).unwrap(), local_hms(10, 30, 0).to_rfc3339());
+        let long = slot_for_mode(local_hms(10, 55, 0), c).start_iso();
+        assert_eq!(preceding_work_slot_start_iso_for(&long, c).unwrap(), local_hms(10, 30, 0).to_rfc3339());
+        assert_eq!(next_work_slot_start_iso_for(&long, c).unwrap(), local_hms(11, 0, 0).to_rfc3339());
+    }
+
+    #[test]
+    fn mode_parse_defaults_to_normal() {
+        assert_eq!(Mode::parse("concentration"), Mode::Concentration);
+        assert_eq!(Mode::parse(""), Mode::Normal);
+        assert_eq!(Mode::parse("bogus"), Mode::Normal);
     }
 
     #[test]

@@ -167,6 +167,15 @@ impl<R: Runtime> AndroidBridge<R> {
             .run_mobile_plugin("persistPomodoroEnabled", serde_json::json!({ "enabled": enabled }))
     }
 
+    /// Mirrors the schedule mode ("normal"/"concentration") into
+    /// SharedPreferences so `BreakScheduling.kt` can pick the right next alarm
+    /// boundary before any Rust runtime exists. Called from
+    /// `commands::set_pomodoro_mode` and at scheduler start.
+    pub fn persist_pomodoro_mode(&self, mode: &str) -> Result<Value, PluginInvokeError> {
+        self.0
+            .run_mobile_plugin("persistPomodoroMode", serde_json::json!({ "mode": mode }))
+    }
+
     /// Persists an in-progress snooze's resume-at (epoch millis, 0 = none)
     /// and its originally chosen duration to the same SharedPreferences file
     /// `persist_pomodoro_enabled` uses -- called from

@@ -66,6 +66,11 @@ class PersistPomodoroEnabledArgs {
 }
 
 @InvokeArg
+class PersistPomodoroModeArgs {
+    var mode: String = "normal"
+}
+
+@InvokeArg
 class PersistPomodoroSnoozeUntilArgs {
     var untilMs: Long = 0
     var minutes: Int = 0
@@ -262,6 +267,20 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         activity.getSharedPreferences(PomodoroEnabledPref.PREFS_NAME, Activity.MODE_PRIVATE)
             .edit()
             .putBoolean(PomodoroEnabledPref.PREF_POMODORO_ENABLED, args.enabled)
+            .apply()
+        invoke.resolve(JSObject())
+    }
+
+    /** Persists the schedule mode ("normal"/"concentration") to
+     * SharedPreferences so BreakScheduling.kt can pick the right next alarm
+     * boundary before any Rust runtime exists (boot, or a killed process).
+     * See PomodoroEnabledPref.getMode (BootCompletedReceiver.kt). */
+    @Command
+    fun persistPomodoroMode(invoke: Invoke) {
+        val args = invoke.parseArgs(PersistPomodoroModeArgs::class.java)
+        activity.getSharedPreferences(PomodoroEnabledPref.PREFS_NAME, Activity.MODE_PRIVATE)
+            .edit()
+            .putString(PomodoroEnabledPref.PREF_POMODORO_MODE, args.mode)
             .apply()
         invoke.resolve(JSObject())
     }

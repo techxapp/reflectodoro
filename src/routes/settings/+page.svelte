@@ -769,10 +769,15 @@
   <section class="card">
     <h2>Session schedule</h2>
     <p class="hint">
-      (Fixed for now)<br/> 
-      Work runs :00&ndash;:25 and :30&ndash;:55 each hour <br/> 
+      <strong>Normal</strong><br/>
+      Work runs :00&ndash;:25 and :30&ndash;:55 each hour<br/>
       Breaks run :25&ndash;:30 and :55&ndash;:00
     </p>
+    <p class="hint">
+      <strong>Concentration</strong><br/>
+      Work :00&ndash;:25 &rarr; 30 sec break (:25:00&ndash;:25:30) &rarr; work :25:30&ndash;:50 &rarr; 10 min break (:50&ndash;:00)
+    </p>
+    <p class="hint">To change the mode, use the mode selector on the Timer screen.</p>
   </section>
 
   <section class="card">
