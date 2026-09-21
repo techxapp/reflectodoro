@@ -26,6 +26,8 @@
     getScreenTimeAppThresholdMinutes,
     getCurrentScreenTimeSession,
     getDeviceName,
+    deleteDayEntries,
+    deleteDayScreenTime,
     type ReflectionDisplayRow,
     type ScreenTimeEntry,
     type WellnessSummary,
@@ -201,6 +203,34 @@
       loadError = e instanceof Error ? e.message : String(e);
     }
     loading = false;
+  }
+
+  /** Recovery for a day that won't load: wipes that day's rows so the page can
+   * render again. Confirms first, and drops any pending debounced task saves
+   * so a queued write can't re-create the row we just deleted. */
+  async function deleteDayAfterError(kind: "entries" | "screenTime") {
+    const stamp = selectedStamp;
+    const what =
+      kind === "entries"
+        ? "all reflections, check-ins and task lists"
+        : "all screen time";
+    if (!confirm(`Permanently delete ${what} for ${stamp}? This can't be undone.`)) return;
+    if (taskSaveTimer) clearTimeout(taskSaveTimer);
+    if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
+    try {
+      if (kind === "entries") {
+        await deleteDayEntries(stamp);
+        await load();
+      } else {
+        await deleteDayScreenTime(stamp);
+        await loadScreenTime();
+      }
+    } catch (e) {
+      console.error("entries: delete day failed", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (kind === "entries") loadError = `Delete failed: ${msg}`;
+      else screenTimeError = `Delete failed: ${msg}`;
+    }
   }
 
   function goToDay(delta: number) {
@@ -664,6 +694,9 @@
       <p class="load-error" role="alert">
         Couldn't load screen time: {screenTimeError}
         <button onclick={() => void loadScreenTime()}>Retry</button>
+        <button class="danger" onclick={() => void deleteDayAfterError("screenTime")}>
+          Delete this day's screen time
+        </button>
       </p>
     {:else if screenTime.length === 0 && !screenTimeTrackingOn}
       <p class="hint">
@@ -722,6 +755,9 @@
       <p class="load-error" role="alert">
         Couldn't load this day's entries: {loadError}
         <button onclick={() => void load()}>Retry</button>
+        <button class="danger" onclick={() => void deleteDayAfterError("entries")}>
+          Delete this day's data
+        </button>
       </p>
     {:else}
       {#if wellnessSummary.total > 0}
@@ -1630,6 +1666,10 @@
   }
   .load-error button {
     margin-left: 0.5rem;
+  }
+  .load-error button.danger {
+    border-color: #c0392b;
+    color: #c0392b;
   }
   .hint {
     color: var(--text-dim);

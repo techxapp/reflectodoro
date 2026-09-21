@@ -780,6 +780,31 @@ export async function deleteBulkEditPreset(id: string): Promise<void> {
   await db.execute(`DELETE FROM bulk_edit_preset WHERE id = $1`, [id]);
 }
 
+/**
+ * Recovery path for a day the Entries page can't load (e.g. rows encrypted
+ * under a key that's no longer available make the whole day's decrypt fail).
+ * Uses the same local-day predicate as the readers so it removes exactly what
+ * the page would have shown. Sequential, idempotent deletes rather than one
+ * transaction: tauri-plugin-sql doesn't guarantee consecutive calls share a
+ * connection, and a partial failure is fixed by simply running it again.
+ * Local only -- sync is additive, so a paired device still holding this day's
+ * rows will send them back on its next sync.
+ */
+export async function deleteDayEntries(dateStamp: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(`DELETE FROM reflection WHERE date(slot_start_at, 'localtime') = $1`, [dateStamp]);
+  await db.execute(`DELETE FROM wellness_check WHERE date(slot_start_at, 'localtime') = $1`, [dateStamp]);
+  await db.execute(`DELETE FROM daily_task_list WHERE date = $1`, [dateStamp]);
+  await db.execute(`DELETE FROM not_to_do_list WHERE date = $1`, [dateStamp]);
+}
+
+/** Screen-time counterpart of deleteDayEntries -- separate so a failure in one
+ * card never wipes the other's data. */
+export async function deleteDayScreenTime(dateStamp: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(`DELETE FROM screen_time_session WHERE date(started_at, 'localtime') = $1`, [dateStamp]);
+}
+
 export async function getTaskList(dateStamp: string): Promise<string> {
   const db = await getDb();
   const rows = await db.select<{ content: string }[]>(
