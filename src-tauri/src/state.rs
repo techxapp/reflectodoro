@@ -147,6 +147,15 @@ pub struct AppState {
     /// "Coming next" line is hidden entirely in that case rather than shown
     /// empty (see native_overlay.html's render()).
     pub coming_next_text: Mutex<String>,
+    /// Text of the end-of-break quote panel (`app_setting.quote_api_url`),
+    /// Android only. The native WindowManager overlay has no fetch capability
+    /// of its own, so Rust fetches it (`native_overlay::refresh_quote_text`)
+    /// and pushes it through `overlay_state_json_for_android`. Unlike
+    /// `coming_next_text` it is NOT computed before the overlay is shown: the
+    /// fetch can take up to 5s, so it runs in the background after the show
+    /// and arrives via a state re-push. Cleared at every break open and close
+    /// so a previous break's quote never flashes; empty hides the panel.
+    pub quote_text: Mutex<String>,
 }
 
 impl AppState {
@@ -162,6 +171,7 @@ impl AppState {
             task_list_date: Mutex::new(String::new()),
             missed_slot_count: Mutex::new(1),
             coming_next_text: Mutex::new(String::new()),
+            quote_text: Mutex::new(String::new()),
         }
     }
 }

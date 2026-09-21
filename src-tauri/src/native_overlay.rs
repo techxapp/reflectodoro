@@ -232,6 +232,49 @@ pub async fn refresh_coming_next_text(app: &AppHandle) {
     *app.state::<AppState>().coming_next_text.lock().unwrap() = text;
 }
 
+/// Fetches the end-of-break quote (`app_setting.quote_api_url`, blank = off)
+/// and stores it in `AppState.quote_text`, returning whether it changed
+/// anything -- the caller re-pushes state only then. Meant to run in a
+/// background task *after* the overlay is shown, since `fetch_quote` can take
+/// up to its 5s timeout. Any failure leaves the panel hidden, never an error
+/// on the break screen -- same as the desktop overlay. The quote body is
+/// never logged.
+pub async fn refresh_quote_text(app: &AppHandle) -> bool {
+    let slot_at_start = app.state::<AppState>().overlay.lock().unwrap().current_slot_start.clone();
+    let url = sqlx::query_scalar::<_, String>("SELECT value FROM app_setting WHERE key = 'quote_api_url'")
+        .fetch_optional(pool(app).await)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let url = url.trim();
+    if url.is_empty() {
+        return false;
+    }
+    log::info!("quote: fetching for slot {slot_at_start}");
+    let text = match commands::fetch_quote(url.to_string()).await {
+        Ok(t) => t,
+        Err(e) => {
+            log::info!("quote: fetch failed, panel stays hidden: {e}");
+            return false;
+        }
+    };
+    let state = app.state::<AppState>();
+    // The break may have closed (or a new one opened) while the request was in
+    // flight; a late result must not land on the wrong overlay.
+    let still_current = {
+        let overlay = state.overlay.lock().unwrap();
+        overlay.open && overlay.current_slot_start == slot_at_start
+    };
+    if !still_current {
+        log::info!("quote: discarding result, break changed while fetching");
+        return false;
+    }
+    *state.quote_text.lock().unwrap() = text;
+    log::info!("quote: fetched, pushing to overlay");
+    true
+}
+
 /// Mirrors db.ts's `splitReflectionForSlots` exactly: when there's more than one covered
 /// (missed) slot and `text` splits into exactly as many non-blank lines as there are slots,
 /// returns those lines in slot order (index 0 = oldest slot). `None` on any mismatch -- caller

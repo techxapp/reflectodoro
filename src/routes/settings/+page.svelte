@@ -802,7 +802,7 @@
       </form>
     {/if}
 
-    {#if !isAndroid && quoteApiUrlLoaded}
+    {#if quoteApiUrlLoaded}
       <form onsubmit={saveQuoteApiUrlSetting}>
         <label class="grow">
           Quote API URL
@@ -820,8 +820,7 @@
       <p class="hint">
         Shown at the end of the break screen. Leave blank to disable. Expects a JSON response with
         a quote field (e.g. <code>quote</code>/<code>content</code>/<code>text</code>, optionally
-        <code>author</code>) &mdash; falls back to showing the raw response text otherwise. Not yet
-        supported on Android.
+        <code>author</code>) &mdash; falls back to showing the raw response text otherwise.
       </p>
     {/if}
 

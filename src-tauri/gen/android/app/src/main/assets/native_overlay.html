@@ -80,6 +80,13 @@
     box-sizing: border-box;
   }
 
+  .quote-text {
+    margin: 0;
+    font-style: italic;
+    line-height: 1.5;
+    opacity: 0.85;
+  }
+
   h2 {
     font-size: 15px;
     margin: 0 0 12px;
@@ -225,6 +232,10 @@
       <textarea id="not-to-do-list" rows="3" placeholder="1.&#10;2.&#10;3."></textarea>
       <p class="hint">Auto-saves as you type.</p>
     </section>
+
+    <section class="panel" id="quote-panel" style="display: none">
+      <p class="quote-text" id="quote-text"></p>
+    </section>
   </div>
 
   <div id="spacer" class="spacer"></div>
@@ -243,6 +254,7 @@
       not_to_do_content: "",
       missed_slot_count: 1,
       coming_next_text: "",
+      quote_text: "",
     };
     var pendingBreakitCheck = false;
     var taskSaveTimer = null;
@@ -253,6 +265,8 @@
     var reflectionSavedEl = document.getElementById("reflection-saved");
     var splitHintEl = document.getElementById("split-hint");
     var comingNextEl = document.getElementById("coming-next");
+    var quotePanelEl = document.getElementById("quote-panel");
+    var quoteTextEl = document.getElementById("quote-text");
     var breakitInputEl = document.getElementById("breakit-input");
     var breakitPendingEl = document.getElementById("breakit-pending");
     var breakitMatchedEl = document.getElementById("breakit-matched");
@@ -332,6 +346,15 @@
         comingNextEl.style.display = "";
       } else {
         comingNextEl.style.display = "none";
+      }
+
+      // textContent, never innerHTML: the text comes from a user-configured
+      // third-party endpoint.
+      if (state.quote_text) {
+        quoteTextEl.textContent = state.quote_text;
+        quotePanelEl.style.display = "";
+      } else {
+        quotePanelEl.style.display = "none";
       }
 
       breakitPendingEl.style.display = (state.breakit_matched || state.breakit_limit_reached) ? "none" : "";

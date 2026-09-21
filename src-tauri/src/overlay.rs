@@ -222,6 +222,8 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
         // saved in the main app rather than a stale value from launch. See
         // AppState.task_list's doc comment for why a plain cache read is
         // safe for every push after this one.
+        // Cleared first so a previous break's quote never flashes at open.
+        *app.state::<AppState>().quote_text.lock().unwrap() = String::new();
         crate::native_overlay::refresh_task_list_cache(app).await;
         crate::native_overlay::refresh_not_to_do_list_cache(app).await;
         crate::native_overlay::refresh_missed_slot_count(app).await;
@@ -232,6 +234,16 @@ pub async fn spawn_or_update_overlay(app: &AppHandle) {
         if let Err(e) = bridge.trigger_break_screen(persistent, state_json) {
             log::error!("trigger_break_screen failed: {e:?}");
         }
+        // Fetched in the background (up to 5s) rather than awaited, so the
+        // overlay is never delayed by a slow endpoint; the result reaches the
+        // WebView via a state re-push. (quote_text was cleared before the
+        // state JSON above was built.)
+        let app_for_quote = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if crate::native_overlay::refresh_quote_text(&app_for_quote).await {
+                emit_state(&app_for_quote);
+            }
+        });
     }
 
     emit_state(app);
@@ -264,6 +276,10 @@ fn overlay_state_json_for_android(app: &AppHandle) -> serde_json::Value {
         map.insert(
             "coming_next_text".into(),
             serde_json::json!(state.coming_next_text.lock().unwrap().clone()),
+        );
+        map.insert(
+            "quote_text".into(),
+            serde_json::json!(state.quote_text.lock().unwrap().clone()),
         );
     }
     json
@@ -400,6 +416,11 @@ pub fn close_overlay(app: &AppHandle) {
     // never posted -- so skip it.
     if !was_open {
         return;
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        *app.state::<AppState>().quote_text.lock().unwrap() = String::new();
     }
 
     // Unconditional -- NOT gated on MEDIA_PAUSE_ON_BREAK_ENABLED's *current*
