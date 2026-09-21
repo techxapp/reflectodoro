@@ -26,6 +26,8 @@
     getScreenTimeAppThresholdMinutes,
     getCurrentScreenTimeSession,
     getDeviceName,
+    deleteDayEntries,
+    deleteDayScreenTime,
     type ReflectionDisplayRow,
     type ScreenTimeEntry,
     type WellnessSummary,
@@ -46,6 +48,10 @@
   let wellnessSummary = $state<WellnessSummary>(EMPTY_WELLNESS_SUMMARY);
   let calendarMonth = $state(new Date());
   let loading = $state(false);
+  // Set when a load rejects (e.g. decrypt failure) so the page shows the
+  // problem instead of sitting on "Loading..." forever.
+  let loadError = $state<string | null>(null);
+  let screenTimeError = $state<string | null>(null);
   let expandedClusters = $state<Set<number>>(new Set());
   let editingId = $state<number | null>(null);
   let editText = $state("");
@@ -53,7 +59,7 @@
   let screenTimeLoaded = $state(false);
   let screenTimeTrackingOn = $state(true);
   let screenTimeThresholdMinutes = $state(5);
-  // Windows and Android are the only platforms capturing focus so far --
+  // Windows, Android and macOS are the only platforms capturing focus so far --
   // without this the empty state on the others reads as "you did nothing
   // today" rather than "nothing is recording yet".
   let captureSupported = $state(true);
@@ -176,20 +182,55 @@
 
   async function load() {
     loading = true;
+    loadError = null;
     const stamp = selectedStamp;
     const generation = ++loadGeneration;
-    const [r, t, n, w] = await Promise.all([
-      getReflectionsForDate(stamp),
-      getTaskList(stamp),
-      getNotToDoList(stamp),
-      getWellnessSummaryForDate(stamp),
-    ]);
-    if (generation !== loadGeneration) return;
-    reflectionRows = r;
-    taskList = t;
-    notToDo = n;
-    wellnessSummary = w;
+    try {
+      const [r, t, n, w] = await Promise.all([
+        getReflectionsForDate(stamp),
+        getTaskList(stamp),
+        getNotToDoList(stamp),
+        getWellnessSummaryForDate(stamp),
+      ]);
+      if (generation !== loadGeneration) return;
+      reflectionRows = r;
+      taskList = t;
+      notToDo = n;
+      wellnessSummary = w;
+    } catch (e) {
+      if (generation !== loadGeneration) return;
+      console.error("entries: load failed", e);
+      loadError = e instanceof Error ? e.message : String(e);
+    }
     loading = false;
+  }
+
+  /** Recovery for a day that won't load: wipes that day's rows so the page can
+   * render again. Confirms first, and drops any pending debounced task saves
+   * so a queued write can't re-create the row we just deleted. */
+  async function deleteDayAfterError(kind: "entries" | "screenTime") {
+    const stamp = selectedStamp;
+    const what =
+      kind === "entries"
+        ? "all reflections, check-ins and task lists"
+        : "all screen time";
+    if (!confirm(`Permanently delete ${what} for ${stamp}? This can't be undone.`)) return;
+    if (taskSaveTimer) clearTimeout(taskSaveTimer);
+    if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
+    try {
+      if (kind === "entries") {
+        await deleteDayEntries(stamp);
+        await load();
+      } else {
+        await deleteDayScreenTime(stamp);
+        await loadScreenTime();
+      }
+    } catch (e) {
+      console.error("entries: delete day failed", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (kind === "entries") loadError = `Delete failed: ${msg}`;
+      else screenTimeError = `Delete failed: ${msg}`;
+    }
   }
 
   function goToDay(delta: number) {
@@ -485,15 +526,27 @@
     const stamp = selectedStamp;
     const forToday = stamp === localDateStamp(new Date());
     const generation = ++screenTimeGeneration;
-    const [enabled, entries, deviceName, current, thresholdMinutes] = await Promise.all([
-      getScreenTimeTrackingEnabled(),
-      getScreenTimeForDate(stamp),
-      getDeviceName(),
-      // Only today can have an in-progress session to blend in; asking on any
-      // other day would attribute the currently-focused app to that day.
-      forToday ? getCurrentScreenTimeSession() : Promise.resolve(null),
-      getScreenTimeAppThresholdMinutes(),
-    ]);
+    screenTimeError = null;
+    let enabled: boolean, entries: ScreenTimeEntry[], deviceName: string;
+    let current: Awaited<ReturnType<typeof getCurrentScreenTimeSession>>;
+    let thresholdMinutes: number;
+    try {
+      [enabled, entries, deviceName, current, thresholdMinutes] = await Promise.all([
+        getScreenTimeTrackingEnabled(),
+        getScreenTimeForDate(stamp),
+        getDeviceName(),
+        // Only today can have an in-progress session to blend in; asking on any
+        // other day would attribute the currently-focused app to that day.
+        forToday ? getCurrentScreenTimeSession() : Promise.resolve(null),
+        getScreenTimeAppThresholdMinutes(),
+      ]);
+    } catch (e) {
+      if (generation !== screenTimeGeneration) return;
+      console.error("entries: screen time load failed", e);
+      screenTimeError = e instanceof Error ? e.message : String(e);
+      screenTimeLoaded = true;
+      return;
+    }
     if (generation !== screenTimeGeneration) return;
 
     let blended = entries;
@@ -568,7 +621,7 @@
     window.addEventListener("focus", onWindowFocus);
     document.addEventListener("visibilitychange", onEntriesVisibilityChange);
     const os = await invoke<string>("current_os");
-    captureSupported = os === "windows" || os === "android";
+    captureSupported = os === "windows" || os === "android" || os === "macos";
     isAndroid = os === "android";
     await refreshUsageAccess();
   });
@@ -637,6 +690,14 @@
          status banners. -->
     {#if !screenTimeLoaded}
       <p class="hint">Loading&hellip;</p>
+    {:else if screenTimeError}
+      <p class="load-error" role="alert">
+        Couldn't load screen time: {screenTimeError}
+        <button onclick={() => void loadScreenTime()}>Retry</button>
+        <button class="danger" onclick={() => void deleteDayAfterError("screenTime")}>
+          Delete this day's screen time
+        </button>
+      </p>
     {:else if screenTime.length === 0 && !screenTimeTrackingOn}
       <p class="hint">
         Tracking is off. Turn it on in <a href="/settings">Settings</a> to see where your day went.
@@ -690,6 +751,14 @@
 
     {#if loading}
       <p class="hint">Loading...</p>
+    {:else if loadError}
+      <p class="load-error" role="alert">
+        Couldn't load this day's entries: {loadError}
+        <button onclick={() => void load()}>Retry</button>
+        <button class="danger" onclick={() => void deleteDayAfterError("entries")}>
+          Delete this day's data
+        </button>
+      </p>
     {:else}
       {#if wellnessSummary.total > 0}
         <div class="wellness-summary">
@@ -1029,8 +1098,19 @@
     display: grid;
     grid-template-columns: 300px 1fr;
     gap: 20px;
-    max-width: 1000px;
+    max-width: 1200px;
     margin: 0 auto;
+  }
+
+  /* Large windows: scale the whole page (text, controls, spacing) up together
+     rather than overriding each hard-coded px size. The cap is divided by the
+     same factor so the rendered width stays 1200px. min-width only, so small
+     windows and Android keep the base sizes. */
+  @media (min-width: 1200px) {
+    .page {
+      zoom: 1.15;
+      max-width: calc(1200px / 1.15);
+    }
   }
 
   /* Left column stacks calendar-then-screen-time as plain flex children, so
@@ -1579,6 +1659,18 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .load-error {
+    color: #c0392b;
+    font-size: 0.9rem;
+    margin: 0.5rem 0;
+  }
+  .load-error button {
+    margin-left: 0.5rem;
+  }
+  .load-error button.danger {
+    border-color: #c0392b;
+    color: #c0392b;
+  }
   .hint {
     color: var(--text-dim);
     font-size: 13px;

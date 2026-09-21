@@ -188,6 +188,28 @@ pub fn close_after_save_failure(app: AppHandle, state: State<AppState>) -> Resul
     Ok(())
 }
 
+/// "Skip" on the encryption-key prompt shown over the break screen
+/// (KeyUnlockModal.svelte): closes the break without a reflection, because
+/// none can be saved while the key is locked. Gated server-side on the key
+/// actually being locked (key_store::is_locked), so this is never a general
+/// break skip -- once the key is unlocked the normal unlock formula applies
+/// again. Chosen by the user over "wait out the break first"; the accepted
+/// cost is that someone who never unlocks can skip every break this way.
+/// Same effect as `close_after_save_failure`: nothing recorded for the slot,
+/// so no wellness check-in opens.
+#[tauri::command]
+pub fn close_overlay_key_locked(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    if !crate::key_store::is_locked() {
+        return Err("the encryption key isn't locked".into());
+    }
+    if !state.overlay.lock().unwrap().open {
+        return Ok(());
+    }
+    log::info!("overlay: closed via Skip on the locked-key prompt (no reflection recorded)");
+    overlay::close_overlay(&app);
+    Ok(())
+}
+
 /// Server-side choke point for the breakit early-exit, shared by both
 /// desktop (invoked directly from overlay/+page.svelte) and Android
 /// (native_overlay.rs's BreakitAttempt event, which has no other path into

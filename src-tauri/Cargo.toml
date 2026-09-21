@@ -128,6 +128,13 @@ mdns-sd = "0.11"
 # info" report. Desktop only -- Android's OS version comes from
 # Build.VERSION.RELEASE via android_bridge.rs/NativeBridgePlugin.kt instead.
 os_info = "3"
+# key_store.rs: the password-protected key file. argon2 derives the key-
+# encryption key from the user's password (Argon2id, memory-hard, so a stolen
+# key file can't be brute-forced cheaply); zeroize wipes the password and
+# derived key from memory once used. Desktop only -- Android's key is a
+# non-exportable Keystore key with no file to protect.
+argon2 = "0.5"
+zeroize = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
@@ -161,6 +168,8 @@ keyring = { version = "3", features = ["windows-native"] }
 # builds -- release uses panic = "abort", see Cargo.toml's [profile.release]).
 objc2 = { version = "0.6.4", features = ["exception"] }
 objc2-app-kit = "0.3.2"
+# NSNotificationCenter observer block in screen_time.rs (already in the lockfile transitively).
+block2 = "0.6.2"
 objc2-core-graphics = "0.3.2"
 objc2-foundation = "0.3.2"
 # See the Windows block above for why the backend feature is explicit. macOS

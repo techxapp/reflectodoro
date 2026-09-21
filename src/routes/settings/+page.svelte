@@ -51,6 +51,27 @@
     type DiscoveredDevice,
     type PairedDeviceInfo,
   } from "$lib/db";
+  import EncryptionKeyCard from "$lib/EncryptionKeyCard.svelte";
+
+  /** Settings -> Advanced is collapsed by default; the open/closed choice is
+   * a per-viewer convenience, so browser storage (which can throw or come
+   * back empty) is fine and only ever a nicety. */
+  const ADVANCED_OPEN_KEY = "settings.advancedOpen";
+  let advancedOpen = $state(false);
+  try {
+    advancedOpen = localStorage.getItem(ADVANCED_OPEN_KEY) === "1";
+  } catch {
+    // storage unavailable -- stay collapsed
+  }
+
+  function toggleAdvanced() {
+    advancedOpen = !advancedOpen;
+    try {
+      localStorage.setItem(ADVANCED_OPEN_KEY, advancedOpen ? "1" : "0");
+    } catch {
+      // storage unavailable -- the toggle still works for this visit
+    }
+  }
 
   let length = $state(15);
   let includeSpecial = $state(false);
@@ -1025,7 +1046,7 @@
 
     {#if osResolved && !isWindows && !isAndroid}
       <p class="hint warning">
-        Not captured on this platform yet &mdash; Windows and Android are the only ones recording
+        Not captured on this platform yet &mdash; Windows, macOS and Android are the only ones recording
         so far. The setting is here, but nothing lands until support for this platform ships.
       </p>
     {/if}
@@ -1255,6 +1276,26 @@
       </div>
     {/if}
   </section>
+
+  <!-- Last on the page by design: set-once, rarely-needed controls. -->
+  <button
+    type="button"
+    class="advanced-toggle"
+    aria-expanded={advancedOpen}
+    aria-controls="advanced-settings"
+    onclick={toggleAdvanced}
+  >
+    {advancedOpen ? "Hide advanced settings" : "Advanced settings"}
+  </button>
+  {#if advancedOpen}
+    <div id="advanced-settings" class="advanced">
+      {#if !isAndroid}
+        <EncryptionKeyCard />
+      {:else}
+        <p class="hint">No advanced settings on this device yet.</p>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -1263,8 +1304,19 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
-    max-width: 840px;
+    max-width: 1200px;
     margin: 0 auto;
+  }
+
+  /* Large windows: scale the whole page (text, controls, spacing) up together
+     rather than overriding each hard-coded px size. The cap is divided by the
+     same factor so the rendered width stays 1200px. min-width only, so small
+     windows and Android keep the base sizes. */
+  @media (min-width: 1200px) {
+    .page {
+      zoom: 1.15;
+      max-width: calc(1200px / 1.15);
+    }
   }
 
   .card {
@@ -1445,6 +1497,19 @@
 
   button.danger {
     background: #d9534f;
+  }
+
+  button.advanced-toggle {
+    align-self: flex-start;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+
+  .advanced {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
   }
 
   h3 {

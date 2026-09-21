@@ -630,7 +630,7 @@
     display: grid;
     grid-template-columns: 2fr 1fr;
     gap: 24px;
-    width: min(1000px, 90vw);
+    width: min(1400px, 94vw);
     /* Vertically centers when it fits; unlike justify-content: center on
        the parent, margin: auto on a flex child keeps the top/bottom edges
        reachable by scroll once content is taller than the viewport. */
@@ -655,6 +655,59 @@
     font-style: italic;
     line-height: 1.5;
     opacity: 0.85;
+  }
+
+  /* Large displays: the fixed small type/padding left the content floating in
+     a sea of margin, so scale it up. Deliberately min-width only, so phones
+     and small windows keep the base sizes (and the max-width: 600px block
+     below still wins there). */
+  @media (min-width: 1200px) {
+    .grid {
+      gap: 32px;
+    }
+
+    .panel {
+      padding: 40px;
+    }
+
+    .timer {
+      font-size: 17px;
+    }
+
+    h1 {
+      font-size: 28px;
+    }
+
+    h2 {
+      font-size: 19px;
+    }
+
+    label {
+      font-size: 15px;
+    }
+
+    textarea,
+    input {
+      font-size: 16px;
+      padding: 12px 14px;
+    }
+
+    button {
+      font-size: 16px;
+      padding: 12px 22px;
+    }
+
+    .challenge {
+      font-size: 24px;
+    }
+
+    .hint {
+      font-size: 14px;
+    }
+
+    .hint.coming-next {
+      font-size: 16px;
+    }
   }
 
   @media (max-width: 600px) {
