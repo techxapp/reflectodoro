@@ -97,6 +97,20 @@ impl<R: Runtime> IosBridge<R> {
         Ok((until_ms, minutes))
     }
 
+    /// Returns whether other apps' audio was actually interrupted; `false`
+    /// (not an error) when iOS refused, e.g. while backgrounded.
+    pub fn pause_other_audio(&self) -> Result<(bool, Option<String>), PluginInvokeError> {
+        let v: Value = self.0.run_mobile_plugin("pauseOtherAudio", ())?;
+        Ok((
+            v.get("paused").and_then(|x| x.as_bool()).unwrap_or(false),
+            v.get("error").and_then(|x| x.as_str()).map(str::to_owned),
+        ))
+    }
+
+    pub fn resume_other_audio(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("resumeOtherAudio", ())
+    }
+
     pub fn exclude_from_backup(&self, path: &str) -> Result<Value, PluginInvokeError> {
         self.0.run_mobile_plugin("excludeFromBackup", serde_json::json!({ "path": path }))
     }

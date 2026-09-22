@@ -1259,6 +1259,7 @@ pub fn run() {
             #[cfg(target_os = "ios")]
             if let tauri::RunEvent::Resumed = _event {
                 ios_schedule::wake();
+                media::retry_pause_on_resume(_app);
             }
         });
 }

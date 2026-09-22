@@ -1601,6 +1601,20 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
+              <p class="timeline-date">Wednesday, Sep 23, 2026</p>
+              <ul class="timeline-items">
+                <li>iOS now pauses whatever music or video is playing when a break starts, and lets it pick back up when the break ends. It never restarts something you had already paused yourself, and it follows the same &ldquo;Pause media on break&rdquo; switch as every other platform</li>
+                <li>The end-of-break quote panel now works on iOS too</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Tuesday, Sep 22, 2026</p>
+              <ul class="timeline-items">
+                <li>Reflectodoro now runs on iPhone and iPad (not yet on the App Store): the same fixed :25/:55 break schedule, a notification with a chime at every break, a Lock Screen and Dynamic Island countdown to your next break, and the reflection screen the moment you open the app</li>
+                <li>Your iOS entries are encrypted at rest with a key kept in the iOS Keychain on that device only, and your database is kept out of iCloud and computer backups</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
               <p class="timeline-date">Monday, Sep 21, 2026</p>
               <ul class="timeline-items">
                 <li>Android break screen improvements: the end-of-break quote panel now works there too (fetched in the background so it never delays your break, with the Quote API URL configurable in Settings), and the break screen now steps aside when a phone or VoIP call rings or is active, then returns when the call ends</li>
@@ -1647,28 +1661,15 @@
                 <li>Fixed the main window's clock freezing after switching tabs, updated the snooze duration options, and switched the reflection list to show entries oldest-first, matching &ldquo;View all&rdquo;</li>
               </ul>
             </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Wednesday, Sep 16, 2026</p>
-              <ul class="timeline-items">
-                <li>Added encryption at rest: your reflections and task lists are now stored encrypted on disk, with the key held in your operating system's own secure storage (Windows Credential Manager, macOS Keychain, Linux Secret Service, Android Keystore). Existing entries are encrypted automatically on first launch, and exports stay readable so you can still move your data between devices</li>
-                <li>Added a privacy policy page, and stopped writing the emergency-exit challenge value to the log file, so logs stay safe to share when reporting a bug</li>
-                <li>Kept Android debug symbols for crash reports, and improved macOS startup diagnostics</li>
-              </ul>
-            </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Tuesday, Sep 15, 2026</p>
-              <ul class="timeline-items">
-                <li>Added a configurable quote panel to the break screen, pulling short text from a user-set API endpoint, and polished how the &ldquo;Coming next&rdquo; preview looks and stays visible after saving</li>
-                <li>Fixed the overlay clock/countdown showing stale time right when a break opens, and the reflection field pre-filling from the wrong slot instead of your last entry</li>
-                <li>Added the Google Play Store listing identifier</li>
-              </ul>
-            </div>
             <p class="timeline-tier reveal">Previous 3 weeks</p>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Sep 14 &ndash; 20, 2026</p>
               <ul class="timeline-items">
+                <li>Added encryption at rest: your reflections and task lists are now stored encrypted on disk, with the key held in your operating system's own secure storage (Windows Credential Manager, macOS Keychain, Linux Secret Service, Android Keystore). Exports stay readable so you can still move your data between devices</li>
+                <li>Added a configurable quote panel to the break screen, pulling short text from an API address you choose</li>
                 <li>Added a daily cap on emergency-exit (breakit) code uses, a &ldquo;Coming next&rdquo; preview and bulk-edit/full-day view for reflections, an auto-scrolling reflection list, and newest-first sorting on the Entries page</li>
-                <li>Fixed the macOS break screen getting hidden behind fullscreen apps, plus related media-pause bugs</li>
+                <li>Fixed the break-screen clock showing stale time as a break opens, the reflection field pre-filling from the wrong entry, and the macOS break screen getting hidden behind full-screen apps, plus related media-pause bugs</li>
+                <li>Added a privacy policy page, kept the emergency-exit challenge out of log files so they're safe to share, and improved crash reporting on Android and startup diagnostics on macOS</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">

@@ -4,6 +4,7 @@
 // hop to the main thread: nothing UIKit, only thread-safe Foundation /
 // UserNotifications / ActivityKit calls.
 
+import AVFoundation
 import Foundation
 import Tauri
 import UserNotifications
@@ -237,6 +238,46 @@ class NativeBridgePlugin: Plugin {
     let untilMs = (UserDefaults.standard.object(forKey: snoozeUntilKey) as? NSNumber)?.int64Value ?? 0
     let minutes = UserDefaults.standard.integer(forKey: snoozeMinutesKey)
     invoke.resolve(["untilMs": untilMs, "minutes": minutes])
+  }
+
+  // --- Media pause-on-break ------------------------------------------------
+
+  /// True only between a successful `pauseOtherAudio` and the matching
+  /// `resumeOtherAudio`, so a release never deactivates a session we
+  /// didn't activate.
+  private var audioSessionActive = false
+
+  /// Activating a non-mixable session interrupts whatever other app is
+  /// playing (the iOS counterpart of Android's transient audio focus). We
+  /// never play anything ourselves. `.playback` rather than the default
+  /// `.soloAmbient` so the interruption doesn't depend on the silent switch.
+  /// Fails with `cannotInterruptOthers` while the app is backgrounded.
+  @objc public func pauseOtherAudio(_ invoke: Invoke) {
+    let session = AVAudioSession.sharedInstance()
+    do {
+      try session.setCategory(.playback, mode: .default, options: [])
+      try session.setActive(true)
+      audioSessionActive = true
+      invoke.resolve(["paused": true])
+    } catch {
+      invoke.resolve(["paused": false, "error": "\(error)"])
+    }
+  }
+
+  /// `.notifyOthersOnDeactivation` lets apps we interrupted resume; it can't
+  /// resume anything that was already paused before the break.
+  @objc public func resumeOtherAudio(_ invoke: Invoke) {
+    guard audioSessionActive else {
+      invoke.resolve(["resumed": false])
+      return
+    }
+    audioSessionActive = false
+    do {
+      try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+      invoke.resolve(["resumed": true])
+    } catch {
+      invoke.resolve(["resumed": false, "error": "\(error)"])
+    }
   }
 
   // --- Backup exclusion ----------------------------------------------------

@@ -655,7 +655,73 @@ mod android_impl {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos", target_os = "linux", target_os = "android")))]
+/// Same shape as `android_impl`: a non-mixable AVAudioSession interrupts
+/// other apps' playback, and deactivating it lets them resume. iOS refuses
+/// activation from the background, so `IOS_MEDIA_PAUSED_SLOT` records which
+/// break was actually paused and `retry_pause_on_resume` (called from
+/// `RunEvent::Resumed`) fills in a break whose pause attempt failed --
+/// never one that succeeded, so it can't re-pause what the user restarted.
+#[cfg(target_os = "ios")]
+mod ios_impl {
+    use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
+
+    use tauri::{AppHandle, Manager, Wry};
+
+    use crate::ios_bridge::IosBridge;
+    use crate::state::AppState;
+
+    static IOS_MEDIA_PAUSED_SLOT: Mutex<Option<String>> = Mutex::new(None);
+
+    fn current_open_slot(app: &AppHandle) -> Option<String> {
+        let state = app.state::<AppState>();
+        let overlay = state.overlay.lock().unwrap();
+        overlay.open.then(|| overlay.current_slot_start.clone())
+    }
+
+    pub fn pause_playing_sessions(app: &AppHandle) {
+        let bridge = app.state::<IosBridge<Wry>>();
+        match bridge.pause_other_audio() {
+            Ok((true, _)) => {
+                *IOS_MEDIA_PAUSED_SLOT.lock().unwrap() = current_open_slot(app);
+            }
+            Ok((false, err)) => {
+                log::warn!("pause_playing_sessions: audio session not activated: {err:?}");
+            }
+            Err(e) => log::warn!("pause_playing_sessions: pauseOtherAudio failed: {e:?}"),
+        }
+    }
+
+    pub fn resume_playing_sessions(app: &AppHandle) {
+        *IOS_MEDIA_PAUSED_SLOT.lock().unwrap() = None;
+        let bridge = app.state::<IosBridge<Wry>>();
+        if let Err(e) = bridge.resume_other_audio() {
+            log::warn!("resume_playing_sessions: resumeOtherAudio failed: {e:?}");
+        }
+    }
+
+    pub fn retry_pause_on_resume(app: &AppHandle) {
+        if !crate::MEDIA_PAUSE_ON_BREAK_ENABLED.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(slot) = current_open_slot(app) else {
+            return;
+        };
+        if IOS_MEDIA_PAUSED_SLOT.lock().unwrap().as_deref() == Some(slot.as_str()) {
+            return;
+        }
+        log::info!("media: retrying break pause after resume");
+        pause_playing_sessions(app);
+    }
+}
+
+#[cfg(not(any(
+    windows,
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "android",
+    target_os = "ios"
+)))]
 mod noop_impl {
     use tauri::AppHandle;
 
@@ -673,7 +739,15 @@ pub use macos_impl::{
 pub use linux_impl::pause_playing_sessions;
 #[cfg(target_os = "android")]
 pub use android_impl::pause_playing_sessions;
-#[cfg(not(any(windows, target_os = "macos", target_os = "linux", target_os = "android")))]
+#[cfg(target_os = "ios")]
+pub use ios_impl::{pause_playing_sessions, retry_pause_on_resume};
+#[cfg(not(any(
+    windows,
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "android",
+    target_os = "ios"
+)))]
 pub use noop_impl::pause_playing_sessions;
 
 /// Only macOS gates media pause on a permission (see macos_impl).
@@ -712,12 +786,14 @@ pub fn pause_backend() -> &'static str {
 
 /// Symmetric release for `pause_playing_sessions`, called from
 /// `close_overlay`. Only Android's audio-focus model has anything to
-/// release (a granted `AudioFocusRequest`) -- Windows/macOS/Linux act on
-/// media sessions directly with no analogous "hold" to give back, so they
-/// stay a no-op here.
+/// release (a granted `AudioFocusRequest`) and iOS's (an active
+/// AVAudioSession) -- Windows/macOS/Linux act on media sessions directly
+/// with no analogous "hold" to give back, so they stay a no-op here.
 #[cfg(target_os = "android")]
 pub use android_impl::resume_playing_sessions;
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "ios")]
+pub use ios_impl::resume_playing_sessions;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn resume_playing_sessions(_app: &tauri::AppHandle) {}
 
 
