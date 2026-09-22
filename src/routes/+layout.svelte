@@ -7,10 +7,60 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { check } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
-  import { isOnboardingCompleted, listenForScreenTimeSessionBatches } from "$lib/db";
+  import {
+    isOnboardingCompleted,
+    listenForScreenTimeSessionBatches,
+    getThemePreference,
+    type ThemePreference,
+    type ThemeChangedPayload,
+  } from "$lib/db";
   import KeyUnlockModal from "$lib/KeyUnlockModal.svelte";
 
   let { children } = $props();
+
+  // Per-viewer convenience only (see settings/+page.svelte's ADVANCED_OPEN_KEY
+  // for the same pattern): a synchronous cache so a repeat launch can paint
+  // the previously-chosen theme immediately, before the async SQLite read
+  // below resolves, instead of flashing the OS-default theme for a moment.
+  // Never the source of truth -- getThemePreference()/theme://changed always
+  // win once they land.
+  const THEME_CACHE_KEY = "theme.preferenceCache";
+  function applyTheme(theme: ThemePreference) {
+    if (theme === "auto") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", theme);
+    }
+    try {
+      localStorage.setItem(THEME_CACHE_KEY, theme);
+    } catch {
+      // storage unavailable -- next launch just falls back to the OS default
+      // until the real onMount read below resolves
+    }
+  }
+  try {
+    const cached = localStorage.getItem(THEME_CACHE_KEY);
+    if (cached === "light" || cached === "dark") applyTheme(cached);
+  } catch {
+    // storage unavailable -- fine, the onMount read below still applies
+  }
+
+  let unlistenTheme: UnlistenFn | null = null;
+
+  // Every window (main, overlay, checkin, onboarding) imports app.css through
+  // this same root layout, so this deliberately runs unconditionally --
+  // unlike the update-check/screen-time-listener onMounts below, which are
+  // gated on !isSpecialWindow.
+  onMount(async () => {
+    applyTheme(await getThemePreference());
+    unlistenTheme = await listen<ThemeChangedPayload>("theme://changed", (event) => {
+      applyTheme(event.payload.theme);
+    });
+  });
+
+  onDestroy(() => {
+    unlistenTheme?.();
+  });
 
   // How much of the viewport the on-screen keyboard is currently covering.
   // visualViewport's resize event is wired up here but doesn't actually fire

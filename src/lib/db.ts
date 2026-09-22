@@ -2421,6 +2421,48 @@ export async function saveQuoteApiUrl(url: string): Promise<void> {
   );
 }
 
+// --- Theme (Settings -> Appearance) --------------------------------------
+//
+// "auto" (default) follows the OS light/dark setting via app.css's
+// `prefers-color-scheme` media query; "light"/"dark" pin it regardless of
+// what the OS says, via a `data-theme` attribute +layout.svelte applies to
+// `<html>` in every window (main, overlay, checkin, onboarding all import
+// app.css through that shared root layout). Purely a frontend concern --
+// nothing in Rust reads this key.
+
+export type ThemePreference = "auto" | "light" | "dark";
+
+const THEME_PREFERENCE_KEY = "theme_preference";
+
+export async function getThemePreference(): Promise<ThemePreference> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [THEME_PREFERENCE_KEY],
+  );
+  const value = rows[0]?.value;
+  return value === "light" || value === "dark" ? value : "auto";
+}
+
+export interface ThemeChangedPayload {
+  theme: ThemePreference;
+}
+
+/** Broadcasts to every open window (including this one) so a change applies
+ * immediately everywhere, not just on that window's next mount -- the same
+ * emit-to-all-windows pattern saveTaskList/saveNotToDoList use, just without
+ * their sourceLabel dance since re-applying the same theme in the window
+ * that made the change is harmless (unlike clobbering in-progress typing). */
+export async function saveThemePreference(theme: ThemePreference): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [THEME_PREFERENCE_KEY, theme],
+  );
+  await emit("theme://changed", { theme } satisfies ThemeChangedPayload);
+}
+
 // --- Encryption key storage (desktop; see key_store.rs) ---------------------
 
 export type KeyStorageStatus = {

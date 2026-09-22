@@ -39,6 +39,9 @@
     saveDeviceName,
     getQuoteApiUrl,
     saveQuoteApiUrl,
+    getThemePreference,
+    saveThemePreference,
+    type ThemePreference,
     startPairing,
     cancelPairing,
     browsePairingCandidates,
@@ -73,6 +76,16 @@
     } catch {
       // storage unavailable -- the toggle still works for this visit
     }
+  }
+
+  let themePreference = $state<ThemePreference>("auto");
+  let themeLoaded = $state(false);
+
+  async function handleThemeSelect(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement;
+    const next = select.value === "light" || select.value === "dark" ? select.value : "auto";
+    themePreference = next;
+    await saveThemePreference(next);
   }
 
   let length = $state(15);
@@ -407,6 +420,11 @@
   onMount(async () => {
     quoteApiUrl = await getQuoteApiUrl();
     quoteApiUrlLoaded = true;
+  });
+
+  onMount(async () => {
+    themePreference = await getThemePreference();
+    themeLoaded = true;
   });
 
   async function refreshOverlayPermission() {
@@ -765,6 +783,22 @@
 </script>
 
 <div class="page">
+
+  <section class="card">
+    <h2>Appearance</h2>
+    {#if themeLoaded}
+      <div class="data-row">
+        <label class="grow">
+          Theme
+          <select value={themePreference} onchange={handleThemeSelect}>
+            <option value="auto">Auto (based on OS theme)</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+      </div>
+    {/if}
+  </section>
 
   <section class="card">
     <h2>Session schedule</h2>
