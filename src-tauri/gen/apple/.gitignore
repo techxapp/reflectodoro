@@ -1,0 +1,5 @@
+xcuserdata/
+build/
+Externals/
+# Frontend build output, copied in by `tauri ios build/dev`.
+/assets/

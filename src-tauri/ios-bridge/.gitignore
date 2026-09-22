@@ -1,0 +1,4 @@
+# Copied from the tauri crate by build.rs on every iOS build.
+/.tauri
+/.build
+/Package.resolved

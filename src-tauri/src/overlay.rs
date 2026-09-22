@@ -295,6 +295,11 @@ pub fn emit_state(app: &AppHandle) {
         snapshot.current_slot_start
     );
 
+    // The Live Activity shows "reflect to unlock" while a break is waiting on
+    // a reflection; every change to that funnels through here.
+    #[cfg(target_os = "ios")]
+    crate::ios_schedule::wake();
+
     // Keeps the native WindowManager overlay (if it's currently showing --
     // Kotlin decides that, not Rust) in sync with every state change: the
     // breakit counter, reflection_entered flipping, or a merged slot's new
@@ -334,11 +339,11 @@ pub fn try_close_if_unlocked(app: &AppHandle) {
 /// it rolled into a newer slot via the merge path before the timer elapsed,
 /// this is a no-op rather than closing the wrong occurrence.
 ///
-/// On Android this polls in `ANDROID_POLL_INTERVAL` chunks against a
+/// On Android and iOS this polls in `MOBILE_POLL_INTERVAL` chunks against a
 /// wall-clock deadline instead of a single `tokio::time::sleep` for the full
 /// grace period -- the same `CLOCK_MONOTONIC`-across-suspend gap documented
 /// on that constant (`lib.rs`) applies here too: a single multi-minute sleep
-/// spanning a real Doze/deep-suspend period wouldn't fire until that much
+/// spanning a real Doze/deep-suspend (or iOS app-suspension) period wouldn't fire until that much
 /// *monotonic* (CPU-awake) time had actually elapsed, which could leave this
 /// grace-period force-close -- the one thing Settings' "the screen
 /// auto-closes on its own after the timeout below" hint promises -- stalled
@@ -348,14 +353,14 @@ pub fn schedule_auto_close(app: &AppHandle, slot_start: String) {
     let minutes = crate::OVERLAY_AUTO_CLOSE_MINUTES.load(std::sync::atomic::Ordering::SeqCst);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        #[cfg(target_os = "android")]
+        #[cfg(mobile)]
         {
             let deadline = chrono::Local::now() + chrono::Duration::minutes(minutes as i64);
             while chrono::Local::now() < deadline {
-                tokio::time::sleep(crate::ANDROID_POLL_INTERVAL).await;
+                tokio::time::sleep(crate::MOBILE_POLL_INTERVAL).await;
             }
         }
-        #[cfg(not(target_os = "android"))]
+        #[cfg(desktop)]
         tokio::time::sleep(std::time::Duration::from_secs(minutes as u64 * 60)).await;
 
         let still_pending = {

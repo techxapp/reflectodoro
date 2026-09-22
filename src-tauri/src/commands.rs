@@ -4,7 +4,7 @@ use std::time::Duration;
 use chrono::TimeZone;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
-#[cfg(target_os = "android")]
+#[cfg(mobile)]
 use tauri::Manager;
 #[cfg(desktop)]
 use tauri_plugin_autostart::ManagerExt;
@@ -325,6 +325,20 @@ pub fn snooze_pomodoro(app: AppHandle, minutes: u32) -> SnoozeInfo {
         }
     }
 
+    // Same shape as Android's: the durable preference stays "on" through a
+    // transient pause, and the resume time survives the process being killed.
+    #[cfg(target_os = "ios")]
+    {
+        let bridge = app.state::<crate::ios_bridge::IosBridge<tauri::Wry>>();
+        if let Err(e) = bridge.persist_pomodoro_enabled(true) {
+            log::error!("failed to persist pomodoro-enabled preference during snooze: {e:?}");
+        }
+        if let Err(e) = bridge.persist_pomodoro_snooze_until(resume_at.timestamp_millis(), minutes) {
+            log::error!("failed to persist snooze-until: {e:?}");
+        }
+        crate::ios_schedule::wake();
+    }
+
     info
 }
 
@@ -624,7 +638,7 @@ pub struct CurrentSessionSnapshot {
 /// Returns "" where that isn't available -- an empty device name is a
 /// perfectly fine state (the Entries breakdown just doesn't show a device
 /// label), and the Settings field lets the user type one in.
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 #[tauri::command]
 pub fn get_hostname() -> String {
     #[cfg(windows)]
@@ -658,6 +672,22 @@ pub fn get_hostname(app: AppHandle) -> String {
         Ok(v) => v.get("value").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
         Err(e) => {
             log::error!("get_hostname (Android) failed: {e:?}");
+            String::new()
+        }
+    }
+}
+
+/// "iPhone"/"iPad": since iOS 16 the user-assigned device name needs a
+/// restricted entitlement, so this is only a sensible default for Settings'
+/// Device name field, which the user can rename.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub fn get_hostname(app: AppHandle) -> String {
+    let bridge = app.state::<crate::ios_bridge::IosBridge<tauri::Wry>>();
+    match bridge.get_device_name() {
+        Ok(v) => v.get("name").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+        Err(e) => {
+            log::error!("get_hostname (iOS) failed: {e:?}");
             String::new()
         }
     }

@@ -209,12 +209,14 @@
 
   /** Desktop: this window has its own close-requested handler (overlay.rs's
    * build_popup_window) that hides rather than destroys it, so .close() is
-   * the right call there. Android has no separate checkin window at all
-   * (see +layout.svelte) -- this same route is just navigated to within the
-   * single window, so "closing" it means navigating back to "/" instead. */
+   * the right call there. Android and iOS have no separate checkin window at
+   * all (see +layout.svelte) -- this same route is just navigated to within
+   * the single window, so "closing" it means navigating back to "/" instead.
+   * Calling .close() there would destroy the app's only window (on iOS that
+   * left a black screen after submitting). */
   async function dismiss() {
     const os = await invoke<string>("current_os");
-    if (os === "android") {
+    if (os === "android" || os === "ios") {
       await goto("/");
     } else {
       await getCurrentWindow().close();
@@ -352,7 +354,11 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 10px;
     width: 100%;
+    /* Without this the padding and border are added on top of width: 100%,
+       pushing the switch ~30px past the screen edge on a phone. */
+    box-sizing: border-box;
     background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: 10px;

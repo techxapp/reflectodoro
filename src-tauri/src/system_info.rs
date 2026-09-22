@@ -10,7 +10,7 @@
 //! `require_extension`) -- no capability entry needed, for the same reason.
 
 use tauri::{AppHandle, WebviewWindow};
-#[cfg(target_os = "android")]
+#[cfg(mobile)]
 use tauri::Manager;
 
 use crate::log_export::require_extension;
@@ -72,10 +72,28 @@ fn session_type_line() -> String {
 /// OS name/version, everywhere except Android (which has its own line below,
 /// from `Build.VERSION.RELEASE`/`SDK_INT` -- `os_info` doesn't identify
 /// Android specifically since it's not in scope for this build's targets).
-#[cfg(not(target_os = "android"))]
-fn os_line() -> String {
+#[cfg(desktop)]
+fn os_line(_app: &AppHandle) -> String {
     let info = os_info::get();
     format!("{} {}", info.os_type(), info.version())
+}
+
+/// `os_info` is desktop-only, so iOS asks the Swift bridge (ProcessInfo +
+/// the hardware identifier).
+#[cfg(target_os = "ios")]
+fn os_line(app: &AppHandle) -> String {
+    let bridge = app.state::<crate::ios_bridge::IosBridge<tauri::Wry>>();
+    match bridge.get_system_info() {
+        Ok(v) => {
+            let version = v.get("osVersion").and_then(|x| x.as_str()).unwrap_or("?");
+            let model = v.get("model").and_then(|x| x.as_str()).unwrap_or("?");
+            format!("iOS {version} ({model})")
+        }
+        Err(e) => {
+            log::error!("system_info::os_line: get_system_info bridge call failed: {e:?}");
+            "iOS (version unavailable)".to_string()
+        }
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -122,7 +140,7 @@ pub fn export_system_info(app: AppHandle, window: WebviewWindow, dest: String) -
     }
     #[cfg(not(target_os = "android"))]
     {
-        lines.push(format!("OS: {}", os_line()));
+        lines.push(format!("OS: {}", os_line(&app)));
         #[cfg(target_os = "linux")]
         lines.push(format!("Session type: {}", session_type_line()));
         lines.push(String::new());

@@ -469,6 +469,15 @@ pub fn advertise_self(app: &AppHandle) {
     });
 }
 
+/// iOS LAN discovery isn't built yet (planned: Bonjour via Network.framework's
+/// NWListener/NWBrowser -- mdns-sd's raw multicast sockets would need Apple's
+/// restricted multicast entitlement). Until then iOS neither advertises nor
+/// finds peers, so pairing/sync report the peer as not found.
+#[cfg(target_os = "ios")]
+pub fn advertise_self(_app: &AppHandle) {
+    log::info!("p2p_sync: LAN advertisement not available on iOS yet");
+}
+
 /// Called from the frontend once it knows the real `device_name` -- after
 /// `ensureDeviceName()` resolves on boot, and after Settings saves a
 /// user-edited device name -- so a peer's "Paired devices" list doesn't keep
@@ -550,6 +559,11 @@ async fn browse_lan(app: &AppHandle, window: Duration) -> Result<Vec<(Discovered
         found.push((DiscoveredDevice { device_id, name, platform }, SocketAddr::new(ip, port)));
     }
     Ok(found)
+}
+
+#[cfg(target_os = "ios")]
+async fn browse_lan(_app: &AppHandle, _window: Duration) -> Result<Vec<(DiscoveredDevice, SocketAddr)>, String> {
+    Ok(Vec::new())
 }
 
 async fn resolve_peer(app: &AppHandle, device_id: &str) -> Result<SocketAddr, String> {

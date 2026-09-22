@@ -64,6 +64,7 @@
   // today" rather than "nothing is recording yet".
   let captureSupported = $state(true);
   let isAndroid = $state(false);
+  let isIos = $state(false);
   // Android's capture depends on the special-access "Usage access" grant
   // (see screen_time.rs's Android platform_impl); without it tracking can be
   // on and still record nothing, which would otherwise look identical to a
@@ -623,6 +624,7 @@
     const os = await invoke<string>("current_os");
     captureSupported = os === "windows" || os === "android" || os === "macos";
     isAndroid = os === "android";
+    isIos = os === "ios";
     await refreshUsageAccess();
   });
 
@@ -697,6 +699,11 @@
         <button class="danger" onclick={() => void deleteDayAfterError("screenTime")}>
           Delete this day's screen time
         </button>
+      </p>
+    {:else if screenTime.length === 0 && isIos}
+      <p class="hint">
+        iOS doesn't let apps see which other apps are in use, so screen time isn't recorded on this device. Entries
+        imported from your other devices still show here.
       </p>
     {:else if screenTime.length === 0 && !screenTimeTrackingOn}
       <p class="hint">

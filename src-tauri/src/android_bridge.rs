@@ -201,7 +201,7 @@ impl<R: Runtime> AndroidBridge<R> {
 
     /// Refreshes `MainActivity.lastSchedulerHeartbeatAt` -- called from every
     /// iteration of `run_scheduler` (capped to at least every
-    /// `ANDROID_POLL_INTERVAL`) so `BreakAlarmReceiver` can tell a genuinely
+    /// `MOBILE_POLL_INTERVAL`) so `BreakAlarmReceiver` can tell a genuinely
     /// live scheduler apart from one whose task died without taking the
     /// whole process down with it. See `MainActivity.isSchedulerAlive`.
     pub fn report_scheduler_heartbeat(&self) -> Result<Value, PluginInvokeError> {

@@ -115,6 +115,33 @@ pub fn slot_for(now: DateTime<Local>) -> Slot {
     Slot { phase, start, end }
 }
 
+/// Start instants of the next `n` break slots strictly after `now`, oldest
+/// first. iOS schedules its break notifications from this, so the grid rule
+/// stays in this one file instead of getting a Swift copy.
+///
+/// Walks slot to slot with `slot_for`, which is DST-safe but, inside a
+/// fall-back hour, resolves ambiguous times to the *earlier* instant -- so a
+/// slot's `end` can land at or before the time just examined. Stepping a
+/// fixed 5 minutes in that case (and never emitting a start twice) keeps the
+/// walk moving forward instead of cycling.
+#[cfg(any(test, target_os = "ios"))]
+pub fn upcoming_break_starts(now: DateTime<Local>, n: usize) -> Vec<DateTime<Local>> {
+    let mut out: Vec<DateTime<Local>> = Vec::with_capacity(n);
+    let mut t = now;
+    // Generous bound: two breaks per hour, so ~4 slots per break plus DST slack.
+    for _ in 0..(n * 8 + 32) {
+        if out.len() >= n {
+            break;
+        }
+        let slot = slot_for(t);
+        if slot.phase == Phase::Break && slot.start > now && out.last().map_or(true, |last| slot.start > *last) {
+            out.push(slot.start);
+        }
+        t = if slot.end > t { slot.end } else { t + ChronoDuration::minutes(5) };
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +208,43 @@ mod tests {
         let break_start = slot_for(local(10, 58)).start_iso();
         let work_start = next_work_slot_start_iso(&break_start).unwrap();
         assert_eq!(work_start, local(11, 0).to_rfc3339());
+    }
+
+    #[test]
+    fn upcoming_breaks_from_mid_work_slot() {
+        let starts = upcoming_break_starts(local(10, 10), 4);
+        assert_eq!(starts, vec![local(10, 25), local(10, 55), local(11, 25), local(11, 55)]);
+    }
+
+    #[test]
+    fn upcoming_breaks_skip_the_break_already_in_progress() {
+        let starts = upcoming_break_starts(local(10, 27), 2);
+        assert_eq!(starts, vec![local(10, 55), local(11, 25)]);
+    }
+
+    #[test]
+    fn upcoming_breaks_exclude_a_break_starting_exactly_now() {
+        assert_eq!(upcoming_break_starts(local(10, 25), 1), vec![local(10, 55)]);
+    }
+
+    #[test]
+    fn upcoming_breaks_cover_a_full_day_and_are_strictly_increasing() {
+        let starts = upcoming_break_starts(local(9, 0), 48);
+        assert_eq!(starts.len(), 48);
+        assert!(starts.windows(2).all(|w| w[0] < w[1]));
+        assert!(starts.iter().all(|s| s.minute() == 25 || s.minute() == 55));
+    }
+
+    #[test]
+    fn upcoming_breaks_across_dst_transitions_do_not_hang_or_repeat() {
+        for now in [
+            Local.with_ymd_and_hms(2026, 11, 1, 0, 40, 0).unwrap(),
+            Local.with_ymd_and_hms(2026, 3, 8, 1, 40, 0).unwrap(),
+        ] {
+            let starts = upcoming_break_starts(now, 48);
+            assert_eq!(starts.len(), 48);
+            assert!(starts.windows(2).all(|w| w[0] < w[1]));
+        }
     }
 
     #[test]

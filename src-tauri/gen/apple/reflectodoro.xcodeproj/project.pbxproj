@@ -1,0 +1,586 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0FB66AE90A391C06CD26D34E /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3057AC9FDD8EACF8D4F88AF2 /* CoreGraphics.framework */; };
+		240F7289FA02E3BDA2397DEA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 864E243F20B83C50558C481A /* Assets.xcassets */; };
+		3BD440DC9CBB34C8DAB4E25E /* BreakActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E1E815419E58D3AFD367E09 /* BreakActivityAttributes.swift */; };
+		3D5DB5276A80FA0A0B3E289B /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 198D4927B230784DD69D15A3 /* libapp.a */; };
+		3F9C3004952F5C2128364CAB /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CD07D2F107B25F6AE0CDF699 /* WebKit.framework */; };
+		4099F43B228EEF50879A4432 /* ReflectodoroLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC8BE49E91FDAC5D44B9FEB6 /* ReflectodoroLiveActivity.swift */; };
+		47854A1450EC263F489CE188 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = F2B87C8B40A1277F594307C5 /* main.mm */; };
+		4D4243072572E9744822FE77 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3626D9E098A938252F5DB2D5 /* SwiftUI.framework */; };
+		56B596F315948CB4C8E58053 /* ActivityKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A2FA1E2C0B15A9AD9427792D /* ActivityKit.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
+		5A1E7245C4E3A8A2BE0E4045 /* break-beep.caf in Resources */ = {isa = PBXBuildFile; fileRef = D581BBE0D78987716A95FD13 /* break-beep.caf */; };
+		6016B38D94B7E282E6B53092 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 7FE3992021D4163B4617B707 /* assets */; };
+		657575AC58E4D79283740A49 /* ActivityKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A2FA1E2C0B15A9AD9427792D /* ActivityKit.framework */; };
+		7272BE6203D3687BB93B2ECC /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6F6692C6D491FB2CEC9454ED /* Metal.framework */; };
+		7B1401614056F53F15EA0F49 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 14F90E2783D2CEE02F31B3E0 /* QuartzCore.framework */; };
+		878FA7285E883EBF2188F24D /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B980469D2123886D426F029F /* Security.framework */; };
+		894AE3453749392BB6B85A0C /* ReflectodoroLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 3C930BF90334FE2F48C85421 /* ReflectodoroLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A6ED32191338C019C4F48043 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F14B31C7B1A79CBF3ACBBC91 /* UIKit.framework */; };
+		BE144C8E23C4FC610AC57630 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 231C28F668572DF5D4640CCF /* UserNotifications.framework */; };
+		C9ADE1250FDD6F0FEBD295C3 /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = F478E01722C0483DBD2333A6 /* libapp.a */; };
+		CEBA9B77941AADDF1614B5F8 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1964394EF2F464BC1A8EBF8F /* WidgetKit.framework */; };
+		DB208601D06B10F6E607C4ED /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BC260F64F478BA1045515DEA /* MetalKit.framework */; };
+		F00700872294DEE18C9EFAFB /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 7CF63C0D8B82E1368A3D03CF /* LaunchScreen.storyboard */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		D625EA39705606DEF000DEE0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 96D236DECACED18EDC11430F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D946FD32A30D85B8A7A5A84E;
+			remoteInfo = ReflectodoroLiveActivity;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		5BDB02A1294527545CB6DC77 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				894AE3453749392BB6B85A0C /* ReflectodoroLiveActivity.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		0D40F04B0508502FD749B338 /* native_overlay.rs */ = {isa = PBXFileReference; path = native_overlay.rs; sourceTree = "<group>"; };
+		14623DFB01AC19A4C7658AA9 /* android_bridge.rs */ = {isa = PBXFileReference; path = android_bridge.rs; sourceTree = "<group>"; };
+		14F90E2783D2CEE02F31B3E0 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		15AE2F1BD35632D4E694F8D2 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		1964394EF2F464BC1A8EBF8F /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		198D4927B230784DD69D15A3 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		208A8506F3A54FC360EB4D91 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		22E3DB8473B4B856CAA18713 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		231C28F668572DF5D4640CCF /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
+		2B10D1E818A82611B8F60661 /* db.rs */ = {isa = PBXFileReference; path = db.rs; sourceTree = "<group>"; };
+		3057AC9FDD8EACF8D4F88AF2 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		30F8FB024644DA9C917BBE6C /* macos_overlay.rs */ = {isa = PBXFileReference; path = macos_overlay.rs; sourceTree = "<group>"; };
+		3626D9E098A938252F5DB2D5 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		3C930BF90334FE2F48C85421 /* ReflectodoroLiveActivity.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ReflectodoroLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		41FEFCC582B65AC633EF428B /* ios_bridge.rs */ = {isa = PBXFileReference; path = ios_bridge.rs; sourceTree = "<group>"; };
+		4F988969AEDE50F6D395F537 /* state.rs */ = {isa = PBXFileReference; path = state.rs; sourceTree = "<group>"; };
+		638C8F4ACB761C6C731F4B75 /* overlay.rs */ = {isa = PBXFileReference; path = overlay.rs; sourceTree = "<group>"; };
+		6AD78AE65744752D9331D308 /* hook.rs */ = {isa = PBXFileReference; path = hook.rs; sourceTree = "<group>"; };
+		6F6692C6D491FB2CEC9454ED /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		731E7711ED85CC0C6D60BFFB /* media.rs */ = {isa = PBXFileReference; path = media.rs; sourceTree = "<group>"; };
+		73654AA1D6114F327518728D /* screen_time.rs */ = {isa = PBXFileReference; path = screen_time.rs; sourceTree = "<group>"; };
+		7CF63C0D8B82E1368A3D03CF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		7E1E815419E58D3AFD367E09 /* BreakActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakActivityAttributes.swift; sourceTree = "<group>"; };
+		7E440248A10D91B16527C7D8 /* reflectodoro_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = reflectodoro_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7FE3992021D4163B4617B707 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		864E243F20B83C50558C481A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		87471BB2A4C157A166A91B1D /* reflectodoro_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = reflectodoro_iOS.entitlements; sourceTree = "<group>"; };
+		96E8905773E42CCE09CD2B97 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		9A0DBBE52CF1EA2DA7A71B1A /* system_info.rs */ = {isa = PBXFileReference; path = system_info.rs; sourceTree = "<group>"; };
+		9A4A2B69E5104EDDC6464B27 /* crypto.rs */ = {isa = PBXFileReference; path = crypto.rs; sourceTree = "<group>"; };
+		A2FA1E2C0B15A9AD9427792D /* ActivityKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ActivityKit.framework; path = System/Library/Frameworks/ActivityKit.framework; sourceTree = SDKROOT; };
+		B7B029CA14D9DC07AFB3DFDD /* ios_schedule.rs */ = {isa = PBXFileReference; path = ios_schedule.rs; sourceTree = "<group>"; };
+		B980469D2123886D426F029F /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		BC260F64F478BA1045515DEA /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		BC4575340C8F8E256F24AA81 /* breakit.rs */ = {isa = PBXFileReference; path = breakit.rs; sourceTree = "<group>"; };
+		C1B2CBBDB183A2BEBDE586A4 /* key_store.rs */ = {isa = PBXFileReference; path = key_store.rs; sourceTree = "<group>"; };
+		C95D1342DE9E53083877C9ED /* import.rs */ = {isa = PBXFileReference; path = import.rs; sourceTree = "<group>"; };
+		CC4001BCF99C66D526EA90D2 /* log_export.rs */ = {isa = PBXFileReference; path = log_export.rs; sourceTree = "<group>"; };
+		CD07D2F107B25F6AE0CDF699 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		D3F35E47A26F638633ACED51 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		D581BBE0D78987716A95FD13 /* break-beep.caf */ = {isa = PBXFileReference; path = "break-beep.caf"; sourceTree = "<group>"; };
+		DF891606C4493DEB05CB374E /* commands.rs */ = {isa = PBXFileReference; path = commands.rs; sourceTree = "<group>"; };
+		E22E1FB9BFBCDA48E6B598DE /* grid.rs */ = {isa = PBXFileReference; path = grid.rs; sourceTree = "<group>"; };
+		E9F46C1D03222D6D4BEF47C3 /* db_legacy_fixture.rs */ = {isa = PBXFileReference; path = db_legacy_fixture.rs; sourceTree = "<group>"; };
+		F14B31C7B1A79CBF3ACBBC91 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		F2B87C8B40A1277F594307C5 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		F478E01722C0483DBD2333A6 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		F61E92AD11D465DDE568E01A /* p2p_sync.rs */ = {isa = PBXFileReference; path = p2p_sync.rs; sourceTree = "<group>"; };
+		FC8BE49E91FDAC5D44B9FEB6 /* ReflectodoroLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReflectodoroLiveActivity.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		088C13C0BA820F9DEA282749 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CEBA9B77941AADDF1614B5F8 /* WidgetKit.framework in Frameworks */,
+				4D4243072572E9744822FE77 /* SwiftUI.framework in Frameworks */,
+				657575AC58E4D79283740A49 /* ActivityKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EAE367DA904902E5FC733BAF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3D5DB5276A80FA0A0B3E289B /* libapp.a in Frameworks */,
+				0FB66AE90A391C06CD26D34E /* CoreGraphics.framework in Frameworks */,
+				7272BE6203D3687BB93B2ECC /* Metal.framework in Frameworks */,
+				DB208601D06B10F6E607C4ED /* MetalKit.framework in Frameworks */,
+				7B1401614056F53F15EA0F49 /* QuartzCore.framework in Frameworks */,
+				878FA7285E883EBF2188F24D /* Security.framework in Frameworks */,
+				A6ED32191338C019C4F48043 /* UIKit.framework in Frameworks */,
+				3F9C3004952F5C2128364CAB /* WebKit.framework in Frameworks */,
+				56B596F315948CB4C8E58053 /* ActivityKit.framework in Frameworks */,
+				BE144C8E23C4FC610AC57630 /* UserNotifications.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1A53FEF82E10091A37464667 /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+				4C39867CB22BE8E4E8066B87 /* debug */,
+			);
+			path = arm64;
+			sourceTree = "<group>";
+		};
+		2B08A87B9385830946ED3C62 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				7E1E815419E58D3AFD367E09 /* BreakActivityAttributes.swift */,
+			);
+			name = Sources;
+			path = "../../ios-bridge/Sources";
+			sourceTree = "<group>";
+		};
+		394BA8BB5B79DA3604ED6102 /* Externals */ = {
+			isa = PBXGroup;
+			children = (
+				1A53FEF82E10091A37464667 /* arm64 */,
+			);
+			path = Externals;
+			sourceTree = "<group>";
+		};
+		3955C6B1CB6273A7D8B4A209 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				FD53B0113B8B2EC22AF0D976 /* reflectodoro */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		4C39867CB22BE8E4E8066B87 /* debug */ = {
+			isa = PBXGroup;
+			children = (
+				F478E01722C0483DBD2333A6 /* libapp.a */,
+			);
+			path = debug;
+			sourceTree = "<group>";
+		};
+		4D8289A64CEE165F7865ADB9 /* ReflectodoroLiveActivity */ = {
+			isa = PBXGroup;
+			children = (
+				96E8905773E42CCE09CD2B97 /* Info.plist */,
+				FC8BE49E91FDAC5D44B9FEB6 /* ReflectodoroLiveActivity.swift */,
+			);
+			path = ReflectodoroLiveActivity;
+			sourceTree = "<group>";
+		};
+		50FA82886F44ACE9D18330D7 /* src */ = {
+			isa = PBXGroup;
+			children = (
+				14623DFB01AC19A4C7658AA9 /* android_bridge.rs */,
+				BC4575340C8F8E256F24AA81 /* breakit.rs */,
+				DF891606C4493DEB05CB374E /* commands.rs */,
+				9A4A2B69E5104EDDC6464B27 /* crypto.rs */,
+				E9F46C1D03222D6D4BEF47C3 /* db_legacy_fixture.rs */,
+				2B10D1E818A82611B8F60661 /* db.rs */,
+				E22E1FB9BFBCDA48E6B598DE /* grid.rs */,
+				6AD78AE65744752D9331D308 /* hook.rs */,
+				C95D1342DE9E53083877C9ED /* import.rs */,
+				41FEFCC582B65AC633EF428B /* ios_bridge.rs */,
+				B7B029CA14D9DC07AFB3DFDD /* ios_schedule.rs */,
+				C1B2CBBDB183A2BEBDE586A4 /* key_store.rs */,
+				22E3DB8473B4B856CAA18713 /* lib.rs */,
+				CC4001BCF99C66D526EA90D2 /* log_export.rs */,
+				30F8FB024644DA9C917BBE6C /* macos_overlay.rs */,
+				15AE2F1BD35632D4E694F8D2 /* main.rs */,
+				731E7711ED85CC0C6D60BFFB /* media.rs */,
+				0D40F04B0508502FD749B338 /* native_overlay.rs */,
+				638C8F4ACB761C6C731F4B75 /* overlay.rs */,
+				F61E92AD11D465DDE568E01A /* p2p_sync.rs */,
+				73654AA1D6114F327518728D /* screen_time.rs */,
+				4F988969AEDE50F6D395F537 /* state.rs */,
+				9A0DBBE52CF1EA2DA7A71B1A /* system_info.rs */,
+			);
+			name = src;
+			path = ../../src;
+			sourceTree = "<group>";
+		};
+		6C3DB0F1BF46A50F99A8A399 /* bindings */ = {
+			isa = PBXGroup;
+			children = (
+				D3F35E47A26F638633ACED51 /* bindings.h */,
+			);
+			path = bindings;
+			sourceTree = "<group>";
+		};
+		AB9C594882DE3450C464CFCF /* reflectodoro_iOS */ = {
+			isa = PBXGroup;
+			children = (
+				208A8506F3A54FC360EB4D91 /* Info.plist */,
+				87471BB2A4C157A166A91B1D /* reflectodoro_iOS.entitlements */,
+			);
+			path = reflectodoro_iOS;
+			sourceTree = "<group>";
+		};
+		AE88BB2613C75A169C75B686 /* Sounds */ = {
+			isa = PBXGroup;
+			children = (
+				D581BBE0D78987716A95FD13 /* break-beep.caf */,
+			);
+			path = Sounds;
+			sourceTree = "<group>";
+		};
+		E47DEDB988872D6F03EDA7BE = {
+			isa = PBXGroup;
+			children = (
+				7FE3992021D4163B4617B707 /* assets */,
+				864E243F20B83C50558C481A /* Assets.xcassets */,
+				7CF63C0D8B82E1368A3D03CF /* LaunchScreen.storyboard */,
+				394BA8BB5B79DA3604ED6102 /* Externals */,
+				AB9C594882DE3450C464CFCF /* reflectodoro_iOS */,
+				4D8289A64CEE165F7865ADB9 /* ReflectodoroLiveActivity */,
+				AE88BB2613C75A169C75B686 /* Sounds */,
+				3955C6B1CB6273A7D8B4A209 /* Sources */,
+				2B08A87B9385830946ED3C62 /* Sources */,
+				50FA82886F44ACE9D18330D7 /* src */,
+				EE0960B83FB25107D6B32687 /* Frameworks */,
+				E80C4ABED67513E1CBC9D7D1 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		E80C4ABED67513E1CBC9D7D1 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7E440248A10D91B16527C7D8 /* reflectodoro_iOS.app */,
+				3C930BF90334FE2F48C85421 /* ReflectodoroLiveActivity.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		EE0960B83FB25107D6B32687 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A2FA1E2C0B15A9AD9427792D /* ActivityKit.framework */,
+				3057AC9FDD8EACF8D4F88AF2 /* CoreGraphics.framework */,
+				198D4927B230784DD69D15A3 /* libapp.a */,
+				6F6692C6D491FB2CEC9454ED /* Metal.framework */,
+				BC260F64F478BA1045515DEA /* MetalKit.framework */,
+				14F90E2783D2CEE02F31B3E0 /* QuartzCore.framework */,
+				B980469D2123886D426F029F /* Security.framework */,
+				3626D9E098A938252F5DB2D5 /* SwiftUI.framework */,
+				F14B31C7B1A79CBF3ACBBC91 /* UIKit.framework */,
+				231C28F668572DF5D4640CCF /* UserNotifications.framework */,
+				CD07D2F107B25F6AE0CDF699 /* WebKit.framework */,
+				1964394EF2F464BC1A8EBF8F /* WidgetKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		FD53B0113B8B2EC22AF0D976 /* reflectodoro */ = {
+			isa = PBXGroup;
+			children = (
+				F2B87C8B40A1277F594307C5 /* main.mm */,
+				6C3DB0F1BF46A50F99A8A399 /* bindings */,
+			);
+			path = reflectodoro;
+			sourceTree = "<group>";
+		};
+		"TEMP_002D77DD-1FDC-4979-985D-0DBA78FA5FB6" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		B22FCFB04685E21704F32F19 /* reflectodoro_iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 746AEF23CA16FEE28ECDB536 /* Build configuration list for PBXNativeTarget "reflectodoro_iOS" */;
+			buildPhases = (
+				BEF3350394ED799E31348C97 /* Build Rust Code */,
+				37535762967FE76AF004F005 /* Sources */,
+				02831A708E01B1B049C8C731 /* Resources */,
+				EAE367DA904902E5FC733BAF /* Frameworks */,
+				5BDB02A1294527545CB6DC77 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7344AD60DFE0A20FE254A23D /* PBXTargetDependency */,
+			);
+			name = reflectodoro_iOS;
+			packageProductDependencies = (
+			);
+			productName = reflectodoro_iOS;
+			productReference = 7E440248A10D91B16527C7D8 /* reflectodoro_iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		D946FD32A30D85B8A7A5A84E /* ReflectodoroLiveActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D42EE1586F1E42B30C528F37 /* Build configuration list for PBXNativeTarget "ReflectodoroLiveActivity" */;
+			buildPhases = (
+				0445F6F09476580C5C893D98 /* Sources */,
+				088C13C0BA820F9DEA282749 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ReflectodoroLiveActivity;
+			packageProductDependencies = (
+			);
+			productName = ReflectodoroLiveActivity;
+			productReference = 3C930BF90334FE2F48C85421 /* ReflectodoroLiveActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		96D236DECACED18EDC11430F /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 7E34DE6D74B6A3AE99C058D3 /* Build configuration list for PBXProject "reflectodoro" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = E47DEDB988872D6F03EDA7BE;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = E80C4ABED67513E1CBC9D7D1 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				B22FCFB04685E21704F32F19 /* reflectodoro_iOS */,
+				D946FD32A30D85B8A7A5A84E /* ReflectodoroLiveActivity */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		02831A708E01B1B049C8C731 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				240F7289FA02E3BDA2397DEA /* Assets.xcassets in Resources */,
+				F00700872294DEE18C9EFAFB /* LaunchScreen.storyboard in Resources */,
+				6016B38D94B7E282E6B53092 /* assets in Resources */,
+				5A1E7245C4E3A8A2BE0E4045 /* break-beep.caf in Resources */,
+				C9ADE1250FDD6F0FEBD295C3 /* libapp.a in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		BEF3350394ED799E31348C97 /* Build Rust Code */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Code";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a",
+				"$(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0445F6F09476580C5C893D98 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3BD440DC9CBB34C8DAB4E25E /* BreakActivityAttributes.swift in Sources */,
+				4099F43B228EEF50879A4432 /* ReflectodoroLiveActivity.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		37535762967FE76AF004F005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				47854A1450EC263F489CE188 /* main.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		7344AD60DFE0A20FE254A23D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D946FD32A30D85B8A7A5A84E /* ReflectodoroLiveActivity */;
+			targetProxy = D625EA39705606DEF000DEE0 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0D18C417C6696C031697BC7E /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = iphoneos;
+			};
+			name = release;
+		};
+		27A01362060B95DE456026D0 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = (
+					arm64,
+				);
+				INFOPLIST_FILE = ReflectodoroLiveActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.reflectodoro.app.LiveActivity;
+				PRODUCT_NAME = ReflectodoroLiveActivity;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = release;
+		};
+		80C9D03C407090950236948F /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = (
+					arm64,
+				);
+				INFOPLIST_FILE = ReflectodoroLiveActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.reflectodoro.app.LiveActivity;
+				PRODUCT_NAME = ReflectodoroLiveActivity;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = debug;
+		};
+		9CC48DECACB6036B55C3CF32 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				CODE_SIGN_ENTITLEMENTS = reflectodoro_iOS/reflectodoro_iOS.entitlements;
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = reflectodoro_iOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					/usr/lib/swift,
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.reflectodoro.app;
+				PRODUCT_NAME = "Reflectodoro";
+				VALID_ARCHS = arm64;
+			};
+			name = debug;
+		};
+		BA61B1CFE5443ACD85F52A39 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				CODE_SIGN_ENTITLEMENTS = reflectodoro_iOS/reflectodoro_iOS.entitlements;
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = reflectodoro_iOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					/usr/lib/swift,
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.reflectodoro.app;
+				PRODUCT_NAME = "Reflectodoro";
+				VALID_ARCHS = arm64;
+			};
+			name = release;
+		};
+		EE3CD82FC11351296A88839A /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = iphoneos;
+			};
+			name = debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		746AEF23CA16FEE28ECDB536 /* Build configuration list for PBXNativeTarget "reflectodoro_iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9CC48DECACB6036B55C3CF32 /* debug */,
+				BA61B1CFE5443ACD85F52A39 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		7E34DE6D74B6A3AE99C058D3 /* Build configuration list for PBXProject "reflectodoro" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EE3CD82FC11351296A88839A /* debug */,
+				0D18C417C6696C031697BC7E /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		D42EE1586F1E42B30C528F37 /* Build configuration list for PBXNativeTarget "ReflectodoroLiveActivity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				80C9D03C407090950236948F /* debug */,
+				27A01362060B95DE456026D0 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 96D236DECACED18EDC11430F /* Project object */;
+}
