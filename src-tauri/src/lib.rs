@@ -528,6 +528,7 @@ async fn run_scheduler(app: AppHandle) {
                             let mut ov = state.overlay.lock().unwrap();
                             *ov = OverlayState::opened_for(
                                 this_slot_start.clone(),
+                                slot.end.to_rfc3339(),
                                 generate_breakit_challenge(&app),
                                 limit_reached,
                             );

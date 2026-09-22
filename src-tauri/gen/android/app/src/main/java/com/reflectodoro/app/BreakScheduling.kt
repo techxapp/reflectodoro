@@ -31,11 +31,11 @@ private fun nextBoundaryMinute(minute: Int): Int = when {
 }
 
 /** Concentration mode boundaries, in seconds past the top of the hour:
- * 25:00, 25:30, 50:00, 60:00 (work :00-:25, 30s break, work :25:30-:50,
+ * 25:00, 26:00, 50:00, 60:00 (work :00-:25, 1min break, work :26:00-:50,
  * 10min break). Mirrors grid::slot_for_mode. */
 private fun nextBoundarySecondConcentration(secondOfHour: Int): Int = when {
   secondOfHour < 25 * 60 -> 25 * 60
-  secondOfHour < 25 * 60 + 30 -> 25 * 60 + 30
+  secondOfHour < 26 * 60 -> 26 * 60
   secondOfHour < 50 * 60 -> 50 * 60
   else -> 60 * 60
 }

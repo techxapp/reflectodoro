@@ -23,14 +23,14 @@ export function slotFor(now: Date, mode: Mode = "normal"): Slot {
   let end: [number, number]; // minute 60 = top of next hour
 
   if (mode === "concentration") {
-    // Work :00-:25, break :25:00-:25:30, work :25:30-:50, break :50-:00.
+    // Work :00-:25, break :25:00-:26:00, work :26:00-:50, break :50-:00.
     const s = now.getMinutes() * 60 + now.getSeconds();
     if (s < 25 * 60) {
       [phase, start, end] = ["work", [0, 0], [25, 0]];
-    } else if (s < 25 * 60 + 30) {
-      [phase, start, end] = ["break", [25, 0], [25, 30]];
+    } else if (s < 26 * 60) {
+      [phase, start, end] = ["break", [25, 0], [26, 0]];
     } else if (s < 50 * 60) {
-      [phase, start, end] = ["work", [25, 30], [50, 0]];
+      [phase, start, end] = ["work", [26, 0], [50, 0]];
     } else {
       [phase, start, end] = ["break", [50, 0], [60, 0]];
     }

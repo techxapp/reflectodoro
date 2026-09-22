@@ -15,6 +15,10 @@ pub struct OverlayState {
     /// should also cover the previous (unresolved) slot is decided entirely by
     /// the frontend against the DB when it mounts/updates — see overlay page.
     pub current_slot_start: String,
+    /// ISO timestamp when this break ends (the scheduler's `slot.end`). Sent so
+    /// both overlays' countdowns follow the active mode's break length (5 min
+    /// Normal; 1 min / 10 min Concentration) instead of hardcoding 5 minutes.
+    pub break_end: String,
     /// How many times `report_reflection_save_failure` (commands.rs) has been
     /// called for *this* overlay occurrence -- i.e. how many times the
     /// frontend's own `saveReflection`/`mark_reflection_entered` call has
@@ -46,12 +50,18 @@ impl OverlayState {
             breakit_matched: false,
             time_expired: false,
             current_slot_start: String::new(),
+            break_end: String::new(),
             save_failure_count: 0,
             breakit_limit_reached: false,
         }
     }
 
-    pub fn opened_for(slot_start_iso: String, breakit_challenge: String, breakit_limit_reached: bool) -> Self {
+    pub fn opened_for(
+        slot_start_iso: String,
+        break_end_iso: String,
+        breakit_challenge: String,
+        breakit_limit_reached: bool,
+    ) -> Self {
         Self {
             open: true,
             reflection_entered: false,
@@ -59,6 +69,7 @@ impl OverlayState {
             breakit_matched: false,
             time_expired: false,
             current_slot_start: slot_start_iso,
+            break_end: break_end_iso,
             save_failure_count: 0,
             breakit_limit_reached,
         }

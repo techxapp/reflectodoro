@@ -775,7 +775,7 @@
     </p>
     <p class="hint">
       <strong>Concentration</strong><br/>
-      Work :00&ndash;:25 &rarr; 30 sec break (:25:00&ndash;:25:30) &rarr; work :25:30&ndash;:50 &rarr; 10 min break (:50&ndash;:00)
+      Work :00&ndash;:25 &rarr; 1 min break (:25:00&ndash;:26:00) &rarr; work :26:00&ndash;:50 &rarr; 10 min break (:50&ndash;:00)
     </p>
     <p class="hint">To change the mode, use the mode selector on the Timer screen.</p>
   </section>

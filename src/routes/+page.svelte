@@ -381,7 +381,7 @@
     {#if modeHelpOpen}
       <p class="hint mode-help">
         <strong>Normal:</strong> work :00&ndash;:25 and :30&ndash;:55 each hour; breaks :25&ndash;:30 and :55&ndash;:00.<br/>
-        <strong>Concentration:</strong> work :00&ndash;:25 &rarr; 30 sec break &rarr; work :25:30&ndash;:50 &rarr; 10 min break (:50&ndash;:00).
+        <strong>Concentration:</strong> work :00&ndash;:25 &rarr; 1 min break &rarr; work :26&ndash;:50 &rarr; 10 min break (:50&ndash;:00).
       </p>
     {/if}
 

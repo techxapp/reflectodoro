@@ -287,7 +287,8 @@
       clockEl.textContent = pad(now.getHours()) + ":" + pad(now.getMinutes());
 
       if (state.current_slot_start) {
-        var end = new Date(state.current_slot_start).getTime() + 5 * 60 * 1000;
+        // break_end comes from Rust's slot end (mode-aware break length).
+        var end = new Date(state.break_end || state.current_slot_start).getTime();
         var remaining = Math.max(0, Math.round((end - now.getTime()) / 1000));
         if (remaining > 0) {
           timerEl.textContent = Math.floor(remaining / 60) + ":" + pad(remaining % 60);

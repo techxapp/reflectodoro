@@ -45,6 +45,19 @@ npm run tauri dev
 
 Rust changes trigger a rebuild automatically. Capability/permission JSON changes (`src-tauri/capabilities/*.json`) also require a rebuild to take effect (they're compiled in via `tauri-build`, not read at runtime).
 
+## App icon
+
+Source lives in `design/`: `app-icon.svg` (a rounded hourglass with end plates, tilted 45° clockwise, in the Tauri mark's stroke-and-dot style, coloured with `docs/index.html`'s two brand gradients — `--brand`/`--brand-2` from the light theme on the upper bulb, from the dark theme on the lower) and `app-icon-monochrome.svg` (the Android 13+ themed-icon layer). Never hand-edit the generated PNGs under `src-tauri/icons/` or `gen/android/.../mipmap-*`; regenerate everything:
+
+```
+python design/render-icons.py                     # SVG -> PNG, via headless Chrome/Edge
+npm run tauri -- icon design/icon-manifest.json   # every desktop, Android and iOS size
+```
+
+then copy `src-tauri/icons/128x128.png` → `static/favicon.png` and `src-tauri/icons/icon.ico` → `docs/favicon.ico`.
+
+The Android adaptive-icon layers are rendered separately at a smaller scale (`ANDROID_SCALE` in `render-icons.py`) so the mark stays inside the 66dp-of-108dp circle every launcher mask is guaranteed to keep. The manifest's `android_fg_scale` would be the natural way to do this, but the CLI version in use ignores it (confirmed by measuring the output), so don't move the padding back into the manifest.
+
 ## Testing the break overlay
 
 Waiting for a real `:25`/`:55` boundary to see an overlay change makes iterating
@@ -92,13 +105,13 @@ Implemented as a pure function `grid::slot_for(now) -> Slot` (`src-tauri/src/gri
 
 ### Schedule modes (Normal / Concentration)
 
-`grid::Mode`, chosen from a second `<select>` under the Pomodoro On/Off dropdown on the main window's Timer tab (Settings → Session schedule only *describes* both modes and points there). **Normal** is the grid above. **Concentration**: work :00–:25, break :25:00–:25:30 (30 s), work :25:30–:50, break :50–:00 (10 min). The reflection is still required after every break, including the 30 s one.
+`grid::Mode`, chosen from a second `<select>` under the Pomodoro On/Off dropdown on the main window's Timer tab (Settings → Session schedule only *describes* both modes and points there). **Normal** is the grid above. **Concentration**: work :00–:25, break :25:00–:26:00 (1 min), work :26:00–:50, break :50–:00 (10 min). The reflection is still required after every break, including the 1 min one.
 
 - Persisted in `app_setting.pomodoro_mode` (absent row = Normal, no migration/seed needed). Rust holds it in `POMODORO_MODE` (`lib.rs`; `current_mode()`/`store_mode()`); `run_scheduler` loads it from SQLite before its first `slot_for_mode` call (cold-start race, same reason as breakit config) and `set_pomodoro_mode` (commands.rs) wakes it via `MODE_CHANGED` so a switch applies immediately. A switch mid-break doesn't reopen/close anything by itself; the new grid applies when the phase next changes.
 - Mirrors that must stay in lockstep: `grid.rs` (`slot_for_mode`, `preceding_work_slot_start_iso_for`, `next_work_slot_start_iso_for`), `src/lib/grid.ts` (`slotFor(now, mode)`), `db.ts` (`previousSlotIso`/`precedingWorkSlotStartIso`/`nextWorkSlotStartIso`, mode kept in module state refreshed from Rust + `pomodoro://mode-changed`), `native_overlay.rs` (`previous_slot_iso`), and Android's `BreakScheduling.kt` (reads the mode from SharedPreferences, `PomodoroEnabledPref.PREF_POMODORO_MODE`, written by `persistPomodoroMode`).
 - **Reflections stay on the :00/:30 grid in both modes**: a Concentration break starting :00–:29 (the :25 break) files under that hour's `:00` slot, one starting :30–:59 (the :50 break) under `:30` (`preceding_work_slot_start_iso_for` / `precedingWorkSlotStartIso`). "Coming next" is the mirror (`:25` break → `:30`, `:50` break → next hour's `:00`). So the 30-minute helpers (`previousSlotIso`, missed-slot cascade, bulk edit, "View all", clustering) need no mode awareness.
 - The Timer tab control is a labeled "Pomodoro Mode" row on its own line, with the help text behind an "i" button.
-- Not yet verified on-device: Android alarms at :25:30/:50:00.
+- Not yet verified on-device: Android alarms at :26:00/:50:00.
 
 ## The overlay and its unlock formula
 

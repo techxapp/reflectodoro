@@ -99,8 +99,8 @@ pub fn slot_for(now: DateTime<Local>) -> Slot {
 }
 
 /// Which wall-clock schedule is in effect. `Normal` is the original
-/// 25/5/25/5 grid; `Concentration` is work :00-:25, break :25:00-:25:30 (30s),
-/// work :25:30-:50, break :50-:00 (10min).
+/// 25/5/25/5 grid; `Concentration` is work :00-:25, break :25:00-:26:00 (1min),
+/// work :26:00-:50, break :50-:00 (10min).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
@@ -156,10 +156,10 @@ pub fn slot_for_mode(now: DateTime<Local>, mode: Mode) -> Slot {
             let s = now.minute() * 60 + now.second();
             if s < 25 * 60 {
                 (Phase::Work, (0, 0), (25, 0))
-            } else if s < 25 * 60 + 30 {
-                (Phase::Break, (25, 0), (25, 30))
+            } else if s < 26 * 60 {
+                (Phase::Break, (25, 0), (26, 0))
             } else if s < 50 * 60 {
-                (Phase::Work, (25, 30), (50, 0))
+                (Phase::Work, (26, 0), (50, 0))
             } else {
                 (Phase::Break, (50, 0), (60, 0))
             }
@@ -179,8 +179,8 @@ pub fn slot_for_mode(now: DateTime<Local>, mode: Mode) -> Slot {
 /// Mode-aware `preceding_work_slot_start_iso`. Reflections always live on the
 /// fixed :00/:30 slot grid, in both modes. Concentration breaks start at :25:00
 /// and :50:00; a break starting in :00-:29 maps to that hour's :00 slot, one
-/// starting in :30-:59 maps to :30 (so the :50 break -> :30, and the :25:30
-/// work stretch is still filed under the :30 slot).
+/// starting in :30-:59 maps to :30 (so the :50 break -> :30, and the :26:00
+/// work stretch is still filed under the :00 slot).
 pub fn preceding_work_slot_start_iso_for(break_slot_start_iso: &str, mode: Mode) -> Option<String> {
     match mode {
         Mode::Normal => preceding_work_slot_start_iso(break_slot_start_iso),
@@ -264,9 +264,9 @@ mod tests {
         let s = slot_for_mode(local_hms(10, 24, 59), c);
         assert_eq!((s.phase, s.start, s.end), (Phase::Work, local_hms(10, 0, 0), local_hms(10, 25, 0)));
         let s = slot_for_mode(local_hms(10, 25, 0), c);
-        assert_eq!((s.phase, s.start, s.end), (Phase::Break, local_hms(10, 25, 0), local_hms(10, 25, 30)));
-        let s = slot_for_mode(local_hms(10, 25, 30), c);
-        assert_eq!((s.phase, s.start, s.end), (Phase::Work, local_hms(10, 25, 30), local_hms(10, 50, 0)));
+        assert_eq!((s.phase, s.start, s.end), (Phase::Break, local_hms(10, 25, 0), local_hms(10, 26, 0)));
+        let s = slot_for_mode(local_hms(10, 26, 0), c);
+        assert_eq!((s.phase, s.start, s.end), (Phase::Work, local_hms(10, 26, 0), local_hms(10, 50, 0)));
         let s = slot_for_mode(local_hms(10, 50, 0), c);
         assert_eq!((s.phase, s.start, s.end), (Phase::Break, local_hms(10, 50, 0), local_hms(11, 0, 0)));
         let s = slot_for_mode(local_hms(10, 59, 59), c);

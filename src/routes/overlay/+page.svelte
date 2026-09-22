@@ -29,6 +29,7 @@
     breakit_limit_reached: boolean;
     time_expired: boolean;
     current_slot_start: string;
+    break_end: string;
   }
 
   let overlayState = $state<OverlayState | null>(null);
@@ -91,7 +92,8 @@
 
   const remainingSeconds = $derived.by(() => {
     if (!overlayState?.current_slot_start) return 0;
-    const end = new Date(overlayState.current_slot_start).getTime() + 5 * 60 * 1000;
+    // `break_end` comes from Rust's slot end, so it tracks the active mode's break length.
+    const end = new Date(overlayState.break_end || overlayState.current_slot_start).getTime();
     return Math.max(0, Math.round((end - nowTick) / 1000));
   });
 
