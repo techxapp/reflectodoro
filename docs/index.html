@@ -1615,12 +1615,19 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
+              <p class="timeline-date">Tuesday, Sep 22, 2026</p>
+              <ul class="timeline-items">
+                <li>A new app icon: a rounded hourglass in Reflectodoro's own orange and blue, replacing the placeholder icon on every platform &mdash; including Android's themed icons and this website's browser tab</li>
+                <li>Concentration mode's short break is now a full minute instead of 30 seconds, and the break screen's countdown now follows whichever schedule you're on instead of always counting down 5 minutes</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
               <p class="timeline-date">Monday, Sep 21, 2026</p>
               <ul class="timeline-items">
+                <li>Added a Concentration schedule alongside the normal one &mdash; a short break at :25 and a longer 10-minute break at :50 &mdash; picked from a new dropdown on the Timer tab. Your reflection is still required after both breaks. The home-screen controls are also now sized to fit their text</li>
                 <li>Android break screen improvements: the end-of-break quote panel now works there too (fetched in the background so it never delays your break, with the Quote API URL configurable in Settings), and the break screen now steps aside when a phone or VoIP call rings or is active, then returns when the call ends</li>
                 <li>You can now protect your encryption key with a password instead of the system password vault, and move it back and forth from a new Advanced settings section. If the vault refuses access, the app asks for a password rather than falling back to an unprotected key file &mdash; and on macOS it stops asking for Keychain access again on every launch once you've said no. If a break arrives before you've unlocked, you can skip that break from the password prompt</li>
-                <li>Added a way to show and copy your encryption key for safekeeping in a password manager, and to restore it later &mdash; checked against your existing entries first, so a mistyped key can never lock you out of your own data</li>
-                <li>The app no longer creates a brand-new key when it can't reach the one your entries were saved with &mdash; which could quietly make every past entry unreadable. It now tells you, and lets you try again or restore your backed-up key</li>
+                <li>Added a way to show and copy your encryption key for safekeeping in a password manager, and to restore it later &mdash; checked against your existing entries first, so a mistyped key can never lock you out. The app also no longer creates a brand-new key when it can't reach the one your entries were saved with, which could quietly make every past entry unreadable; it now tells you and lets you try again or restore your backup</li>
                 <li>A day on the Entries page that can't be read now offers a button to delete just that day's data, and pages now use more of a large window, with text scaled up to match</li>
               </ul>
             </div>
@@ -1669,20 +1676,14 @@
                 <li>Kept Android debug symbols for crash reports, and improved macOS startup diagnostics</li>
               </ul>
             </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Tuesday, Sep 15, 2026</p>
-              <ul class="timeline-items">
-                <li>Added a configurable quote panel to the break screen, pulling short text from a user-set API endpoint, and polished how the &ldquo;Coming next&rdquo; preview looks and stays visible after saving</li>
-                <li>Fixed the overlay clock/countdown showing stale time right when a break opens, and the reflection field pre-filling from the wrong slot instead of your last entry</li>
-                <li>Added the Google Play Store listing identifier</li>
-              </ul>
-            </div>
             <p class="timeline-tier reveal">Previous 3 weeks</p>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Sep 14 &ndash; 20, 2026</p>
               <ul class="timeline-items">
+                <li>Added a configurable quote panel to the end of the break screen, pulling short text from an API address you choose</li>
                 <li>Added a daily cap on emergency-exit (breakit) code uses, a &ldquo;Coming next&rdquo; preview and bulk-edit/full-day view for reflections, an auto-scrolling reflection list, and newest-first sorting on the Entries page</li>
-                <li>Fixed the macOS break screen getting hidden behind fullscreen apps, plus related media-pause bugs</li>
+                <li>Fixed the macOS break screen getting hidden behind fullscreen apps and related media-pause bugs, the break screen's clock showing stale time as a break opens, and the reflection field pre-filling from the wrong entry instead of your last one</li>
+                <li>Prepared the Android app for a Google Play Store listing</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">
