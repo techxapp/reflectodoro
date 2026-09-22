@@ -788,7 +788,7 @@
     <h2>Appearance</h2>
     {#if themeLoaded}
       <div class="data-row">
-        <label class="grow">
+        <label>
           Theme
           <select value={themePreference} onchange={handleThemeSelect}>
             <option value="auto">Auto (based on OS theme)</option>
@@ -805,11 +805,12 @@
     <p class="hint">
       <strong>Normal</strong><br/>
       Work runs :00&ndash;:25 and :30&ndash;:55 each hour<br/>
-      Breaks run :25&ndash;:30 and :55&ndash;:00
+      Breaks run :25&ndash;:30 (5 min) and :55&ndash;:00 (5 min)
     </p>
     <p class="hint">
       <strong>Concentration</strong><br/>
-      Work :00&ndash;:25 &rarr; 1 min break (:25:00&ndash;:26:00) &rarr; work :26:00&ndash;:50 &rarr; 10 min break (:50&ndash;:00)
+      Work runs :00&ndash;:25 and :26&ndash;:50 each hour<br/>
+      Breaks run :25&ndash;:26 (1 min) and :50&ndash;:00 (10 min)
     </p>
     <p class="hint">To change the mode, use the mode selector on the Timer screen.</p>
   </section>
@@ -1158,7 +1159,7 @@
 
     {#if deviceNameLoaded}
       <form onsubmit={saveDeviceNameSetting}>
-        <label class="grow">
+        <label>
           Device name
           <input type="text" bind:value={deviceName} placeholder="e.g. Work laptop" />
         </label>
@@ -1251,6 +1252,7 @@
     <p class="hint">
       Sync reflections, task lists, wellness check-ins, and screen time directly with another
       device on the same wifi network &mdash; no account, no cloud. Settings are never included.
+      <br/> For auto-sync to work, both laptop and phone should be active at start of break.
     </p>
 
     {#if pairedDevicesLoaded && pairedDevices.length > 0}
@@ -1325,7 +1327,7 @@
             <p class="hint">{candidatesBusy ? "Searching the local network…" : "No unpaired devices found nearby."}</p>
           {:else}
             <form onsubmit={submitJoinPairing}>
-              <label class="grow">
+              <label class="medium">
                 Device
                 <select bind:value={selectedCandidateId}>
                   <option value="" disabled>Select a device&hellip;</option>
@@ -1336,7 +1338,7 @@
               </label>
               <label>
                 PIN
-                <input type="text" inputmode="numeric" maxlength="6" bind:value={joinPin} placeholder="123456" />
+                <input class="pin-input" type="text" inputmode="numeric" maxlength="6" bind:value={joinPin} placeholder="123456" />
               </label>
               <button type="submit" disabled={joinBusy || !selectedCandidateId || !joinPin.trim()}>
                 {joinBusy ? "Pairing…" : "Pair"}
@@ -1433,7 +1435,11 @@
   }
 
   label.grow {
-    flex: 1;
+    width: 320px;
+    max-width: 100%;
+  }
+
+  label.medium {
     min-width: 220px;
   }
 
@@ -1447,7 +1453,16 @@
   }
 
   input[type="text"] {
+    width: 240px;
+    max-width: 100%;
+  }
+
+  label.grow input[type="text"] {
     width: 100%;
+  }
+
+  input.pin-input {
+    width: 100px;
   }
 
   input[type="number"] {
@@ -1599,7 +1614,14 @@
     color: inherit;
     padding: 8px 10px;
     font-size: 14px;
+    width: 240px;
+    max-width: 100%;
+  }
+
+  label.grow select,
+  label.medium select {
     width: 100%;
+    max-width: 420px;
   }
 
   .paired-device-list {

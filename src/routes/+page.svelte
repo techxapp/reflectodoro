@@ -353,35 +353,37 @@
   <section class="card timer-card">
     <p class="label">{slot.phase === "work" ? "Working" : "On break"}</p>
     <p class="big">{remainingLabel}</p><br/>
-    <select class="pomodoro-select" class:off={!enabled} value={pomodoroSelection} onchange={handlePomodoroSelect}>
-      <option value="on">Pomodoro: On</option>
-      {#each SNOOZE_MINUTES_OPTIONS as minutes (minutes)}
-        <option value={String(minutes)}>{snoozeOptionLabel(minutes)}</option>
-      {/each}
-      <option value="off">Pomodoro: Off</option>
-    </select>
+    <div class="controls-row">
+      <select class="pomodoro-select" class:off={!enabled} value={pomodoroSelection} onchange={handlePomodoroSelect}>
+        <option value="on">Pomodoro: On</option>
+        {#each SNOOZE_MINUTES_OPTIONS as minutes (minutes)}
+          <option value={String(minutes)}>{snoozeOptionLabel(minutes)}</option>
+        {/each}
+        <option value="off">Pomodoro: Off</option>
+      </select>
+
+      <div class="mode-row">
+        <!-- <label class="mode-label" for="pomodoro-mode-select">Pomodoro Mode</label> -->
+        <select id="pomodoro-mode-select" class="pomodoro-select" value={pomodoroMode} onchange={handleModeSelect}>
+          <option value="normal">Mode: Normal</option>
+          <option value="concentration">Mode: Concentration</option>
+        </select>
+        <button
+          type="button"
+          class="info-btn"
+          aria-label="About Pomodoro modes"
+          aria-expanded={modeHelpOpen}
+          onclick={() => (modeHelpOpen = !modeHelpOpen)}
+        >i</button>
+      </div>
+    </div>
     {#if snoozeInfo}
       <p class="hint">{snoozeResumeLabel}</p>
     {/if}
-
-    <div class="mode-row">
-      <!-- <label class="mode-label" for="pomodoro-mode-select">Pomodoro Mode</label> -->
-      <select id="pomodoro-mode-select" class="pomodoro-select" value={pomodoroMode} onchange={handleModeSelect}>
-        <option value="normal">Pomodoro Mode: Normal</option>
-        <option value="concentration">Pomodoro Mode: Concentration</option>
-      </select>
-      <button
-        type="button"
-        class="info-btn"
-        aria-label="About Pomodoro modes"
-        aria-expanded={modeHelpOpen}
-        onclick={() => (modeHelpOpen = !modeHelpOpen)}
-      >i</button>
-    </div>
     {#if modeHelpOpen}
       <p class="hint mode-help">
-        <strong>Normal:</strong> work :00&ndash;:25 and :30&ndash;:55 each hour; breaks :25&ndash;:30 and :55&ndash;:00.<br/>
-        <strong>Concentration:</strong> work :00&ndash;:25 &rarr; 1 min break &rarr; work :26&ndash;:50 &rarr; 10 min break (:50&ndash;:00).
+        <strong>Normal:</strong> 25 min work &rarr; 5 min break &rarr; 25 min work &rarr; 5 min break.<br/>
+        <strong>Concentration:</strong> 25 min work &rarr; 1 min break &rarr; work 24 min work &rarr; 10 min break.
       </p>
     {/if}
 
@@ -462,7 +464,7 @@
               >{deviceLabel(device.name, device.deviceId)} <span class="hint">({device.platform})</span></span
             >
             <span class="hint">Last synced: {formatLastSync(device.lastSyncAt)}</span>
-            <label class="checkbox auto-sync-checkbox">
+            <!-- <label class="checkbox auto-sync-checkbox">
               <input
                 type="checkbox"
                 checked={device.autoSyncEnabled}
@@ -470,7 +472,7 @@
                 onchange={() => toggleDeviceAutoSync(device)}
               />
               Auto-sync
-            </label>
+            </label> -->
             <button
               type="button"
               class="toggle sync-button"
@@ -558,6 +560,11 @@
       padding: 16px;
       gap: 16px;
     }
+
+    .controls-row {
+      flex-direction: column;
+      gap: 14px;
+    }
   }
 
   .card {
@@ -630,12 +637,19 @@
     color: var(--text-dim);
   }
 
+  .controls-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
   .mode-row {
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
-    margin-top: 14px;
     flex-wrap: wrap;
   }
 
