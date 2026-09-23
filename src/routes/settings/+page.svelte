@@ -39,6 +39,9 @@
     saveDeviceName,
     getQuoteApiUrl,
     saveQuoteApiUrl,
+    getThemePreference,
+    saveThemePreference,
+    type ThemePreference,
     startPairing,
     cancelPairing,
     browsePairingCandidates,
@@ -73,6 +76,16 @@
     } catch {
       // storage unavailable -- the toggle still works for this visit
     }
+  }
+
+  let themePreference = $state<ThemePreference>("auto");
+  let themeLoaded = $state(false);
+
+  async function handleThemeSelect(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement;
+    const next = select.value === "light" || select.value === "dark" ? select.value : "auto";
+    themePreference = next;
+    await saveThemePreference(next);
   }
 
   let length = $state(15);
@@ -411,6 +424,11 @@
   onMount(async () => {
     quoteApiUrl = await getQuoteApiUrl();
     quoteApiUrlLoaded = true;
+  });
+
+  onMount(async () => {
+    themePreference = await getThemePreference();
+    themeLoaded = true;
   });
 
   async function refreshOverlayPermission() {
@@ -771,12 +789,34 @@
 <div class="page">
 
   <section class="card">
+    <h2>Appearance</h2>
+    {#if themeLoaded}
+      <div class="data-row">
+        <label>
+          Theme
+          <select value={themePreference} onchange={handleThemeSelect}>
+            <option value="auto">Auto (based on OS theme)</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+      </div>
+    {/if}
+  </section>
+
+  <section class="card">
     <h2>Session schedule</h2>
     <p class="hint">
-      (Fixed for now)<br/> 
-      Work runs :00&ndash;:25 and :30&ndash;:55 each hour <br/> 
-      Breaks run :25&ndash;:30 and :55&ndash;:00
+      <strong>Normal</strong><br/>
+      Work runs :00&ndash;:25 and :30&ndash;:55 each hour<br/>
+      Breaks run :25&ndash;:30 (5 min) and :55&ndash;:00 (5 min)
     </p>
+    <p class="hint">
+      <strong>Concentration</strong><br/>
+      Work runs :00&ndash;:25 and :26&ndash;:50 each hour<br/>
+      Breaks run :25&ndash;:26 (1 min) and :50&ndash;:00 (10 min)
+    </p>
+    <p class="hint">To change the mode, use the mode selector on the Timer screen.</p>
   </section>
 
   <section class="card">
@@ -1145,7 +1185,7 @@
 
     {#if deviceNameLoaded}
       <form onsubmit={saveDeviceNameSetting}>
-        <label class="grow">
+        <label>
           Device name
           <input type="text" bind:value={deviceName} placeholder="e.g. Work laptop" />
         </label>
@@ -1240,6 +1280,7 @@
     <p class="hint">
       Sync reflections, task lists, wellness check-ins, and screen time directly with another
       device on the same wifi network &mdash; no account, no cloud. Settings are never included.
+      <br/> For auto-sync to work, both laptop and phone should be active at start of break.
     </p>
     {#if isIos}
       <p class="hint warning">
@@ -1320,7 +1361,7 @@
             <p class="hint">{candidatesBusy ? "Searching the local network…" : "No unpaired devices found nearby."}</p>
           {:else}
             <form onsubmit={submitJoinPairing}>
-              <label class="grow">
+              <label class="medium">
                 Device
                 <select bind:value={selectedCandidateId}>
                   <option value="" disabled>Select a device&hellip;</option>
@@ -1331,7 +1372,7 @@
               </label>
               <label>
                 PIN
-                <input type="text" inputmode="numeric" maxlength="6" bind:value={joinPin} placeholder="123456" />
+                <input class="pin-input" type="text" inputmode="numeric" maxlength="6" bind:value={joinPin} placeholder="123456" />
               </label>
               <button type="submit" disabled={joinBusy || !selectedCandidateId || !joinPin.trim()}>
                 {joinBusy ? "Pairing…" : "Pair"}
@@ -1428,7 +1469,11 @@
   }
 
   label.grow {
-    flex: 1;
+    width: 320px;
+    max-width: 100%;
+  }
+
+  label.medium {
     min-width: 220px;
   }
 
@@ -1442,7 +1487,16 @@
   }
 
   input[type="text"] {
+    width: 240px;
+    max-width: 100%;
+  }
+
+  label.grow input[type="text"] {
     width: 100%;
+  }
+
+  input.pin-input {
+    width: 100px;
   }
 
   input[type="number"] {
@@ -1594,7 +1648,14 @@
     color: inherit;
     padding: 8px 10px;
     font-size: 14px;
+    width: 240px;
+    max-width: 100%;
+  }
+
+  label.grow select,
+  label.medium select {
     width: 100%;
+    max-width: 420px;
   }
 
   .paired-device-list {

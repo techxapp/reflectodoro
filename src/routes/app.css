@@ -26,8 +26,14 @@
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
 }
 
+/* OS-driven dark mode -- only applies for the "Auto" theme choice (Settings
+   -> Appearance). An explicit "Light" pick (data-theme="light") overrides
+   this even when the OS is in dark mode; an explicit "Dark" pick gets the
+   identical values below via the plain :root[data-theme="dark"] rule, since
+   a rule guarded by @media (prefers-color-scheme: dark) never applies on a
+   device whose OS is set to light. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #16171d;
     --surface: #1d1f27;
     --surface-2: #262832;
@@ -38,6 +44,23 @@
     --accent-soft: rgba(124, 135, 255, 0.16);
     --danger: #ff6b62;
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #16171d;
+  --surface: #1d1f27;
+  --surface-2: #262832;
+  --border: #31333e;
+  --text: #f0f1f5;
+  --text-dim: #9a9da6;
+  --accent: #7c87ff;
+  --accent-soft: rgba(124, 135, 255, 0.16);
+  --danger: #ff6b62;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 * {

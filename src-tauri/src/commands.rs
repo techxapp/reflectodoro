@@ -259,6 +259,41 @@ pub fn set_enabled(app: AppHandle, enabled: bool) {
     apply_pomodoro_enabled(&app, enabled);
 }
 
+/// Reads `app_setting.pomodoro_mode` directly (used by `run_scheduler` before
+/// the frontend has synced). A missing row or unknown value means Normal.
+pub(crate) async fn load_saved_pomodoro_mode(app: &AppHandle) -> Result<crate::grid::Mode, String> {
+    let pool = crate::db::open_direct_pool(app).await?;
+    let value = sqlx::query_scalar::<_, String>("SELECT value FROM app_setting WHERE key = 'pomodoro_mode'")
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| format!("failed to read pomodoro_mode: {e}"))?;
+    Ok(value.map(|v| crate::grid::Mode::parse(&v)).unwrap_or_default())
+}
+
+#[tauri::command]
+pub fn get_pomodoro_mode() -> &'static str {
+    crate::current_mode().as_str()
+}
+
+/// Sets the schedule mode ("normal" / "concentration"); the frontend also
+/// persists it to `app_setting.pomodoro_mode`. Wakes the scheduler so the new
+/// grid applies immediately.
+#[tauri::command]
+pub fn set_pomodoro_mode(app: AppHandle, mode: String) -> &'static str {
+    let parsed = crate::grid::Mode::parse(&mode);
+    crate::store_mode(parsed);
+    crate::MODE_CHANGED.notify_one();
+    #[cfg(target_os = "android")]
+    {
+        let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+        if let Err(e) = bridge.persist_pomodoro_mode(parsed.as_str()) {
+            log::error!("failed to persist pomodoro mode preference: {e:?}");
+        }
+    }
+    let _ = app.emit("pomodoro://mode-changed", parsed.as_str());
+    parsed.as_str()
+}
+
 /// A pending "snooze" (Pomodoro mode temporarily paused from the main
 /// window's dropdown, auto-resuming on its own -- see `snooze_pomodoro`).
 /// Snake_case fields, no camelCase rename: matches `OverlayState`'s existing

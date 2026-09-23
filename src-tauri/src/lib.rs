@@ -24,7 +24,7 @@ mod screen_time;
 mod state;
 mod system_info;
 
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::Duration as StdDuration;
 
@@ -118,6 +118,27 @@ fn force_break_minutes() -> i64 {
 }
 
 pub(crate) static POMODORO_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Active schedule (`grid::Mode`), stored as 0 = Normal, 1 = Concentration.
+/// Loaded from `app_setting.pomodoro_mode` in `.setup()` before the scheduler
+/// starts (so a cold-start break uses the right grid) and pushed by
+/// `commands::set_pomodoro_mode` afterwards.
+pub(crate) static POMODORO_MODE: AtomicU8 = AtomicU8::new(0);
+
+/// Wakes `run_scheduler`'s sleep when the mode changes.
+pub(crate) static MODE_CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+pub(crate) fn current_mode() -> grid::Mode {
+    if POMODORO_MODE.load(Ordering::SeqCst) == 1 {
+        grid::Mode::Concentration
+    } else {
+        grid::Mode::Normal
+    }
+}
+
+pub(crate) fn store_mode(mode: grid::Mode) {
+    POMODORO_MODE.store((mode == grid::Mode::Concentration) as u8, Ordering::SeqCst);
+}
 
 /// Epoch-millis resume time for an active "snooze" (Pomodoro mode
 /// temporarily paused from the main window's dropdown) -- 0 means no snooze
@@ -392,6 +413,13 @@ pub(crate) fn apply_pomodoro_enabled(app: &AppHandle, enabled: bool) {
 }
 
 async fn run_scheduler(app: AppHandle) {
+    // Load the saved schedule mode before the first slot computation, so a
+    // cold-start break (e.g. Android alarm recovery) doesn't use the default
+    // grid while the frontend's boot sync is still in flight.
+    match commands::load_saved_pomodoro_mode(&app).await {
+        Ok(mode) => store_mode(mode),
+        Err(e) => log::warn!("scheduler: could not read pomodoro_mode, using {}: {e}", current_mode().as_str()),
+    }
     let mut last_phase: Option<Phase> = None;
     let mut expected_wake: Option<DateTime<Local>> = None;
     // Consumed by the first iteration only -- see force_break_on_start.
@@ -474,7 +502,7 @@ async fn run_scheduler(app: AppHandle) {
             }
         }
 
-        let mut slot = grid::slot_for(now);
+        let mut slot = grid::slot_for_mode(now, current_mode());
 
         // Testing aid only (see force_break_on_start): overrides the phase for
         // one iteration. `slot.end` is deliberately left as the real work
@@ -523,6 +551,7 @@ async fn run_scheduler(app: AppHandle) {
                             let mut ov = state.overlay.lock().unwrap();
                             *ov = OverlayState::opened_for(
                                 this_slot_start.clone(),
+                                slot.end.to_rfc3339(),
                                 generate_breakit_challenge(&app),
                                 limit_reached,
                             );
@@ -657,8 +686,13 @@ async fn run_scheduler(app: AppHandle) {
             ios_schedule::refresh(&app);
             ios_schedule::sleep_or_wake(sleep_dur).await;
         }
+        // Woken early by `commands::set_pomodoro_mode` so a mode switch takes
+        // effect now rather than at the old mode's next boundary.
         #[cfg(not(target_os = "ios"))]
-        tokio::time::sleep(sleep_dur).await;
+        tokio::select! {
+            _ = tokio::time::sleep(sleep_dur) => {}
+            _ = MODE_CHANGED.notified() => {}
+        }
     }
 }
 
@@ -968,6 +1002,8 @@ pub fn run() {
             commands::dev_force_close,
             commands::get_enabled,
             commands::set_enabled,
+            commands::get_pomodoro_mode,
+            commands::set_pomodoro_mode,
             commands::snooze_pomodoro,
             commands::get_snooze_until,
             commands::get_checkin_slot,

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="-512 -512 1024 1024">
+  <!--
+    Monochrome variant of app-icon.svg, for the Android 13+ themed-icon layer
+    (<monochrome> in the adaptive icon). Geometry is identical to app-icon.svg;
+    only the colour is flattened, since Android tints this layer itself and
+    uses only its alpha channel.
+  -->
+  <g transform="rotate(45)">
+    <g transform="scale(0.93)" fill="none"
+       stroke-linejoin="round" stroke-linecap="round" stroke-width="56">
+
+      <!-- upper bulb + end plate -->
+      <path d="M 36 0 C 115 -45 210 -120 210 -300 M -36 0 C -115 -45 -210 -120 -210 -300 M -245 -318 L 245 -318" stroke="#000000"/>
+      <circle cx="0" cy="-195" r="56" fill="#000000"/>
+
+      <!-- lower bulb + end plate -->
+      <path d="M 36 0 C 115 45 210 120 210 300 M -36 0 C -115 45 -210 120 -210 300 M -245 318 L 245 318" stroke="#000000"/>
+      <circle cx="0" cy="195" r="56" fill="#000000"/>
+
+    </g>
+  </g>
+</svg>

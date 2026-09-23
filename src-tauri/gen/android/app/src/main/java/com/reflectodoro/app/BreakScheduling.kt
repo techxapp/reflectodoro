@@ -30,6 +30,16 @@ private fun nextBoundaryMinute(minute: Int): Int = when {
   else -> 60
 }
 
+/** Concentration mode boundaries, in seconds past the top of the hour:
+ * 25:00, 26:00, 50:00, 60:00 (work :00-:25, 1min break, work :26:00-:50,
+ * 10min break). Mirrors grid::slot_for_mode. */
+private fun nextBoundarySecondConcentration(secondOfHour: Int): Int = when {
+  secondOfHour < 25 * 60 -> 25 * 60
+  secondOfHour < 26 * 60 -> 26 * 60
+  secondOfHour < 50 * 60 -> 50 * 60
+  else -> 60 * 60
+}
+
 /** (Re)arms the single next AlarmManager wake, replacing whatever was
  * previously scheduled -- setAlarmClock is one-shot, so BreakSchedulerService
  * and BreakAlarmReceiver both call this every time they run to keep the
@@ -37,10 +47,19 @@ private fun nextBoundaryMinute(minute: Int): Int = when {
 fun scheduleNextAlarm(context: Context) {
   val now = Calendar.getInstance()
   val currentMinute = now.get(Calendar.MINUTE)
-  val boundary = nextBoundaryMinute(currentMinute)
+  val concentration = PomodoroEnabledPref.isConcentrationMode(context)
   val next = now.clone() as Calendar
   next.set(Calendar.SECOND, 0)
   next.set(Calendar.MILLISECOND, 0)
+  // Delta to the next boundary in whole seconds, added via `add(SECOND, ...)`
+  // (same DST-safe reasoning as the long comment below) from the zeroed-seconds
+  // instant, which is why the delta is computed from second 0 of `currentMinute`.
+  val deltaSeconds: Int = if (concentration) {
+    val secondOfHour = currentMinute * 60 + now.get(Calendar.SECOND)
+    nextBoundarySecondConcentration(secondOfHour) - currentMinute * 60
+  } else {
+    (nextBoundaryMinute(currentMinute) - currentMinute) * 60
+  }
   // `.add(MINUTE, delta)`, not `.set(MINUTE, boundary)`: `add` walks forward
   // by a real elapsed duration from `next`'s already-unambiguous instant
   // (cloned from `now`, which is grounded in System.currentTimeMillis() and
@@ -67,7 +86,7 @@ fun scheduleNextAlarm(context: Context) {
   // already-unambiguous instant, so there's no resolution left to depend on.
   // Mirrors the same class of bug fixed in
   // grid::slot_for (src-tauri/src/grid.rs) on the Rust side.
-  next.add(Calendar.MINUTE, boundary - currentMinute)
+  next.add(Calendar.SECOND, deltaSeconds)
 
   val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
   val pendingIntent = PendingIntent.getBroadcast(

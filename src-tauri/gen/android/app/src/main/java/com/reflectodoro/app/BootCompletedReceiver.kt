@@ -35,6 +35,16 @@ object PomodoroEnabledPref {
   // rather than falling back to any option at all.
   const val PREF_SNOOZE_MINUTES = "pomodoro_snooze_minutes"
 
+  // Schedule mode ("normal"/"concentration"), mirrored from Rust's
+  // POMODORO_MODE so BreakScheduling.kt can compute the right next alarm
+  // boundary without a running Rust runtime. Defaults to "normal".
+  const val PREF_POMODORO_MODE = "pomodoro_mode"
+
+  fun isConcentrationMode(context: Context): Boolean {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getString(PREF_POMODORO_MODE, "normal") == "concentration"
+  }
+
   fun isEnabled(context: Context): Boolean {
     return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
       .getBoolean(PREF_POMODORO_ENABLED, true)

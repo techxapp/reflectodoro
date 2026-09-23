@@ -63,6 +63,7 @@ fn canonical_iso(iso: &str) -> Option<String> {
 
 fn previous_slot_iso(slot_iso: &str) -> Option<String> {
     let dt = DateTime::parse_from_rfc3339(slot_iso).ok()?;
+    // Reflection slots sit on a fixed 30-minute pitch in every mode.
     let prev = dt.with_timezone(&Utc) - chrono::Duration::minutes(30);
     Some(prev.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
@@ -169,7 +170,7 @@ pub async fn refresh_missed_slot_count(app: &AppHandle) {
     // slot's start, but `reflection.slot_start_at` is keyed on the preceding
     // work slot's start -- this count must walk the same anchor the actual
     // submit will use, or it double-counts/undercounts already-covered slots.
-    let reflection_slot_start = crate::grid::preceding_work_slot_start_iso(&current_slot_start)
+    let reflection_slot_start = crate::grid::preceding_work_slot_start_iso_for(&current_slot_start, crate::current_mode())
         .unwrap_or(current_slot_start);
     let count = find_missed_slots(pool(app).await, &reflection_slot_start).await.len();
     *app.state::<AppState>().missed_slot_count.lock().unwrap() = count;
@@ -198,7 +199,7 @@ pub async fn refresh_coming_next_text(app: &AppHandle) {
     let text = if current_slot_start.is_empty() {
         String::new()
     } else {
-        match crate::grid::next_work_slot_start_iso(&current_slot_start) {
+        match crate::grid::next_work_slot_start_iso_for(&current_slot_start, crate::current_mode()) {
             Some(next) => {
                 let stored = sqlx::query_scalar::<_, String>(
                     "SELECT text FROM reflection WHERE slot_start_at = ?",
@@ -671,7 +672,7 @@ async fn handle_submit_reflection(app: AppHandle, text: String) {
     // `current_slot_start` is the break slot's start (`:25`/`:55`);
     // `reflection.slot_start_at` should record the work slot it follows
     // (`:00`/`:30`) -- see grid::preceding_work_slot_start_iso.
-    let reflection_slot_start = crate::grid::preceding_work_slot_start_iso(&current_slot_start)
+    let reflection_slot_start = crate::grid::preceding_work_slot_start_iso_for(&current_slot_start, crate::current_mode())
         .unwrap_or(current_slot_start);
     let db = pool(&app).await;
     let cipher = match FieldCipher::resolve(&app).await {

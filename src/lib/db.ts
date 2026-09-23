@@ -131,6 +131,68 @@ export function canonicalIso(iso: string): string {
   return new Date(iso).toISOString();
 }
 
+// --- Schedule mode (Normal / Concentration) ------------------------------
+// Mirrors grid.rs's `Mode`. Kept as module state (every window runs its own
+// copy of this module) and refreshed from Rust, which is the source of truth:
+// once at import time and again on every `pomodoro://mode-changed` event, so
+// the sync slot helpers below don't need a mode argument threaded through.
+
+export type PomodoroMode = "normal" | "concentration";
+let pomodoroMode: PomodoroMode = "normal";
+
+export function getPomodoroModeSync(): PomodoroMode {
+  return pomodoroMode;
+}
+
+function parseMode(v: unknown): PomodoroMode {
+  return v === "concentration" ? "concentration" : "normal";
+}
+
+async function initPomodoroModeSync(): Promise<void> {
+  try {
+    pomodoroMode = parseMode(await invoke("get_pomodoro_mode"));
+    await listen<string>("pomodoro://mode-changed", (e) => {
+      pomodoroMode = parseMode(e.payload);
+    });
+  } catch {
+    // Not running inside Tauri (or the command isn't available yet): stay Normal.
+  }
+}
+void initPomodoroModeSync();
+
+const POMODORO_MODE_KEY = "pomodoro_mode";
+
+export async function getSavedPomodoroMode(): Promise<PomodoroMode> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [POMODORO_MODE_KEY],
+  );
+  return parseMode(rows[0]?.value);
+}
+
+/** Persists the mode and pushes it to Rust (which wakes the scheduler). */
+export async function savePomodoroMode(mode: PomodoroMode): Promise<PomodoroMode> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [POMODORO_MODE_KEY, mode],
+  );
+  const applied = parseMode(await invoke("set_pomodoro_mode", { mode }));
+  pomodoroMode = applied;
+  return applied;
+}
+
+/** Call once on main-window boot (and after data import) so Rust matches SQLite. */
+export async function loadAndSyncPomodoroMode(): Promise<PomodoroMode> {
+  const mode = await getSavedPomodoroMode();
+  const applied = parseMode(await invoke("set_pomodoro_mode", { mode }));
+  pomodoroMode = applied;
+  return applied;
+}
+
+/** Reflection slots sit on a fixed :00/:30 grid in every mode. */
 export function previousSlotIso(slotIso: string): string {
   return new Date(new Date(slotIso).getTime() - 30 * 60 * 1000).toISOString();
 }
@@ -144,7 +206,15 @@ export function previousSlotIso(slotIso: string): string {
  * mirrors `grid::preceding_work_slot_start_iso` on the Rust side.
  */
 export function precedingWorkSlotStartIso(breakSlotStartIso: string): string {
-  return new Date(new Date(breakSlotStartIso).getTime() - 25 * 60 * 1000).toISOString();
+  const t = new Date(breakSlotStartIso);
+  if (pomodoroMode === "concentration") {
+    // Break starting :00-:29 -> that hour's :00 slot, :30-:59 -> :30
+    // (mirrors grid::preceding_work_slot_start_iso_for).
+    const slotMin = t.getMinutes() < 30 ? 0 : 30;
+    t.setMinutes(slotMin, 0, 0);
+    return t.toISOString();
+  }
+  return new Date(t.getTime() - 25 * 60 * 1000).toISOString();
 }
 
 /**
@@ -157,7 +227,14 @@ export function precedingWorkSlotStartIso(breakSlotStartIso: string): string {
  * Android native overlay.
  */
 export function nextWorkSlotStartIso(breakSlotStartIso: string): string {
-  return new Date(new Date(breakSlotStartIso).getTime() + 5 * 60 * 1000).toISOString();
+  const t = new Date(breakSlotStartIso);
+  if (pomodoroMode === "concentration") {
+    // Break starting :00-:29 -> next slot is that hour's :30, else next hour's :00.
+    const forwardMin = t.getMinutes() < 30 ? 30 : 60;
+    t.setMinutes(0, 0, 0);
+    return new Date(t.getTime() + forwardMin * 60 * 1000).toISOString();
+  }
+  return new Date(t.getTime() + 5 * 60 * 1000).toISOString();
 }
 
 /** Was the given slot (by its canonical ISO start timestamp) already reflected on? */
@@ -2187,6 +2264,7 @@ export async function importData(
     await loadAndSyncMacosMediaKeyFallbackSetting();
     await loadAndSyncScreenTimeTrackingSetting();
     await loadAndSyncMediaToggleGuard();
+    await loadAndSyncPomodoroMode();
     // device_name is read through a process-lifetime cache (see
     // cachedDeviceName) -- drop it so an imported value doesn't keep getting
     // stamped onto new rows from the pre-import name until the next restart.
@@ -2341,6 +2419,48 @@ export async function saveQuoteApiUrl(url: string): Promise<void> {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [QUOTE_API_URL_KEY, url],
   );
+}
+
+// --- Theme (Settings -> Appearance) --------------------------------------
+//
+// "auto" (default) follows the OS light/dark setting via app.css's
+// `prefers-color-scheme` media query; "light"/"dark" pin it regardless of
+// what the OS says, via a `data-theme` attribute +layout.svelte applies to
+// `<html>` in every window (main, overlay, checkin, onboarding all import
+// app.css through that shared root layout). Purely a frontend concern --
+// nothing in Rust reads this key.
+
+export type ThemePreference = "auto" | "light" | "dark";
+
+const THEME_PREFERENCE_KEY = "theme_preference";
+
+export async function getThemePreference(): Promise<ThemePreference> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [THEME_PREFERENCE_KEY],
+  );
+  const value = rows[0]?.value;
+  return value === "light" || value === "dark" ? value : "auto";
+}
+
+export interface ThemeChangedPayload {
+  theme: ThemePreference;
+}
+
+/** Broadcasts to every open window (including this one) so a change applies
+ * immediately everywhere, not just on that window's next mount -- the same
+ * emit-to-all-windows pattern saveTaskList/saveNotToDoList use, just without
+ * their sourceLabel dance since re-applying the same theme in the window
+ * that made the change is harmless (unlike clobbering in-progress typing). */
+export async function saveThemePreference(theme: ThemePreference): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [THEME_PREFERENCE_KEY, theme],
+  );
+  await emit("theme://changed", { theme } satisfies ThemeChangedPayload);
 }
 
 // --- Encryption key storage (desktop; see key_store.rs) ---------------------

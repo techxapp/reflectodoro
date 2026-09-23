@@ -480,7 +480,7 @@ pub fn close_overlay(app: &AppHandle) {
         // check-in window links its wellness_check row to the reflection by
         // `slot_start_at`, which is stored as the preceding *work* slot's
         // start (`:00`/`:30`) -- see saveReflection/find_missed_slots.
-        let reflection_slot_start = crate::grid::preceding_work_slot_start_iso(&slot_start)
+        let reflection_slot_start = crate::grid::preceding_work_slot_start_iso_for(&slot_start, crate::current_mode())
             .unwrap_or_else(|| slot_start.clone());
         open_checkin_for_slot(app, reflection_slot_start);
     }

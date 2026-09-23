@@ -30,6 +30,9 @@
     syncWithDevice,
     setDeviceAutoSyncEnabled,
     attemptAutoSync,
+    loadAndSyncPomodoroMode,
+    savePomodoroMode,
+    type PomodoroMode,
     type PairedDeviceInfo,
   } from "$lib/db";
 
@@ -83,7 +86,9 @@
   let taskSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let notToDoSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const slot = $derived(slotFor(now));
+  let pomodoroMode = $state<PomodoroMode>("normal");
+  let modeHelpOpen = $state(false);
+  const slot = $derived(slotFor(now, pomodoroMode));
   const remainingLabel = $derived.by(() => {
     const ms = slot.end.getTime() - now.getTime();
     const totalSec = Math.max(0, Math.round(ms / 1000));
@@ -133,6 +138,20 @@
       // pomodoro://snooze-changed event, so this window's dropdown/hint
       // update immediately instead of racing it (see best_practices.md).
       snoozeInfo = await invoke<SnoozeInfo>("snooze_pomodoro", { minutes });
+    }
+  }
+
+  async function handleModeSelect(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement;
+    const previous = pomodoroMode;
+    const next = select.value === "concentration" ? "concentration" : "normal";
+    pomodoroMode = next;
+    try {
+      pomodoroMode = await savePomodoroMode(next);
+    } catch (e) {
+      pomodoroMode = previous;
+      select.value = previous;
+      logError(`failed to save pomodoro mode: ${e}`);
     }
   }
 
@@ -258,6 +277,7 @@
     await loadAndSyncMacosHideMenuBarDockSetting();
     await loadAndSyncScreenTimeTrackingSetting();
     await ensureDeviceName();
+    pomodoroMode = await loadAndSyncPomodoroMode();
     enabled = await invoke<boolean>("get_enabled");
     snoozeInfo = await invoke<SnoozeInfo | null>("get_snooze_until");
     taskListContent = await getTaskList(localDateStamp());
@@ -333,15 +353,38 @@
   <section class="card timer-card">
     <p class="label">{slot.phase === "work" ? "Working" : "On break"}</p>
     <p class="big">{remainingLabel}</p><br/>
-    <select class="pomodoro-select" class:off={!enabled} value={pomodoroSelection} onchange={handlePomodoroSelect}>
-      <option value="on">Pomodoro mode: On</option>
-      {#each SNOOZE_MINUTES_OPTIONS as minutes (minutes)}
-        <option value={String(minutes)}>{snoozeOptionLabel(minutes)}</option>
-      {/each}
-      <option value="off">Pomodoro mode: Off</option>
-    </select>
+    <div class="controls-row">
+      <select class="pomodoro-select" class:off={!enabled} value={pomodoroSelection} onchange={handlePomodoroSelect}>
+        <option value="on">Pomodoro: On</option>
+        {#each SNOOZE_MINUTES_OPTIONS as minutes (minutes)}
+          <option value={String(minutes)}>{snoozeOptionLabel(minutes)}</option>
+        {/each}
+        <option value="off">Pomodoro: Off</option>
+      </select>
+
+      <div class="mode-row">
+        <!-- <label class="mode-label" for="pomodoro-mode-select">Pomodoro Mode</label> -->
+        <select id="pomodoro-mode-select" class="pomodoro-select" value={pomodoroMode} onchange={handleModeSelect}>
+          <option value="normal">Mode: Normal</option>
+          <option value="concentration">Mode: Concentration</option>
+        </select>
+        <button
+          type="button"
+          class="info-btn"
+          aria-label="About Pomodoro modes"
+          aria-expanded={modeHelpOpen}
+          onclick={() => (modeHelpOpen = !modeHelpOpen)}
+        >i</button>
+      </div>
+    </div>
     {#if snoozeInfo}
       <p class="hint">{snoozeResumeLabel}</p>
+    {/if}
+    {#if modeHelpOpen}
+      <p class="hint mode-help">
+        <strong>Normal:</strong> 25 min work &rarr; 5 min break &rarr; 25 min work &rarr; 5 min break.<br/>
+        <strong>Concentration:</strong> 25 min work &rarr; 1 min break &rarr; work 24 min work &rarr; 10 min break.
+      </p>
     {/if}
 
     {#if mediaPauseOnBreakLoaded}
@@ -421,7 +464,7 @@
               >{deviceLabel(device.name, device.deviceId)} <span class="hint">({device.platform})</span></span
             >
             <span class="hint">Last synced: {formatLastSync(device.lastSyncAt)}</span>
-            <label class="checkbox auto-sync-checkbox">
+            <!-- <label class="checkbox auto-sync-checkbox">
               <input
                 type="checkbox"
                 checked={device.autoSyncEnabled}
@@ -429,7 +472,7 @@
                 onchange={() => toggleDeviceAutoSync(device)}
               />
               Auto-sync
-            </label>
+            </label> -->
             <button
               type="button"
               class="toggle sync-button"
@@ -517,6 +560,11 @@
       padding: 16px;
       gap: 16px;
     }
+
+    .controls-row {
+      flex-direction: column;
+      gap: 14px;
+    }
   }
 
   .card {
@@ -559,6 +607,8 @@
     padding: 10px 16px;
     font-size: 14px;
     font-weight: 500;
+    width: fit-content;
+    max-width: 100%;
   }
 
   .toggle.off {
@@ -576,11 +626,56 @@
     font-weight: 500;
     font-family: inherit;
     cursor: pointer;
+    /* Size to the selected option's text, not the widest option in the list. */
+    field-sizing: content;
+    width: fit-content;
+    max-width: 100%;
   }
 
   .pomodoro-select.off {
     background: var(--surface-2);
     color: var(--text-dim);
+  }
+
+  .controls-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .mode-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .mode-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-dim);
+  }
+
+  .info-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--text-dim);
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 12px;
+    font-style: italic;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .mode-help {
+    text-align: left;
   }
 
   .media-toggle {
