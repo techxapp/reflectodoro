@@ -970,16 +970,16 @@
             <div class="frame">
               <div class="carousel-track" id="carouselTrack" tabindex="0" role="group" aria-label="Screenshots carousel">
                 <div class="carousel-slide" data-caption="Main window &mdash; wall-clock countdown and Most Important Tasks">
-                  <img class="shot" src="screenshots/SS3.png" alt="Main timer window with wall-clock countdown and Most Important Tasks panel" />
+                  <img class="shot" data-src-light="screenshots/SS3.png" data-src-dark="screenshots/SS3_dark.png" src="screenshots/SS3.png" alt="Main timer window with wall-clock countdown and Most Important Tasks panel" />
                 </div>
                 <div class="carousel-slide" data-caption="Break screen &mdash; reflection required, with the emergency-exit challenge">
-                  <img class="shot" src="screenshots/SS1.png" alt="Break screen requiring a written reflection, with the emergency-exit code challenge" loading="lazy" />
+                  <img class="shot" data-src-light="screenshots/SS1.png" data-src-dark="screenshots/SS1_dark.png" src="screenshots/SS1.png" alt="Break screen requiring a written reflection, with the emergency-exit code challenge" loading="lazy" />
                 </div>
                 <div class="carousel-slide" data-caption="Wellness check-in at the end of the break">
-                  <img class="shot" src="screenshots/SS2.png" alt="Wellness check-in prompt for relaxed eyes, exercise, water, and washroom breaks" loading="lazy" />
+                  <img class="shot" data-src-light="screenshots/SS2.png" data-src-dark="screenshots/SS2_dark.png" src="screenshots/SS2.png" alt="Wellness check-in prompt for relaxed eyes, exercise, water, and washroom breaks" loading="lazy" />
                 </div>
                 <div class="carousel-slide" data-caption="Entries &mdash; daily wellness stats and reflection history">
-                  <img class="shot" src="screenshots/SS4.png" alt="Entries view showing daily wellness stats and reflection history on a calendar" loading="lazy" />
+                  <img class="shot" data-src-light="screenshots/SS4.png" data-src-dark="screenshots/SS4_dark.png" src="screenshots/SS4.png" alt="Entries view showing daily wellness stats and reflection history on a calendar" loading="lazy" />
                 </div>
               </div>
             </div>
@@ -1742,10 +1742,20 @@
         if (set === 'light') return false;
         return mql.matches;
       }
+      function updateScreenshots() {
+        var dark = isDark();
+        var imgs = document.querySelectorAll('.shot[data-src-light]');
+        for (var i = 0; i < imgs.length; i++) {
+          var img = imgs[i];
+          var wanted = dark ? img.getAttribute('data-src-dark') : img.getAttribute('data-src-light');
+          if (wanted && img.getAttribute('src') !== wanted) img.setAttribute('src', wanted);
+        }
+      }
       function paint() {
         icon.innerHTML = isDark() ? '&#9728;' : '&#9789;';
         btn.setAttribute('aria-label', isDark() ? 'Switch to light theme' : 'Switch to dark theme');
         if (metaTheme) metaTheme.setAttribute('content', isDark() ? '#0a0c11' : '#fbfaf9');
+        updateScreenshots();
       }
       btn.addEventListener('click', function () {
         var next = isDark() ? 'light' : 'dark';
