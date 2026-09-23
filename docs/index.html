@@ -63,6 +63,8 @@
       --brand-soft: rgba(220, 79, 44, 0.10);
       --brand-line: rgba(220, 79, 44, 0.30);
       --ok: #16a34a;
+      --bad: #d32b2b;
+      --info: #2563eb;
       --shadow-sm: 0 1px 2px rgba(16, 18, 22, 0.05), 0 6px 16px -10px rgba(16, 18, 22, 0.18);
       --shadow-md: 0 12px 34px -18px rgba(16, 18, 22, 0.32);
       --shadow-lg: 0 34px 70px -34px rgba(16, 18, 22, 0.42);
@@ -93,6 +95,8 @@
         --brand-soft: rgba(91, 140, 255, 0.16);
         --brand-line: rgba(91, 140, 255, 0.36);
         --ok: #43c877;
+        --bad: #ff6b6b;
+        --info: #5b8cff;
         --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40), 0 6px 16px -10px rgba(0, 0, 0, 0.60);
         --shadow-md: 0 12px 34px -18px rgba(0, 0, 0, 0.75);
         --shadow-lg: 0 34px 70px -34px rgba(0, 0, 0, 0.90);
@@ -119,6 +123,8 @@
       --brand-soft: rgba(91, 140, 255, 0.16);
       --brand-line: rgba(91, 140, 255, 0.36);
       --ok: #43c877;
+      --bad: #ff6b6b;
+      --info: #5b8cff;
       --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40), 0 6px 16px -10px rgba(0, 0, 0, 0.60);
       --shadow-md: 0 12px 34px -18px rgba(0, 0, 0, 0.75);
       --shadow-lg: 0 34px 70px -34px rgba(0, 0, 0, 0.90);
@@ -611,8 +617,8 @@
     }
     .support-table td:first-child { font-weight: 500; }
     .support-table .yes { color: var(--ok); font-weight: 700; }
-    .support-table .no { color: var(--text-faint); font-weight: 700; }
-    .support-table .partial { color: var(--brand); font-weight: 700; }
+    .support-table .no { color: var(--bad); font-weight: 700; }
+    .support-table .partial { color: var(--info); font-weight: 700; }
     .table-note {
       display: block; font-size: 10.5px; font-weight: 500;
       color: var(--text-faint); margin-top: 3px; white-space: normal;
@@ -1198,8 +1204,8 @@
                   <th scope="col">Feature</th>
                   <th scope="col">Windows</th>
                   <th scope="col">Android</th>
-                  <th scope="col">Linux</th>
                   <th scope="col">macOS</th>
+                  <th scope="col">Linux</th>
                 </tr>
               </thead>
               <tbody>
@@ -1214,8 +1220,8 @@
                   <td>No free pass (reflection required)</td>
                   <td class="yes">&#10003;</td>
                   <td class="yes">&#10003;</td>
-                  <td class="partial">&#10003;<span class="table-note">Only X11 Desktop Supported</span></td>
                   <td class="yes">&#10003;</td>
+                  <td class="partial">&#10003;<span class="table-note">Only X11 based Desktops Supported</span></td>
                 </tr>
                 <tr>
                   <td>Emergency exit challenge</td>
@@ -1242,8 +1248,8 @@
                   <td>Auto-pause media on break</td>
                   <td class="yes">&#10003;</td>
                   <td class="yes">&#10003;</td>
-                  <td class="yes">&#10003;</td>
                   <td class="partial">&#10003;<span class="table-note">Best effort</span></td>
+                  <td class="yes">&#10003;</td>
                 </tr>
                 <tr>
                   <td>Cross-device sync (Local)</td>
@@ -1263,8 +1269,8 @@
                   <td>App usage screen time</td>
                   <td class="yes">&#10003;</td>
                   <td class="yes">&#10003;</td>
-                  <td class="no">&#10007;<span class="table-note">Planned</span></td>
                   <td class="yes">&#10003;</td>
+                  <td class="no">&#10007;<span class="table-note">Planned</span></td>
                 </tr>
               </tbody>
             </table>
@@ -1280,8 +1286,8 @@
             <h2>Most focus apps let you shrug off the break.</h2>
             <p>Plenty of Pomodoro apps exist &mdash; a few even lock the screen. Almost none also make you say what
                you did before letting you back in. Here's how Reflectodoro stacks up against the well-known
-               names in each camp: a gamified timer, a mainstream cross-platform app, a paid enforced-break
-               competitor, and the closest open-source analog.</p>
+               names in each camp: a paid enforced-break competitor, a gamified timer, a mainstream
+               cross-platform app, and the closest open-source analog.</p>
           </div>
 
           <div class="table-wrap reveal">
@@ -1290,9 +1296,9 @@
                 <tr>
                   <th scope="col">Feature</th>
                   <th scope="col">Reflectodoro</th>
+                  <th scope="col">FocusMe</th>
                   <th scope="col">Forest</th>
                   <th scope="col">Focus To-Do</th>
-                  <th scope="col">FocusMe</th>
                   <th scope="col">pomohardo</th>
                 </tr>
               </thead>
@@ -1301,21 +1307,21 @@
                   <td>Written reflection required to unlock the break</td>
                   <td class="yes">&#10003;</td>
                   <td class="no">&#10007;</td>
-                  <td class="partial">&#10003;<span class="table-note">Optional, skippable</span></td>
                   <td class="no">&#10007;</td>
+                  <td class="partial">&#10003;<span class="table-note">Optional, skippable</span></td>
                   <td class="no">&#10007;</td>
                 </tr>
                 <tr>
                   <td>Break screen resists closing (fullscreen, skip-protected)</td>
                   <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
                   <td class="no">&#10007;<span class="table-note">Breaks are on trust</span></td>
                   <td class="no">&#10007;<span class="table-note">Break can be skipped</span></td>
-                  <td class="yes">&#10003;</td>
                   <td class="yes">&#10003;</td>
                 </tr>
                 <tr>
                   <td>Fixed Wall-clock slots (not a rolling timer)</td>
-                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;<span class="table-note">Zero-config, Just install app and you are good to go.</span></td>
                   <td class="no">&#10007;</td>
                   <td class="no">&#10007;</td>
                   <td class="no">&#10007;</td>
@@ -1324,9 +1330,9 @@
                 <tr>
                   <td>Desktop: Windows, macOS &amp; Linux</td>
                   <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
                   <td class="no">&#10007;<span class="table-note">No desktop app</span></td>
                   <td class="partial">&#10003;<span class="table-note">No Linux</span></td>
-                  <td class="yes">&#10003;</td>
                   <td class="yes">&#10003;</td>
                 </tr>
                 <tr>
@@ -1349,41 +1355,41 @@
                   <td>Your entries encrypted at rest on your device</td>
                   <td class="yes">&#10003;</td>
                   <td class="no">&#10007;<span class="table-note">Only in-transit encryption documented</span></td>
-                  <td class="partial">&#10003;<span class="table-note">Profile content only, per its privacy policy</span></td>
                   <td class="no">&#10007;<span class="table-note">Only in-transit encryption documented</span></td>
+                  <td class="partial">&#10003;<span class="table-note">Profile content only, per its privacy policy</span></td>
                   <td class="no">&#10007;<span class="table-note">Probabily No</span></td>
                 </tr>
                 <tr>
                   <td>Is your data visible to the app maker?</td>
                   <td class="yes">No<span class="table-note">No server; it never leaves your device automatically.</span></td>
+                  <td class="partial">Partly<span class="table-note">Device ID &amp; synced plans; blocking stays local</span></td>
                   <td class="no">Yes<span class="table-note">Account &amp; content stored on its servers, per store listing</span></td>
                   <td class="partial">If you sign in<span class="table-note">Synced tasks are stored server-side; local mode isn't</span></td>
-                  <td class="partial">Partly<span class="table-note">Device ID &amp; synced plans; blocking stays local</span></td>
                   <td class="yes">Probabily No<span class="table-note">No account mentioned</span></td>
                 </tr>
                 <tr>
                   <td>Analyzes your data (cloud-side)?</td>
                   <td class="yes">No<span class="table-note">Nothing is sent anywhere to analyze</span></td>
+                  <td class="partial">Usage analytics<span class="table-note">&ldquo;Analysing website and service use&rdquo;</span></td>
                   <td class="partial">Usage &amp; diagnostics<span class="table-note">Collected, per store listing</span></td>
                   <td class="partial">Usage &amp; crash analytics<span class="table-note">Says task content isn't read</span></td>
-                  <td class="partial">Usage analytics<span class="table-note">&ldquo;Analysing website and service use&rdquo;</span></td>
                   <td class="yes">Probabily No</td>
                 </tr>
                 <tr>
                   <td>Shares data with third parties?</td>
                   <td class="yes">No<span class="table-note">Nothing you write leaves your device</span></td>
+                  <td class="no">Yes<span class="table-note">Google Analytics, Meta Pixel, Clarity (website)</span></td>
                   <td class="no">Yes<span class="table-note">Email shared for marketing, per store listing</span></td>
                   <td class="no">Yes<span class="table-note">Firebase, Bugly, payment providers</span></td>
-                  <td class="no">Yes<span class="table-note">Google Analytics, Meta Pixel, Clarity (website)</span></td>
                   <td class="yes">Probabily No</td>
                 </tr>
                 <tr>
                   <td>Local-only mode available?</td>
-                  <td class="yes">Always<span class="table-note">Local is the only mode; LAN sync is optional</span></td>
+                  <td class="yes">&#10003;<span class="table-note">Always, Local is the only mode; LAN sync is optional</span></td>
+                  <td class="yes">&#10003;<span class="table-note">Blocking works without an account</span></td>
                   <td class="partial">Not documented</td>
                   <td class="yes">&#10003;<span class="table-note">Local mode, no account; no sync</span></td>
-                  <td class="yes">&#10003;<span class="table-note">Blocking works without an account</span></td>
-                  <td class="yes">Config file only<span class="table-note">No account mentioned</span></td>
+                  <td class="yes">&#10003;<span class="table-note">No account mentioned</span></td>
                 </tr>
                 <tr>
                   <td>Open source</td>
@@ -1578,7 +1584,7 @@
               <p>Help documenting tasks, tracking progress, and summarizing your reflections.</p>
             </div>
             <div class="card reveal">
-              <span class="roadmap-badge">Planned</span>
+              <span class="roadmap-badge">In Progress</span>
               <h3>iOS build &#127843;</h3>
               <p>Add support for same app on iOS.</p>
             </div>
