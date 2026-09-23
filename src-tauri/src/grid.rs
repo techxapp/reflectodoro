@@ -214,25 +214,28 @@ fn hour_start(dt: DateTime<chrono::FixedOffset>) -> Option<DateTime<chrono::Fixe
 /// first. iOS schedules its break notifications from this, so the grid rule
 /// stays in this one file instead of getting a Swift copy.
 ///
-/// Walks slot to slot with `slot_for`, which is DST-safe but, inside a
+/// Walks slot to slot with `slot_for_mode`, which is DST-safe but, inside a
 /// fall-back hour, resolves ambiguous times to the *earlier* instant -- so a
 /// slot's `end` can land at or before the time just examined. Stepping a
-/// fixed 5 minutes in that case (and never emitting a start twice) keeps the
-/// walk moving forward instead of cycling.
+/// fixed minute in that case (and never emitting a start twice) keeps the
+/// walk moving forward instead of cycling. The step is a minute rather than
+/// the grid's coarsest gap because Concentration's :25 break is only one
+/// minute long, and a coarser step could walk straight past it.
 #[cfg(any(test, target_os = "ios"))]
-pub fn upcoming_break_starts(now: DateTime<Local>, n: usize) -> Vec<DateTime<Local>> {
+pub fn upcoming_break_starts(now: DateTime<Local>, n: usize, mode: Mode) -> Vec<DateTime<Local>> {
     let mut out: Vec<DateTime<Local>> = Vec::with_capacity(n);
     let mut t = now;
-    // Generous bound: two breaks per hour, so ~4 slots per break plus DST slack.
-    for _ in 0..(n * 8 + 32) {
+    // Generous bound: two breaks per hour, so ~4 slots per break, plus enough
+    // slack for minute-stepping through an ambiguous fall-back hour.
+    for _ in 0..(n * 8 + 128) {
         if out.len() >= n {
             break;
         }
-        let slot = slot_for(t);
+        let slot = slot_for_mode(t, mode);
         if slot.phase == Phase::Break && slot.start > now && out.last().map_or(true, |last| slot.start > *last) {
             out.push(slot.start);
         }
-        t = if slot.end > t { slot.end } else { t + ChronoDuration::minutes(5) };
+        t = if slot.end > t { slot.end } else { t + ChronoDuration::minutes(1) };
     }
     out
 }
@@ -349,38 +352,64 @@ mod tests {
 
     #[test]
     fn upcoming_breaks_from_mid_work_slot() {
-        let starts = upcoming_break_starts(local(10, 10), 4);
+        let starts = upcoming_break_starts(local(10, 10), 4, Mode::Normal);
         assert_eq!(starts, vec![local(10, 25), local(10, 55), local(11, 25), local(11, 55)]);
     }
 
     #[test]
     fn upcoming_breaks_skip_the_break_already_in_progress() {
-        let starts = upcoming_break_starts(local(10, 27), 2);
+        let starts = upcoming_break_starts(local(10, 27), 2, Mode::Normal);
         assert_eq!(starts, vec![local(10, 55), local(11, 25)]);
     }
 
     #[test]
     fn upcoming_breaks_exclude_a_break_starting_exactly_now() {
-        assert_eq!(upcoming_break_starts(local(10, 25), 1), vec![local(10, 55)]);
+        assert_eq!(upcoming_break_starts(local(10, 25), 1, Mode::Normal), vec![local(10, 55)]);
     }
 
     #[test]
     fn upcoming_breaks_cover_a_full_day_and_are_strictly_increasing() {
-        let starts = upcoming_break_starts(local(9, 0), 48);
+        let starts = upcoming_break_starts(local(9, 0), 48, Mode::Normal);
         assert_eq!(starts.len(), 48);
         assert!(starts.windows(2).all(|w| w[0] < w[1]));
         assert!(starts.iter().all(|s| s.minute() == 25 || s.minute() == 55));
     }
 
+    /// iOS schedules its break notifications from this, so Concentration's
+    /// :25/:50 grid has to come back instead of Normal's :25/:55 -- otherwise
+    /// the notification fires at a time the app itself never opens a break.
+    #[test]
+    fn upcoming_breaks_follow_concentration_mode() {
+        let starts = upcoming_break_starts(local(10, 10), 4, Mode::Concentration);
+        assert_eq!(starts, vec![local(10, 25), local(10, 50), local(11, 25), local(11, 50)]);
+    }
+
+    #[test]
+    fn upcoming_breaks_skip_a_concentration_break_already_in_progress() {
+        // :25:00-:26:00 is already running, so the next one is that hour's :50.
+        let starts = upcoming_break_starts(local(10, 25), 2, Mode::Concentration);
+        assert_eq!(starts, vec![local(10, 50), local(11, 25)]);
+    }
+
+    #[test]
+    fn upcoming_breaks_cover_a_full_day_in_concentration_mode() {
+        let starts = upcoming_break_starts(local(9, 0), 48, Mode::Concentration);
+        assert_eq!(starts.len(), 48);
+        assert!(starts.windows(2).all(|w| w[0] < w[1]));
+        assert!(starts.iter().all(|s| s.minute() == 25 || s.minute() == 50));
+    }
+
     #[test]
     fn upcoming_breaks_across_dst_transitions_do_not_hang_or_repeat() {
-        for now in [
-            Local.with_ymd_and_hms(2026, 11, 1, 0, 40, 0).unwrap(),
-            Local.with_ymd_and_hms(2026, 3, 8, 1, 40, 0).unwrap(),
-        ] {
-            let starts = upcoming_break_starts(now, 48);
-            assert_eq!(starts.len(), 48);
-            assert!(starts.windows(2).all(|w| w[0] < w[1]));
+        for mode in [Mode::Normal, Mode::Concentration] {
+            for now in [
+                Local.with_ymd_and_hms(2026, 11, 1, 0, 40, 0).unwrap(),
+                Local.with_ymd_and_hms(2026, 3, 8, 1, 40, 0).unwrap(),
+            ] {
+                let starts = upcoming_break_starts(now, 48, mode);
+                assert_eq!(starts.len(), 48, "mode {:?} at {now}", mode);
+                assert!(starts.windows(2).all(|w| w[0] < w[1]), "mode {:?} at {now}", mode);
+            }
         }
     }
 

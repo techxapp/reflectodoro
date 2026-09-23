@@ -283,6 +283,11 @@ pub fn set_pomodoro_mode(app: AppHandle, mode: String) -> &'static str {
     let parsed = crate::grid::Mode::parse(&mode);
     crate::store_mode(parsed);
     crate::MODE_CHANGED.notify_one();
+    // iOS's scheduler sleeps on its own notify, not MODE_CHANGED, and has
+    // already handed the old grid's break times to the OS as notifications --
+    // so it has to re-push them now rather than at the next poll.
+    #[cfg(target_os = "ios")]
+    crate::ios_schedule::wake();
     #[cfg(target_os = "android")]
     {
         let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();

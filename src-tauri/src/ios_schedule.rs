@@ -25,9 +25,9 @@ use tauri::{AppHandle, Manager};
 use tokio::sync::Notify;
 
 /// iOS keeps at most 64 pending local notifications per app; 48 is one day of
-/// breaks, leaving room for anything else the app schedules.
+/// breaks (two per hour in both schedule modes), leaving room for anything
+/// else the app schedules.
 const NOTIFICATION_WINDOW: usize = 48;
-const BREAK_LENGTH_MIN: i64 = 5;
 
 static WAKE: Notify = Notify::const_new();
 /// Set by `wake()`: the next `refresh` pushes even if nothing it tracks
@@ -65,9 +65,20 @@ pub fn refresh(app: &AppHandle) {
         let ov = state.overlay.lock().unwrap();
         ov.open && !ov.reflection_entered
     };
-    let slot = grid::slot_for(now);
+    // Both the notification fire dates and the Live Activity have to follow
+    // whichever schedule mode is in effect, not a hardcoded Normal grid --
+    // otherwise a Concentration user is notified at :55 for a break the app
+    // itself opens at :50. `mode` is in the key because switching modes can
+    // leave `slot.start_iso()` unchanged (both grids start work at :00), and
+    // a stale key here would keep the old grid's notifications pending.
+    let mode = crate::current_mode();
+    let slot = grid::slot_for_mode(now, mode);
 
-    let key = format!("{enabled}|{snooze_until_ms}|{reflection_pending}|{}", slot.start_iso());
+    let key = format!(
+        "{enabled}|{snooze_until_ms}|{reflection_pending}|{}|{}",
+        mode.as_str(),
+        slot.start_iso()
+    );
     {
         let mut last = LAST_PUSHED.lock().unwrap();
         if !force && last.as_deref() == Some(key.as_str()) {
@@ -88,7 +99,7 @@ pub fn refresh(app: &AppHandle) {
         // for breaks after it ends can be scheduled now: they still fire if
         // the process is gone by then.
         let resume_at = DateTime::<Utc>::from_timestamp_millis(snooze_until_ms).map(|d| d.with_timezone(&Local));
-        let fire_dates: Vec<String> = grid::upcoming_break_starts(now, NOTIFICATION_WINDOW)
+        let fire_dates: Vec<String> = grid::upcoming_break_starts(now, NOTIFICATION_WINDOW, mode)
             .into_iter()
             .filter(|start| !snoozed || resume_at.map_or(true, |r| *start >= r))
             .map(iso)
@@ -112,16 +123,20 @@ pub fn refresh(app: &AppHandle) {
     let next_break_start = if slot.phase == Phase::Work {
         slot.end
     } else {
-        match grid::upcoming_break_starts(now, 1).first() {
+        match grid::upcoming_break_starts(now, 1, mode).first() {
             Some(s) => *s,
             None => return,
         }
     };
+    // Asking the grid for the slot containing the break's own start instant
+    // gives its real end in either mode, rather than assuming every break is
+    // the same length: Concentration's are 1 minute at :25 and 10 at :50.
+    let next_break_end = grid::slot_for_mode(next_break_start, mode).end;
     let state = LiveActivityState {
         phase: if slot.phase == Phase::Break { "break" } else { "work" },
         phase_end: iso(slot.end),
         next_break_start: iso(next_break_start),
-        next_break_end: iso(next_break_start + chrono::Duration::minutes(BREAK_LENGTH_MIN)),
+        next_break_end: iso(next_break_end),
         reflection_pending,
     };
     match bridge.start_or_update_live_activity(&state) {
