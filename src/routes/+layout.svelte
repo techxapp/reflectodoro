@@ -327,6 +327,12 @@
   main {
     flex: 1;
     overflow-y: auto;
+    /* A page-level fix (min-width: 0 on grid/flex children so they can
+       actually shrink) is what stops a route's content forcing this wider
+       than the viewport in the first place -- this is only the safety net,
+       so a route that hits the same trap shows clipped content instead of
+       an app-wide horizontal scrollbar. */
+    overflow-x: hidden;
     /* Bottom inset keeps content clear of the gesture-nav bar, plus
        --kb-inset's extra room so a focused field near the bottom (e.g. the
        Timer tab's task list) can still be scrolled up above an open
