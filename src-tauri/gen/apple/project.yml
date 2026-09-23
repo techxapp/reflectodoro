@@ -57,8 +57,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.15.0
-        CFBundleVersion: "0.15.0"
+        CFBundleShortVersionString: 0.15.2
+        CFBundleVersion: "0.15.2"
         NSSupportsLiveActivities: true
     entitlements:
       path: reflectodoro_iOS/reflectodoro_iOS.entitlements
@@ -121,8 +121,8 @@ targets:
       path: ReflectodoroLiveActivity/Info.plist
       properties:
         CFBundleDisplayName: Reflectodoro
-        CFBundleShortVersionString: 0.15.0
-        CFBundleVersion: "0.15.0"
+        CFBundleShortVersionString: 0.15.2
+        CFBundleVersion: "0.15.2"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
