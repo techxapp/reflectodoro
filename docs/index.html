@@ -1608,6 +1608,7 @@
                 <li>Fixed Most Important Tasks and the Not To Do list going missing on the break screen: a failed save could vanish silently while the text box still showed what you'd typed, and the break screen didn't always pick up the latest content if it missed a live update. Saves now show an inline error when something goes wrong, and the break screen re-reads the latest lists every time a new break opens</li>
                 <li>Added media pause-on-break to iOS, and fixed the Timer page overflowing the screen on some iPhones</li>
                 <li>Fixed iOS break notifications and the Lock Screen countdown to follow Concentration mode's shorter break timing instead of always assuming a 5-minute break</li>
+                <li>Concentration mode's 1-minute break now skips the quote panel entirely -- too short to read one, so the break screen no longer shows it and no call is made to your quote API for it</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">

@@ -20,6 +20,7 @@
     getReflectionTextForSlot,
     getQuoteApiUrl,
   } from "$lib/db";
+  import { breakQualifiesForQuote } from "$lib/grid";
 
   interface OverlayState {
     open: boolean;
@@ -155,6 +156,16 @@
    * fetch(), to sidestep third-party CORS -- see that command's doc comment. */
   async function refreshQuote() {
     if (!quoteApiUrl) {
+      quoteText = null;
+      return;
+    }
+    // Concentration mode's 1-minute break is too short to read a quote in --
+    // hide the panel *and* skip the outbound request entirely for it (see
+    // breakQualifiesForQuote / grid::MIN_QUOTE_BREAK_MINUTES).
+    if (
+      overlayState &&
+      !breakQualifiesForQuote(overlayState.current_slot_start, overlayState.break_end)
+    ) {
       quoteText = null;
       return;
     }

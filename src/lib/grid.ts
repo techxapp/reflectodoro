@@ -53,3 +53,23 @@ export function slotFor(now: Date, mode: Mode = "normal"): Slot {
 
   return { phase, start: startDate, end: endDate };
 }
+
+/** A break shorter than this gets no end-of-break quote at all -- the panel
+ * stays hidden *and* no request is made to the user-configured quote API.
+ * Concentration mode's 1-minute `:25` break is the case this exists for: too
+ * short to read a quote in, and fetching one anyway would spend a request
+ * (often against a rate-limited free API) on something nobody sees.
+ * Mirrors `grid::MIN_QUOTE_BREAK_MINUTES` (src-tauri/src/grid.rs). */
+export const MIN_QUOTE_BREAK_MINUTES = 2;
+
+/** Whether a break running `breakStartIso`..`breakEndIso` is long enough to
+ * show a quote (see MIN_QUOTE_BREAK_MINUTES). Mirrors Rust's
+ * `grid::break_qualifies_for_quote`, down to returning `true` when either
+ * timestamp is missing/unparseable -- the quote panel is a nicety, and the
+ * pre-existing behavior (always fetch) is the safer fallback. */
+export function breakQualifiesForQuote(breakStartIso: string, breakEndIso: string): boolean {
+  const start = Date.parse(breakStartIso);
+  const end = Date.parse(breakEndIso);
+  if (Number.isNaN(start) || Number.isNaN(end)) return true;
+  return end - start >= MIN_QUOTE_BREAK_MINUTES * 60_000;
+}

@@ -47,6 +47,28 @@ pub fn next_work_slot_start_iso(break_slot_start_iso: &str) -> Option<String> {
     Some((dt + ChronoDuration::minutes(5)).to_rfc3339())
 }
 
+/// A break shorter than this gets no end-of-break quote at all -- the panel
+/// stays hidden *and* no request is made to the user-configured quote API.
+/// Concentration mode's 1-minute `:25` break is the case this exists for:
+/// too short to read a quote in, and fetching one anyway would spend a
+/// request (often against a rate-limited free API) on something nobody sees.
+pub const MIN_QUOTE_BREAK_MINUTES: i64 = 2;
+
+/// Whether a break running `break_start_iso`..`break_end_iso` is long enough
+/// to show a quote (see `MIN_QUOTE_BREAK_MINUTES`). Mirrored in
+/// `src/lib/grid.ts` as `breakQualifiesForQuote`. Deliberately returns `true`
+/// when either timestamp is missing/unparseable: the quote panel is a nicety,
+/// and the pre-existing behavior (always fetch) is the safer fallback.
+pub fn break_qualifies_for_quote(break_start_iso: &str, break_end_iso: &str) -> bool {
+    let (Ok(start), Ok(end)) = (
+        DateTime::parse_from_rfc3339(break_start_iso),
+        DateTime::parse_from_rfc3339(break_end_iso),
+    ) else {
+        return true;
+    };
+    end - start >= ChronoDuration::minutes(MIN_QUOTE_BREAK_MINUTES)
+}
+
 /// Builds "today's wall-clock HH:mm:00" in the Local timezone, for `now`'s
 /// hour and the given `minute`. Deliberately does NOT go through
 /// `DateTime::<Local>::with_minute` (which routes through chrono's
@@ -419,6 +441,19 @@ mod tests {
         assert_eq!(slot.phase, Phase::Break);
         assert_eq!(slot.start, local(10, 55));
         assert_eq!(slot.end, local(11, 0));
+    }
+
+    #[test]
+    fn quote_panel_is_skipped_only_for_the_one_minute_concentration_break() {
+        let c = Mode::Concentration;
+        let short = slot_for_mode(local_hms(10, 25, 30), c);
+        assert!(!break_qualifies_for_quote(&short.start_iso(), &short.end.to_rfc3339()));
+        let long = slot_for_mode(local_hms(10, 55, 0), c);
+        assert!(break_qualifies_for_quote(&long.start_iso(), &long.end.to_rfc3339()));
+        let normal = slot_for_mode(local_hms(10, 26, 0), Mode::Normal);
+        assert!(break_qualifies_for_quote(&normal.start_iso(), &normal.end.to_rfc3339()));
+        // Missing/unparseable timestamps keep the pre-existing behavior.
+        assert!(break_qualifies_for_quote("", ""));
     }
 
     // --- DST regression tests -------------------------------------------

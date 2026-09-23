@@ -241,7 +241,17 @@ pub async fn refresh_coming_next_text(app: &AppHandle) {
 /// on the break screen -- same as the desktop overlay. The quote body is
 /// never logged.
 pub async fn refresh_quote_text(app: &AppHandle) -> bool {
-    let slot_at_start = app.state::<AppState>().overlay.lock().unwrap().current_slot_start.clone();
+    let (slot_at_start, break_end) = {
+        let overlay = app.state::<AppState>().overlay.lock().unwrap();
+        (overlay.current_slot_start.clone(), overlay.break_end.clone())
+    };
+    // Concentration mode's 1-minute break is too short to read a quote in --
+    // skip the panel *and* the outbound request entirely (see
+    // grid::MIN_QUOTE_BREAK_MINUTES).
+    if !crate::grid::break_qualifies_for_quote(&slot_at_start, &break_end) {
+        log::info!("quote: skipping fetch, break too short for the quote panel");
+        return false;
+    }
     let url = sqlx::query_scalar::<_, String>("SELECT value FROM app_setting WHERE key = 'quote_api_url'")
         .fetch_optional(pool(app).await)
         .await
