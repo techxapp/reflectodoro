@@ -1,0 +1,138 @@
+name: reflectodoro
+options:
+  bundleIdPrefix: com.reflectodoro.app
+  deploymentTarget:
+    iOS: 14.0
+fileGroups: [../../src]
+configs:
+  debug: debug
+  release: release
+settingGroups:
+  app:
+    base:
+      PRODUCT_NAME: Reflectodoro
+      PRODUCT_BUNDLE_IDENTIFIER: com.reflectodoro.app
+targetTemplates:
+  app:
+    type: application
+    sources:
+      - path: Sources
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      groups: [app]
+targets:
+  reflectodoro_iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Assets.xcassets
+      - path: Externals
+      - path: reflectodoro_iOS
+      - path: assets
+        buildPhase: resources
+        type: folder
+      - path: LaunchScreen.storyboard
+      # break-beep.caf: the break notification's sound (NativeBridgePlugin's
+      # breakSoundName). Must sit at the bundle root, under 30s, in a format
+      # iOS plays for notifications (CAF/Linear PCM here). Generated: 880 Hz
+      # 160ms, 110ms gap, 880 Hz 160ms, 110ms gap, 1175 Hz 260ms, 6ms fades.
+      - path: Sounds
+        buildPhase: resources
+    info:
+      path: reflectodoro_iOS/Info.plist
+      properties:
+        LSRequiresIPhoneOS: true
+        UILaunchStoryboardName: LaunchScreen
+        UIRequiredDeviceCapabilities: [arm64, metal]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleShortVersionString: 0.15.0
+        CFBundleVersion: "0.15.0"
+        NSSupportsLiveActivities: true
+    entitlements:
+      path: reflectodoro_iOS/reflectodoro_iOS.entitlements
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      base:
+        ENABLE_BITCODE: false
+        ARCHS: [arm64]
+        VALID_ARCHS: arm64 
+        LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
+        # The generated project sets no rpath, so ios-bridge's Swift
+        # Concurrency references (weak, @rpath/libswift_Concurrency.dylib --
+        # the package is built for an iOS 13 floor) resolved to nothing and
+        # the first `Task {}` aborted. /usr/lib/swift is where iOS 15+ ships it.
+        LD_RUNPATH_SEARCH_PATHS: ["/usr/lib/swift", "$(inherited)", "@executable_path/Frameworks"]
+        EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
+      groups: [app]
+    dependencies:
+      - target: ReflectodoroLiveActivity
+      - framework: libapp.a
+        embed: false
+      - sdk: CoreGraphics.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: QuartzCore.framework
+      - sdk: Security.framework
+      - sdk: UIKit.framework
+      - sdk: WebKit.framework
+      # Used by ios-bridge's Live Activity code. It arrives inside libapp.a,
+      # a static library, whose Swift autolink hints Xcode drops -- without
+      # this the Activity<...> type can't be resolved and the app aborts on
+      # its first Live Activity call. Weak: ActivityKit is iOS 16.1+.
+      - sdk: ActivityKit.framework
+        weak: true
+      - sdk: UserNotifications.framework
+    preBuildScripts:
+      - script: npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+        name: Build Rust Code
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a
+          - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a
+  # Lock Screen / Dynamic Island countdown (see ReflectodoroLiveActivity.swift).
+  # BreakActivityAttributes.swift is compiled from ios-bridge/ so the app and
+  # the extension always agree on the type. Bump its version strings along
+  # with the app's.
+  ReflectodoroLiveActivity:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.2"
+    sources:
+      - path: ReflectodoroLiveActivity
+      - path: ../../ios-bridge/Sources/BreakActivityAttributes.swift
+    info:
+      path: ReflectodoroLiveActivity/Info.plist
+      properties:
+        CFBundleDisplayName: Reflectodoro
+        CFBundleShortVersionString: 0.15.0
+        CFBundleVersion: "0.15.0"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_NAME: ReflectodoroLiveActivity
+        PRODUCT_BUNDLE_IDENTIFIER: com.reflectodoro.app.LiveActivity
+        SWIFT_VERSION: "5.0"
+        SKIP_INSTALL: true
+        ARCHS: [arm64]
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+      - sdk: ActivityKit.framework

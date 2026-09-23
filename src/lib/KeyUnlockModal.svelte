@@ -253,9 +253,15 @@
       {:else}
         <h2 id="key-modal-title">Encryption key not found</h2>
         <p class="hint">
-          Your entries are encrypted, but their key couldn't be read &mdash; most often because access to the system
-          password vault was denied or the vault isn't available yet. No new key has been created, so nothing has
-          been lost.
+          {#if status.mode === "keychain"}
+            Your entries are encrypted, but their key couldn't be read from the iOS Keychain &mdash; most often right
+            after the phone restarts, before it has been unlocked once. No new key has been created, so nothing has
+            been lost.
+          {:else}
+            Your entries are encrypted, but their key couldn't be read &mdash; most often because access to the system
+            password vault was denied or the vault isn't available yet. No new key has been created, so nothing has
+            been lost.
+          {/if}
         </p>
         {@render errorLine()}
         <div class="row">
@@ -282,11 +288,14 @@
 {/snippet}
 
 {#snippet targetPicker()}
+  <!-- iOS has only the Keychain (sent as the "vault" target). -->
+  {#if status?.mode !== "keychain"}
   <fieldset>
     <legend>Keep the key in</legend>
     <label class="check"><input type="radio" bind:group={target} value="vault" /> System password vault</label>
     <label class="check"><input type="radio" bind:group={target} value="file" /> Password-protected file</label>
   </fieldset>
+  {/if}
 {/snippet}
 
 {#snippet errorLine()}

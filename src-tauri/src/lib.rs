@@ -9,6 +9,10 @@ mod db_legacy_fixture;
 mod grid;
 mod hook;
 mod import;
+#[cfg(target_os = "ios")]
+mod ios_bridge;
+#[cfg(target_os = "ios")]
+mod ios_schedule;
 mod key_store;
 mod log_export;
 mod macos_overlay;
@@ -145,7 +149,7 @@ pub(crate) fn store_mode(mode: grid::Mode) {
 /// Checked by wall-clock comparison inside `run_scheduler`'s own poll loop --
 /// deliberately not a `tokio::time::sleep`-based timer, since that's
 /// `Instant`/`CLOCK_MONOTONIC`-based and would suffer the exact same
-/// suspend/Doze bug `ANDROID_POLL_INTERVAL` exists to work around (see its
+/// suspend/Doze bug `MOBILE_POLL_INTERVAL` exists to work around (see its
 /// doc comment below).
 pub(crate) static POMODORO_SNOOZE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
 
@@ -302,9 +306,11 @@ const SUSPEND_GAP_THRESHOLD: StdDuration = StdDuration::from_secs(120);
 /// already crossed, regardless of how much monotonic time that particular
 /// sleep call thinks has passed. Desktop doesn't need this -- an actual
 /// laptop suspend is caught by `SUSPEND_GAP_THRESHOLD` below once the single
-/// long sleep does eventually return.
-#[cfg(target_os = "android")]
-pub(crate) const ANDROID_POLL_INTERVAL: StdDuration = StdDuration::from_secs(20);
+/// long sleep does eventually return. iOS needs the same cap: a suspended app
+/// freezes monotonic sleeps exactly like Doze does (a resume also wakes the
+/// loop directly, see ios_schedule::wake).
+#[cfg(mobile)]
+pub(crate) const MOBILE_POLL_INTERVAL: StdDuration = StdDuration::from_secs(20);
 
 fn generate_breakit_challenge(app: &AppHandle) -> String {
     let app_state = app.state::<AppState>();
@@ -387,6 +393,23 @@ pub(crate) fn apply_pomodoro_enabled(app: &AppHandle, enabled: bool) {
             log::error!("failed to clear persisted snooze-until: {e:?}");
         }
     }
+
+    // iOS kills suspended apps constantly, so unlike desktop the on/off
+    // choice itself is persisted (and restored in .setup()) -- otherwise
+    // "off" would silently flip back on at the next launch and re-arm every
+    // break notification. The notifications/Live Activity follow on the
+    // scheduler's next pass, which wake() triggers right away.
+    #[cfg(target_os = "ios")]
+    {
+        let bridge = app.state::<ios_bridge::IosBridge<tauri::Wry>>();
+        if let Err(e) = bridge.persist_pomodoro_enabled(enabled) {
+            log::error!("failed to persist pomodoro-enabled preference: {e:?}");
+        }
+        if let Err(e) = bridge.persist_pomodoro_snooze_until(0, 0) {
+            log::error!("failed to clear persisted snooze-until: {e:?}");
+        }
+        ios_schedule::wake();
+    }
 }
 
 async fn run_scheduler(app: AppHandle) {
@@ -420,7 +443,7 @@ async fn run_scheduler(app: AppHandle) {
         // expired. Deliberately not a `tokio::time::sleep`-based timer: that
         // would be `Instant`/`CLOCK_MONOTONIC`-based and could fire far later
         // than intended across a real suspend/Doze gap, the same class of bug
-        // `ANDROID_POLL_INTERVAL` below exists to work around -- polling this
+        // `MOBILE_POLL_INTERVAL` below exists to work around -- polling this
         // loop's own wall clock sidesteps it the same way. `sleep_dur` is
         // capped to `SNOOZE_POLL_INTERVAL` further below whenever a snooze is
         // pending so this check actually runs often enough to matter.
@@ -619,7 +642,7 @@ async fn run_scheduler(app: AppHandle) {
             .to_std()
             .unwrap_or(StdDuration::from_secs(1));
         #[cfg(target_os = "android")]
-        let sleep_dur = sleep_dur.min(ANDROID_POLL_INTERVAL);
+        let sleep_dur = sleep_dur.min(MOBILE_POLL_INTERVAL);
         // Caps the sleep on every platform (not just Android) whenever a
         // snooze is pending, so the wall-clock check above actually runs
         // often enough to resume close to on time -- without this, desktop
@@ -633,7 +656,7 @@ async fn run_scheduler(app: AppHandle) {
             sleep_dur
         };
         // Refreshes MainActivity.lastSchedulerHeartbeatAt every iteration
-        // (at least every ANDROID_POLL_INTERVAL, thanks to the cap above) so
+        // (at least every MOBILE_POLL_INTERVAL, thanks to the cap above) so
         // BreakAlarmReceiver can tell a genuinely live scheduler apart from
         // one whose task died without taking the whole process down with it
         // -- see MainActivity.isSchedulerAlive's doc comment.
@@ -646,7 +669,7 @@ async fn run_scheduler(app: AppHandle) {
         }
         // `expected_wake` has to reflect *this specific sleep's* actual
         // duration, not the raw slot boundary (`slot.end`) -- on Android,
-        // where `sleep_dur` gets capped to `ANDROID_POLL_INTERVAL` (20s)
+        // where `sleep_dur` gets capped to `MOBILE_POLL_INTERVAL` (20s)
         // above, setting it to the uncapped `slot.end` (up to ~25 minutes
         // away) meant `now - expected_wake` at the top of the next iteration
         // was always deeply negative (the next iteration wakes ~20s later,
@@ -658,8 +681,14 @@ async fn run_scheduler(app: AppHandle) {
             now_before_sleep
                 + chrono::Duration::from_std(sleep_dur).unwrap_or(chrono::Duration::seconds(1)),
         );
+        #[cfg(target_os = "ios")]
+        {
+            ios_schedule::refresh(&app);
+            ios_schedule::sleep_or_wake(sleep_dur).await;
+        }
         // Woken early by `commands::set_pomodoro_mode` so a mode switch takes
         // effect now rather than at the old mode's next boundary.
+        #[cfg(not(target_os = "ios"))]
         tokio::select! {
             _ = tokio::time::sleep(sleep_dur) => {}
             _ = MODE_CHANGED.notified() => {}
@@ -951,6 +980,11 @@ pub fn run() {
         builder = android_bridge::register(builder);
     }
 
+    #[cfg(target_os = "ios")]
+    {
+        builder = ios_bridge::register(builder);
+    }
+
     builder
         .invoke_handler(tauri::generate_handler![
             commands::get_overlay_state,
@@ -1165,6 +1199,54 @@ pub fn run() {
                 }
             }
 
+            #[cfg(target_os = "ios")]
+            {
+                let key_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    key_store::ensure_resolved(&key_handle).await;
+                });
+
+                let bridge = handle.state::<ios_bridge::IosBridge<tauri::Wry>>();
+
+                // iOS's equivalent of android:allowBackup="false": pomodoro.db
+                // lives in app_config_dir, so the whole directory stays out of
+                // iCloud/Finder backups.
+                match handle.path().app_config_dir() {
+                    Ok(dir) => {
+                        if let Err(e) = bridge.exclude_from_backup(&dir.to_string_lossy()) {
+                            log::error!("failed to exclude the app data folder from backups: {e:?}");
+                        }
+                    }
+                    Err(e) => log::error!("no app config dir to exclude from backups: {e}"),
+                }
+
+                // iOS kills suspended apps far more often than Android does,
+                // so both the on/off choice and a pending snooze are restored
+                // here, before run_scheduler's first iteration reads them.
+                let enabled = bridge.get_persisted_pomodoro_enabled().unwrap_or_else(|e| {
+                    log::error!("failed to read persisted pomodoro-enabled: {e:?}");
+                    true
+                });
+                match bridge.get_persisted_pomodoro_snooze_until() {
+                    Ok((until_ms, minutes)) if until_ms > Local::now().timestamp_millis() => {
+                        POMODORO_ENABLED.store(false, Ordering::SeqCst);
+                        POMODORO_SNOOZE_UNTIL_MS.store(until_ms, Ordering::SeqCst);
+                        POMODORO_SNOOZE_MINUTES.store(minutes, Ordering::SeqCst);
+                        log::info!("setup: restored persisted snooze until {until_ms} ({minutes} min)");
+                    }
+                    Ok((until_ms, _)) => {
+                        if until_ms != 0 {
+                            if let Err(e) = bridge.persist_pomodoro_snooze_until(0, 0) {
+                                log::error!("failed to clear stale persisted snooze-until: {e:?}");
+                            }
+                        }
+                        POMODORO_ENABLED.store(enabled, Ordering::SeqCst);
+                        log::info!("setup: restored pomodoro enabled={enabled}");
+                    }
+                    Err(e) => log::error!("failed to read persisted snooze-until: {e:?}"),
+                }
+            }
+
             // Hidden, built immediately: gives WebView2 a head start on the
             // startup blank-page race before anything tries to show these.
             // See overlay::WEBVIEW_WARMUP.
@@ -1190,12 +1272,30 @@ pub fn run() {
             // above -- a failure here (e.g. the port is already in use, or
             // this device has no usable network interface) logs and leaves
             // the rest of the app unaffected.
-            let p2p_listener_handle = handle.clone();
-            tauri::async_runtime::spawn(p2p_sync::run_listener(p2p_listener_handle));
+            //
+            // Not on iOS yet: with no LAN discovery there (p2p_sync.rs) no
+            // peer could reach the listener, and opening it would risk an
+            // unexplained Local Network permission prompt.
+            #[cfg(not(target_os = "ios"))]
+            {
+                let p2p_listener_handle = handle.clone();
+                tauri::async_runtime::spawn(p2p_sync::run_listener(p2p_listener_handle));
+            }
             p2p_sync::advertise_self(&handle);
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, _event| {
+            // A suspended iOS app's scheduler sleep is frozen; resuming wakes
+            // it so a break that started meanwhile shows immediately, and the
+            // Live Activity (which can only be started in the foreground) is
+            // restarted if it had ended.
+            #[cfg(target_os = "ios")]
+            if let tauri::RunEvent::Resumed = _event {
+                ios_schedule::wake();
+                media::retry_pause_on_resume(_app);
+            }
+        });
 }

@@ -2466,8 +2466,8 @@ export async function saveThemePreference(theme: ThemePreference): Promise<void>
 // --- Encryption key storage (desktop; see key_store.rs) ---------------------
 
 export type KeyStorageStatus = {
-  /** Where the key lives; "keystore" on Android, "none" while unsettled. */
-  mode: "vault" | "password_file" | "keystore" | "none";
+  /** Where the key lives; "keystore" on Android, "keychain" on iOS, "none" while unsettled. */
+  mode: "vault" | "password_file" | "keystore" | "keychain" | "none";
   state: "unlocked" | "locked" | "needs_password" | "key_missing";
   /** needs_password because an old, unprotected key file was found. */
   legacy: boolean;

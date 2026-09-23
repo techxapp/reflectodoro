@@ -42,6 +42,8 @@
 
   const unlocked = $derived(status?.state === "unlocked");
   const inFile = $derived(status?.mode === "password_file");
+  /** iOS: the Keychain is the only location, so there's nothing to move. */
+  const inKeychain = $derived(status?.mode === "keychain");
 
   async function refresh() {
     try {
@@ -186,17 +188,27 @@
 {#if status?.mode !== "keystore"}
 <section class="card">
   <h2>Encryption key</h2>
+  {#if inKeychain}
+  <p class="hint">
+    Your reflections, task lists and check-ins are encrypted on this device with a random key the app generates for
+    you. The key is kept in the iOS Keychain for this device only &mdash; it isn't included in backups and never
+    leaves this phone. Back it up yourself for a way back in if the Keychain ever loses it.
+  </p>
+  {:else}
   <p class="hint">
     Your reflections, task lists, check-ins and screen time are encrypted on this device with a random key the app
     generates for you. By default that key is kept in your system password vault (Keychain, Credential Manager or
     Secret Service), so you never have to type anything.
   </p>
+  {/if}
+  {#if !inKeychain}
   <p class="hint">
     You can instead keep it in a <strong>password-protected file</strong> in the app's folder. You'll enter the
     password each time the app starts; it's held only in memory until the app quits, and
     <strong>a forgotten password can't be recovered</strong> &mdash; only a backed-up key can. The key never leaves
     this device: paired devices each use their own.
   </p>
+  {/if}
 
   {#if status}
     <p class="location">
@@ -204,6 +216,7 @@
       <strong>
         {#if status.mode === "vault"}System password vault
         {:else if status.mode === "password_file"}Password-protected file
+        {:else if inKeychain}iOS Keychain (this device only)
         {:else}Not set up{/if}
       </strong>
       {#if !unlocked}<span class="hint"> &mdash; locked; unlock it from the prompt first.</span>{/if}
@@ -216,7 +229,7 @@
           <button type="button" class="secondary" disabled={busy} onclick={() => open("changePassword")}>
             Change password&hellip;
           </button>
-        {:else}
+        {:else if !inKeychain}
           <button type="button" disabled={busy} onclick={() => open("toFile")}>
             Move to password-protected file&hellip;
           </button>
@@ -259,11 +272,13 @@
           </p>
           <textarea bind:value={backupKey} rows="2" spellcheck="false" autocomplete="off" placeholder="Backed-up key"
           ></textarea>
+          {#if !inKeychain}
           <fieldset>
             <legend>Keep the key in</legend>
             <label class="checkbox"><input type="radio" bind:group={target} value="vault" /> System password vault</label>
             <label class="checkbox"><input type="radio" bind:group={target} value="file" /> Password-protected file</label>
           </fieldset>
+          {/if}
           {#if target === "file"}
             {@render newPasswordFields()}
           {/if}

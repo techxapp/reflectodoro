@@ -8,6 +8,7 @@
 
   let version = $state("");
   let isAndroid = $state(false);
+  let isIos = $state(false);
 
   type UpdateStatus = "idle" | "checking" | "up-to-date" | "available" | "error";
   let updateStatus = $state<UpdateStatus>("idle");
@@ -35,6 +36,7 @@
     version = await getVersion();
     const os = await invoke<string>("current_os");
     isAndroid = os === "android";
+    isIos = os === "ios";
   });
 
   async function exportLastLogFile() {
@@ -145,6 +147,14 @@
   <section class="card">
     <h2>Updates</h2>
     <p class="hint">Install updates from the same source you got this APK from (e.g. the GitHub Release : https://github.com/techxapp/reflectodoro/releases )</p>
+  </section>
+  {:else if isIos}
+  <section class="card">
+    <h2>Updates</h2>
+    <p class="hint">
+      The iOS version isn't on the App Store yet. Builds are installed from Xcode, and a build signed with a free
+      Apple account stops opening after 7 days until it's installed again.
+    </p>
   </section>
   {:else}
   <section class="card">

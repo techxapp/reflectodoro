@@ -23,7 +23,7 @@
 //! Accessibility Service (deliberately not used elsewhere in this app), so
 //! this polls `UsageStatsManager.queryEvents` on its own interval
 //! (`android::USAGE_POLL_INTERVAL`, deliberately decoupled from the
-//! unrelated 20s `ANDROID_POLL_INTERVAL` used for break-scheduling Doze-wake
+//! unrelated 20s `MOBILE_POLL_INTERVAL` used for break-scheduling Doze-wake
 //! correctness in lib.rs -- session boundaries come from the OS's own
 //! timestamped event log inside each query's result, not from how often the
 //! query itself runs, so a coarser interval only delays *when* a session
@@ -638,7 +638,7 @@ mod platform_impl {
 
     use super::{record_focus_change_at, FocusedApp};
 
-    /// Deliberately decoupled from lib.rs's `ANDROID_POLL_INTERVAL` (20s,
+    /// Deliberately decoupled from lib.rs's `MOBILE_POLL_INTERVAL` (20s,
     /// used for break-scheduling Doze-wake correctness) -- see the module
     /// doc for why a coarser interval here only delays *when* a session
     /// shows up, not its recorded accuracy, plus it's fewer

@@ -502,6 +502,14 @@
     gap: 20px;
     max-width: 1200px;
     margin: 0 auto;
+    /* Grid items default to min-width: auto, which lets an oversized child
+       (e.g. a <select> whose intrinsic sizing doesn't shrink the way
+       max-width:100% below expects) force this whole track -- and the
+       viewport -- wider than the screen instead of respecting the 1fr
+       track. min-width: 0 on .card is the actual fix; overflow-x here is
+       just the safety net so that can never show as a horizontal scrollbar
+       on a device where some future child hits the same trap. */
+    overflow-x: hidden;
   }
 
   /* Large windows: scale the type/padding up alongside the wider cap so the
@@ -572,6 +580,10 @@
     border: 1px solid var(--border);
     border-radius: 14px;
     padding: 24px;
+    /* See .page's comment above -- without this a grid item won't shrink
+       below its content's intrinsic width, which is what let a wide child
+       push the page past the viewport edge. */
+    min-width: 0;
   }
 
   .timer-card {
@@ -626,9 +638,15 @@
     font-weight: 500;
     font-family: inherit;
     cursor: pointer;
-    /* Size to the selected option's text, not the widest option in the list. */
+    /* Size to the selected option's text, not the widest option in the list.
+       Where field-sizing isn't honored, the select falls back to sizing off
+       its widest <option> (e.g. "Mode: Concentration" vs "Mode: Normal") --
+       min-width: 0 is what lets max-width: 100% actually clamp that back
+       down instead of the select forcing its flex/grid ancestors wider than
+       the viewport. */
     field-sizing: content;
     width: fit-content;
+    min-width: 0;
     max-width: 100%;
   }
 
@@ -643,6 +661,7 @@
     justify-content: center;
     flex-wrap: wrap;
     gap: 12px;
+    min-width: 0;
   }
 
   .mode-row {
@@ -651,6 +670,7 @@
     justify-content: center;
     gap: 8px;
     flex-wrap: wrap;
+    min-width: 0;
   }
 
   .mode-label {

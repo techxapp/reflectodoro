@@ -22,6 +22,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# build.rs links ios-bridge/ (Swift) into iOS builds via link_apple_library;
+# same version/feature tauri-build already pulls in, so nothing new is built.
+tauri-utils = { version = "2", features = ["build-2"] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
@@ -194,6 +197,12 @@ x11rb = "0.13"
 # to its own key file there, same spirit as this app's tray icon needing a
 # desktop-environment extension it can't install itself.
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+# key_store.rs's iOS Keychain store. Direct rather than via keyring, whose iOS
+# backend can't set the item's accessibility class -- this one needs
+# AfterFirstUnlockThisDeviceOnly (see key_store.rs). Already in the lockfile.
+security-framework = "3"
 
 [dev-dependencies]
 chrono-tz = "0.10.4"

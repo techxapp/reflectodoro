@@ -14,8 +14,16 @@
   let usageStatsGranted = $state(false);
   let usageStatsChecked = $state(false);
   let finishing = $state(false);
+  /** null until current_os answers, so neither layout flashes first. */
+  let isIos = $state<boolean | null>(null);
 
   async function refreshStatus() {
+    if (isIos === null) isIos = (await invoke<string>("current_os")) === "ios";
+    if (isIos) {
+      notificationGranted = await isPermissionGranted();
+      notificationChecked = true;
+      return;
+    }
     overlayGranted = await invoke<boolean>("can_draw_overlays");
     overlayChecked = true;
     exactAlarmGranted = await invoke<boolean>("can_schedule_exact_alarms");
@@ -75,6 +83,32 @@
 <div class="onboarding">
   <div class="content">
     <h1>Set up Reflectodoro</h1>
+    {#if isIos === true}
+    <p class="intro">
+      On iPhone, the break screen can only appear inside this app &mdash; iOS doesn't let apps cover
+      other apps or open themselves. So when a break starts you get a notification, and a Live
+      Activity on your Lock Screen and Dynamic Island counts down to the next one. Open the app to
+      write down what you did.
+    </p>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Notifications</h2>
+        {#if notificationChecked}
+          <span class="status" class:ok={notificationGranted}>
+            {notificationGranted ? "Granted" : "Not granted"}
+          </span>
+        {/if}
+      </div>
+      <p class="hint">
+        Strongly recommended: without them, nothing tells you a break has started while the app is
+        closed. iOS asks only once; you can change it later in the Settings app.
+      </p>
+      {#if !notificationGranted}
+        <button type="button" onclick={grantNotifications}>Enable notifications</button>
+      {/if}
+    </section>
+    {:else if isIos === false}
     <p class="intro">
       A few optional permissions make break enforcement more reliable. All are skippable &mdash;
       Reflectodoro keeps working without them, just less effectively in the background.
@@ -154,6 +188,7 @@
         <button type="button" onclick={grantUsageStats}>Open settings&hellip;</button>
       {/if}
     </section>
+    {/if}
 
     <button type="button" class="continue" disabled={finishing} onclick={finish}>
       {finishing ? "Continuing…" : "Continue"}

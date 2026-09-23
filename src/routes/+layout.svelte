@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import "./app.css";
   import { page } from "$app/stores";
-  import { goto } from "$app/navigation";
+  import { beforeNavigate, goto } from "$app/navigation";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { check } from "@tauri-apps/plugin-updater";
@@ -179,9 +179,28 @@
    * the window-creation calls on mobile and emit state regardless. Desktop
    * doesn't need this: those events there only update state inside windows
    * Rust has already shown/hidden directly. */
+  /* iOS works the same way: its only window is the app's own, shown only while
+   * the app is in the foreground, so the break screen is this route. */
+  let mobileOverlayOpen = false;
+
+  function applyMobileOverlayState(open: boolean) {
+    mobileOverlayOpen = open;
+    if (open) {
+      if ($page.url.pathname !== "/overlay") void goto("/overlay");
+    } else if ($page.url.pathname === "/overlay") {
+      void goto("/");
+    }
+  }
+
+  // An open break can't be left by navigating (Android's back button, a
+  // stray link) -- only by the unlock formula closing it on the Rust side.
+  beforeNavigate(({ to, cancel }) => {
+    if (mobileOverlayOpen && to?.url.pathname !== "/overlay") cancel();
+  });
+
   onMount(async () => {
     const os = await invoke<string>("current_os");
-    if (os !== "android") return;
+    if (os !== "android" && os !== "ios") return;
 
     // First-launch-only: routes to the permissions onboarding screen before
     // the user sees anything else. Checked once here rather than in
@@ -192,12 +211,16 @@
     }
 
     await listen<{ open: boolean }>("overlay://state", (event) => {
-      if (event.payload.open) {
-        if ($page.url.pathname !== "/overlay") void goto("/overlay");
-      } else if ($page.url.pathname === "/overlay") {
-        void goto("/");
-      }
+      applyMobileOverlayState(event.payload.open);
     });
+    // Covers a launch that lands mid-break, where the state may have been
+    // emitted before the listener above existed.
+    try {
+      const state = await invoke<{ open: boolean }>("get_overlay_state");
+      applyMobileOverlayState(state.open);
+    } catch (e) {
+      console.error("initial overlay state read failed", e);
+    }
     await listen("checkin://slot", () => {
       if ($page.url.pathname !== "/checkin") void goto("/checkin");
     });
@@ -304,6 +327,12 @@
   main {
     flex: 1;
     overflow-y: auto;
+    /* A page-level fix (min-width: 0 on grid/flex children so they can
+       actually shrink) is what stops a route's content forcing this wider
+       than the viewport in the first place -- this is only the safety net,
+       so a route that hits the same trap shows clipped content instead of
+       an app-wide horizontal scrollbar. */
+    overflow-x: hidden;
     /* Bottom inset keeps content clear of the gesture-nav bar, plus
        --kb-inset's extra room so a focused field near the bottom (e.g. the
        Timer tab's task list) can still be scrolled up above an open

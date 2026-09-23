@@ -819,7 +819,7 @@
               <span class="dot-live" aria-hidden="true"></span>
               Windows &middot; macOS &middot; Linux &middot; Android
             </span>
-            <h2>The <span class="grad">Pomodoro</span> app with <span class="grad">break</span> and <span class="grad">self-reflection</span> you <span class="grad">can't skip</span>.</h2>
+            <h2>The <span class="grad">Pomodoro</span> app with <span class="grad">self-reflection</span> and <span class="grad">break</span> you <span class="grad">can't skip</span>.</h2>
             <br/><p class="lede">
               Every 25 minutes it takes over your screen for 5 minutes and asks :
               <b>what did you actually just do?</b> 
@@ -848,20 +848,6 @@
               <a href="#install">Installation notes</a>
             </p>
 
-            <dl class="trust">
-              <div>
-                <dt>4</dt>
-                <dd>Platforms</dd>
-              </div>
-              <div>
-                <dt>100%</dt>
-                <dd>On-device</dd>
-              </div>
-              <div>
-                <dt class="grad">25 / 5</dt>
-                <dd>Wall-clock grid</dd>
-              </div>
-            </dl>
           </div>
 
           <div class="mock" aria-hidden="true">
@@ -1036,10 +1022,6 @@
               <div class="ico" aria-hidden="true">&#9889;</div>
               <h3>Emergency exit challenge</h3>
               <p>Need out early? Type a freshly generated random string shown on screen.</p>
-              <div class="mock-challenge" style="margin-top:16px">
-                <span>Exit challenge</span>
-                <div class="code-str mono">qW4hRtY7uNb2xKe</div>
-              </div>
             </div>
 
             
@@ -1077,7 +1059,7 @@
                 <span class="plat-chip on">Windows</span>
                 <span class="plat-chip on">Linux</span>
                 <span class="plat-chip on">Android</span>
-                <span class="plat-chip">macOS &middot; early</span>
+                <span class="plat-chip on">macOS</span>
                 <span class="plat-chip">iOS &middot; planned</span>
               </div>
             </div>
@@ -1615,13 +1597,6 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
-              <p class="timeline-date">Tuesday, Sep 22, 2026</p>
-              <ul class="timeline-items">
-                <li>A new app icon: a rounded hourglass in Reflectodoro's own orange and blue, replacing the placeholder icon on every platform &mdash; including Android's themed icons and this website's browser tab</li>
-                <li>Concentration mode's short break is now a full minute instead of 30 seconds, and the break screen's countdown now follows whichever schedule you're on instead of always counting down 5 minutes</li>
-              </ul>
-            </div>
-            <div class="timeline-entry reveal">
               <p class="timeline-date">Monday, Sep 21, 2026</p>
               <ul class="timeline-items">
                 <li>Added a Concentration schedule alongside the normal one &mdash; a short break at :25 and a longer 10-minute break at :50 &mdash; picked from a new dropdown on the Timer tab. Your reflection is still required after both breaks. The home-screen controls are also now sized to fit their text</li>
@@ -1676,14 +1651,20 @@
                 <li>Kept Android debug symbols for crash reports, and improved macOS startup diagnostics</li>
               </ul>
             </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Tuesday, Sep 15, 2026</p>
+              <ul class="timeline-items">
+                <li>Added a configurable quote panel to the break screen, pulling short text from a user-set API endpoint, and polished how the &ldquo;Coming next&rdquo; preview looks and stays visible after saving</li>
+                <li>Fixed the overlay clock/countdown showing stale time right when a break opens, and the reflection field pre-filling from the wrong slot instead of your last entry</li>
+                <li>Added the Google Play Store listing identifier</li>
+              </ul>
+            </div>
             <p class="timeline-tier reveal">Previous 3 weeks</p>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Sep 14 &ndash; 20, 2026</p>
               <ul class="timeline-items">
-                <li>Added a configurable quote panel to the end of the break screen, pulling short text from an API address you choose</li>
                 <li>Added a daily cap on emergency-exit (breakit) code uses, a &ldquo;Coming next&rdquo; preview and bulk-edit/full-day view for reflections, an auto-scrolling reflection list, and newest-first sorting on the Entries page</li>
-                <li>Fixed the macOS break screen getting hidden behind fullscreen apps and related media-pause bugs, the break screen's clock showing stale time as a break opens, and the reflection field pre-filling from the wrong entry instead of your last one</li>
-                <li>Prepared the Android app for a Google Play Store listing</li>
+                <li>Fixed the macOS break screen getting hidden behind fullscreen apps, plus related media-pause bugs</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">

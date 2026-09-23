@@ -118,6 +118,9 @@
   let forceCloseShortcutLabel = $state("Ctrl+Alt+Shift+F12");
 
   let isAndroid = $state(false);
+  let isIos = $state(false);
+  /** Hides desktop-only controls (force-close shortcut, launch at login). */
+  const isMobile = $derived(isAndroid || isIos);
   let breakNotificationPersistentEnabled = $state(true);
   let breakNotificationPersistentLoaded = $state(false);
   let breakNotificationPersistentBusy = $state(false);
@@ -379,6 +382,7 @@
     const os = await invoke<string>("current_os");
     if (os === "macos") forceCloseShortcutLabel = "Cmd+Option+Shift+F12";
     isAndroid = os === "android";
+    isIos = os === "ios";
     isMacos = os === "macos";
     isWindows = os === "windows";
     osResolved = true;
@@ -908,17 +912,35 @@
       </p>
     {/if}
 
-    {#if isAndroid && notificationChecked}
+    {#if (isAndroid || isIos) && notificationChecked}
       <div class="data-row">
         <span>Notifications: {notificationGranted ? "Granted" : "Not granted"}</span>
         {#if !notificationGranted}
           <button type="button" onclick={grantNotifications}>Enable notifications</button>
         {/if}
       </div>
+      {#if isIos}
+        <p class="hint">
+          Required on iOS: a break notification is the only way a break can reach you while the app
+          isn't open. iOS asks only once &mdash; if you declined, turn them on in the iOS Settings app
+          under Reflectodoro &rarr; Notifications.
+        </p>
+      {:else}
+        <p class="hint">
+          Without it, the background timer's running indicator and the break reminder notification
+          both silently don't show. Onboarding offers this grant on first run; this is here for
+          anyone who skipped it or revoked it since.
+        </p>
+      {/if}
+    {/if}
+
+    {#if isIos}
       <p class="hint">
-        Without it, the background timer's running indicator and the break reminder notification
-        both silently don't show. Onboarding offers this grant on first run; this is here for
-        anyone who skipped it or revoked it since.
+        On iPhone the break screen can only appear inside this app: iOS doesn't let apps cover other
+        apps or open themselves. When a break starts you get a notification, and a Live Activity on
+        the Lock Screen and Dynamic Island counts down to the next break &mdash; open the app to
+        reflect. If Live Activities don't show, turn them on in the iOS Settings app under
+        Reflectodoro.
       </p>
     {/if}
 
@@ -1050,7 +1072,7 @@
   </section>
 
 
-  {#if !isAndroid}
+  {#if !isMobile}
   <section class="card">
     <h2>If the break screen ever gets stuck</h2>
     <ul class="hint">
@@ -1119,7 +1141,11 @@
       </div>
     {/if}
 
-    {#if osResolved && !isWindows && !isAndroid}
+    {#if isIos}
+      <p class="hint warning">
+        Not available on iPhone: iOS doesn't let apps see which other apps are in use.
+      </p>
+    {:else if osResolved && !isWindows && !isAndroid && !isMacos}
       <p class="hint warning">
         Not captured on this platform yet &mdash; Windows, macOS and Android are the only ones recording
         so far. The setting is here, but nothing lands until support for this platform ships.
@@ -1175,6 +1201,7 @@
     {/if}
   </section>
 
+  {#if !isMobile}
   <section class="card">
     <h2>Startup</h2>
     <p class="hint">Launch Reflectodoro automatically when you log in.</p>
@@ -1197,6 +1224,7 @@
       {/if}
     {/if}
   </section>
+  {/if}
 
   
 
@@ -1254,6 +1282,12 @@
       device on the same wifi network &mdash; no account, no cloud. Settings are never included.
       <br/> For auto-sync to work, both laptop and phone should be active at start of break.
     </p>
+    {#if isIos}
+      <p class="hint warning">
+        Not available on iPhone yet &mdash; this device can't find or be found by other devices. Use
+        Data export/import above to move entries across in the meantime.
+      </p>
+    {/if}
 
     {#if pairedDevicesLoaded && pairedDevices.length > 0}
       <ul class="paired-device-list">

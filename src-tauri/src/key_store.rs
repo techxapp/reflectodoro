@@ -54,7 +54,7 @@ pub const LOCATION_SETTING: &str = "encryption_key_location";
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyStorageStatus {
-    /// "vault" | "password_file" | "keystore" (Android) | "none" (not settled)
+    /// "vault" | "password_file" | "keystore" (Android) | "keychain" (iOS) | "none" (not settled)
     mode: &'static str,
     /// "unlocked" | "locked" | "needs_password" | "key_missing"
     state: &'static str,
@@ -65,6 +65,62 @@ pub struct KeyStorageStatus {
     /// than re-probed per status call: on an unsigned macOS build, each vault
     /// read can put a Keychain prompt in front of the user.
     vault_available: bool,
+}
+
+// --- Shared by desktop and iOS (both hold the raw key in Rust) ---------------
+
+#[cfg(not(target_os = "android"))]
+type Key = [u8; crate::crypto::KEY_LEN];
+
+/// One `enc1:` value from this database, if any -- both "is there data a
+/// new key would orphan?" and the known ciphertext a restored key must
+/// decrypt. Tables in rough order of how likely they are to hold one.
+#[cfg(not(target_os = "android"))]
+async fn sample_encrypted_value(app: &AppHandle) -> Result<Option<String>, String> {
+    const COLUMNS: &[(&str, &str)] = &[
+        ("reflection", "text"),
+        ("daily_task_list", "content"),
+        ("not_to_do_list", "content"),
+        ("wellness_check", "relaxed_eyes"),
+        ("screen_time_session", "app_id"),
+        ("bulk_edit_preset", "text"),
+        ("paired_device", "name"),
+    ];
+    let pool = crate::db::open_direct_pool(app).await?;
+    let mut found = None;
+    for (table, column) in COLUMNS {
+        let sql = format!("SELECT {column} FROM {table} WHERE {column} LIKE 'enc1:%' LIMIT 1");
+        match sqlx::query_scalar::<_, String>(&sql).fetch_optional(&pool).await {
+            Ok(Some(v)) => {
+                found = Some(v);
+                break;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                pool.close().await;
+                return Err(format!("couldn't read {table}: {e}"));
+            }
+        }
+    }
+    pool.close().await;
+    Ok(found)
+}
+
+#[cfg(not(target_os = "android"))]
+fn random_key() -> Key {
+    use chacha20poly1305::aead::rand_core::RngCore;
+    use chacha20poly1305::aead::OsRng;
+    let mut key = [0u8; crate::crypto::KEY_LEN];
+    OsRng.fill_bytes(&mut key);
+    key
+}
+
+#[cfg(not(target_os = "android"))]
+fn decode_key(encoded: &str) -> Result<Key, String> {
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::Engine as _;
+    let bytes = BASE64.decode(encoded).map_err(|e| format!("stored key is not valid base64: {e}"))?;
+    bytes.try_into().map_err(|_| "stored key is not the expected length".to_string())
 }
 
 // --- Android ---------------------------------------------------------------
@@ -116,12 +172,269 @@ mod platform {
     }
 }
 
+// --- iOS -------------------------------------------------------------------
+
+/// Keychain only: iOS has no password-file mode (argon2/zeroize are desktop-
+/// only) and signing is mandatory, so the unsigned-macOS "grant drops on
+/// rebuild" problem the file mode partly exists for doesn't arise. The item is
+/// `AfterFirstUnlockThisDeviceOnly`: readable by a prewarmed launch while the
+/// phone is locked (after the first unlock since boot), and never carried into
+/// a backup or onto another device. Same never-create-over-existing-data rule
+/// as desktop.
+#[cfg(target_os = "ios")]
+mod platform {
+    use super::*;
+    use crate::crypto::decrypt_with_key;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::Engine as _;
+    use security_framework::access_control::{ProtectionMode, SecAccessControl};
+    use security_framework::passwords::{
+        delete_generic_password_options, generic_password, set_generic_password_options, PasswordOptions,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+    use tauri::Emitter;
+
+    const SERVICE: &str = "com.reflectodoro.app";
+    const ACCOUNT: &str = "db-encryption-key";
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+    const UNSUPPORTED: &str = "iOS keeps the key in the Keychain; there is no password file to manage";
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum KeyState {
+        Unlocked,
+        /// No key, but the database holds ciphertext -- or the Keychain
+        /// couldn't be read (`transient`), which is retried automatically.
+        KeyMissing { transient: bool },
+    }
+
+    struct Inner {
+        state: Option<KeyState>,
+        key: Option<Key>,
+    }
+
+    static INNER: Mutex<Inner> = Mutex::new(Inner { state: None, key: None });
+    static OP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    static LOCKED: AtomicBool = AtomicBool::new(false);
+
+    fn locked_error() -> String {
+        format!("{LOCKED_PREFIX} the encryption key couldn't be read from the Keychain")
+    }
+
+    fn set_state(app: &AppHandle, state: KeyState, key: Option<Key>) {
+        {
+            let mut inner = INNER.lock().unwrap();
+            inner.state = Some(state);
+            inner.key = key;
+        }
+        LOCKED.store(state != KeyState::Unlocked, Ordering::SeqCst);
+        log::info!("crypto: key state is now {state:?}");
+        if let Err(e) = app.emit(STATE_EVENT, ()) {
+            log::warn!("crypto: failed to emit {STATE_EVENT}: {e}");
+        }
+    }
+
+    fn current_state() -> Option<KeyState> {
+        INNER.lock().unwrap().state
+    }
+
+    fn current_key() -> Option<Key> {
+        INNER.lock().unwrap().key
+    }
+
+    pub(crate) async fn key(app: &AppHandle) -> Result<Key, String> {
+        if let Some(k) = current_key() {
+            return Ok(k);
+        }
+        {
+            let _guard = OP_LOCK.lock().await;
+            if matches!(current_state(), None | Some(KeyState::KeyMissing { transient: true })) {
+                resolve(app).await;
+            }
+        }
+        current_key().ok_or_else(locked_error)
+    }
+
+    pub fn is_locked() -> bool {
+        LOCKED.load(Ordering::SeqCst)
+    }
+
+    pub async fn ensure_resolved(app: &AppHandle) {
+        if current_state().is_some() {
+            return;
+        }
+        let _guard = OP_LOCK.lock().await;
+        if current_state().is_none() {
+            resolve(app).await;
+        }
+    }
+
+    /// Runs with `OP_LOCK` held.
+    async fn resolve(app: &AppHandle) {
+        let read = blocking(keychain_get).await;
+        let transient = match read {
+            Ok(Some(k)) => return set_state(app, KeyState::Unlocked, Some(k)),
+            Ok(None) => false,
+            Err(e) => {
+                log::warn!("crypto: Keychain unreadable ({e})");
+                true
+            }
+        };
+        let has_data = match sample_encrypted_value(app).await {
+            Ok(sample) => sample.is_some(),
+            Err(e) => {
+                log::warn!("crypto: couldn't check for existing encrypted data ({e}); assuming some exists");
+                true
+            }
+        };
+        if has_data {
+            log::warn!("crypto: no usable key, but the database holds encrypted data; not generating a new key");
+            return set_state(app, KeyState::KeyMissing { transient }, None);
+        }
+        let k = random_key();
+        match blocking(move || keychain_set_verified(&k)).await {
+            Ok(()) => {
+                log::info!("crypto: generated a new at-rest key and stored it in the Keychain");
+                set_state(app, KeyState::Unlocked, Some(k));
+            }
+            Err(e) => {
+                log::warn!("crypto: Keychain did not keep a new key ({e})");
+                set_state(app, KeyState::KeyMissing { transient: true }, None);
+            }
+        }
+    }
+
+    pub async fn status(app: &AppHandle) -> Result<KeyStorageStatus, String> {
+        ensure_resolved(app).await;
+        let state = match current_state() {
+            Some(KeyState::Unlocked) => "unlocked",
+            _ => "key_missing",
+        };
+        Ok(KeyStorageStatus { mode: "keychain", state, legacy: false, vault_available: true })
+    }
+
+    pub async fn retry(app: &AppHandle) -> Result<(), String> {
+        let _guard = OP_LOCK.lock().await;
+        if current_state() != Some(KeyState::Unlocked) {
+            resolve(app).await;
+        }
+        Ok(())
+    }
+
+    pub async fn unlock(_app: &AppHandle, _password: String) -> Result<(), String> {
+        Err(UNSUPPORTED.into())
+    }
+    pub async fn set_password(_app: &AppHandle, _password: String) -> Result<(), String> {
+        Err(UNSUPPORTED.into())
+    }
+    pub async fn change_password(_app: &AppHandle, _old: String, _new: String) -> Result<(), String> {
+        Err(UNSUPPORTED.into())
+    }
+    pub async fn migrate_to_file(_app: &AppHandle, _password: String) -> Result<(), String> {
+        Err(UNSUPPORTED.into())
+    }
+    pub async fn migrate_to_vault(_app: &AppHandle) -> Result<(), String> {
+        Err(UNSUPPORTED.into())
+    }
+
+    pub async fn reveal(_app: &AppHandle, _password: Option<String>) -> Result<String, String> {
+        let _guard = OP_LOCK.lock().await;
+        let k = current_key().ok_or_else(locked_error)?;
+        log::info!("crypto: encryption key revealed to the user");
+        Ok(BASE64.encode(k))
+    }
+
+    pub async fn restore(
+        app: &AppHandle,
+        key_b64: String,
+        target: String,
+        _password: Option<String>,
+    ) -> Result<(), String> {
+        require_keychain_target(&target)?;
+        let compact: String = key_b64.chars().filter(|c| !c.is_whitespace()).collect();
+        let k = decode_key(&compact).map_err(|_| "That isn't a valid encryption key".to_string())?;
+        let _guard = OP_LOCK.lock().await;
+        if let Some(sample) = sample_encrypted_value(app).await? {
+            if decrypt_with_key(&k, &sample).is_err() {
+                return Err("This key doesn't match your existing data".into());
+            }
+        }
+        blocking(move || keychain_set_verified(&k)).await.map_err(|e| format!("The Keychain didn't keep the key ({e})"))?;
+        log::info!("crypto: key restored from backup into the Keychain");
+        set_state(app, KeyState::Unlocked, Some(k));
+        Ok(())
+    }
+
+    pub async fn reset(app: &AppHandle, target: String, _password: Option<String>) -> Result<(), String> {
+        require_keychain_target(&target)?;
+        let _guard = OP_LOCK.lock().await;
+        if current_state().is_none() {
+            resolve(app).await;
+        }
+        if !matches!(current_state(), Some(KeyState::KeyMissing { .. })) {
+            return Err("The key can only be reset while it's missing".into());
+        }
+        let k = random_key();
+        blocking(move || keychain_set_verified(&k)).await.map_err(|e| format!("The Keychain didn't keep the key ({e})"))?;
+        log::warn!("crypto: encryption key reset by the user; previously encrypted rows are now unreadable");
+        set_state(app, KeyState::Unlocked, Some(k));
+        Ok(())
+    }
+
+    /// The modal's "vault" target is the Keychain here; "file" doesn't exist.
+    fn require_keychain_target(target: &str) -> Result<(), String> {
+        match target {
+            "vault" => Ok(()),
+            _ => Err(UNSUPPORTED.into()),
+        }
+    }
+
+    async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        tauri::async_runtime::spawn_blocking(f).await.expect("key store task panicked")
+    }
+
+    fn options() -> PasswordOptions {
+        PasswordOptions::new_generic_password(SERVICE, ACCOUNT)
+    }
+
+    fn keychain_get() -> Result<Option<Key>, String> {
+        match generic_password(options()) {
+            Ok(bytes) => {
+                let encoded = String::from_utf8(bytes).map_err(|_| "stored key is not UTF-8".to_string())?;
+                decode_key(&encoded).map(Some)
+            }
+            Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Delete-then-add rather than update, so the accessibility class is
+    /// always the one set here, never inherited from an older item.
+    fn keychain_set_verified(key: &Key) -> Result<(), String> {
+        match delete_generic_password_options(options()) {
+            Ok(()) => {}
+            Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        let access = SecAccessControl::create_with_protection(Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly), 0)
+            .map_err(|e| e.to_string())?;
+        let mut opts = options();
+        opts.set_access_control(access);
+        set_generic_password_options(BASE64.encode(key).as_bytes(), opts).map_err(|e| e.to_string())?;
+        match keychain_get()? {
+            Some(stored) if stored == *key => Ok(()),
+            Some(_) => Err("Keychain returned a different key than was just written".into()),
+            None => Err("Keychain reported no entry immediately after writing one".into()),
+        }
+    }
+}
+
 // --- Desktop ---------------------------------------------------------------
 
 #[cfg(not(target_os = "android"))]
 pub(crate) use platform::key;
 
-#[cfg(not(target_os = "android"))]
+#[cfg(desktop)]
 mod platform {
     use super::*;
     use crate::crypto::{decrypt_with_key, KEY_LEN};
@@ -134,8 +447,6 @@ mod platform {
     use std::sync::Mutex;
     use tauri::Emitter;
     use zeroize::Zeroizing;
-
-    type Key = [u8; KEY_LEN];
 
     /// Identifies this app's entry in the OS credential store. Deliberately
     /// the same bundle identifier used for `app_config_dir()`/`app_log_dir()`.
@@ -733,51 +1044,6 @@ mod platform {
         .await?;
         persist_location(app, location).await;
         Ok(())
-    }
-
-    /// One `enc1:` value from this database, if any -- both "is there data a
-    /// new key would orphan?" and the known ciphertext a restored key must
-    /// decrypt. Tables in rough order of how likely they are to hold one.
-    async fn sample_encrypted_value(app: &AppHandle) -> Result<Option<String>, String> {
-        const COLUMNS: &[(&str, &str)] = &[
-            ("reflection", "text"),
-            ("daily_task_list", "content"),
-            ("not_to_do_list", "content"),
-            ("wellness_check", "relaxed_eyes"),
-            ("screen_time_session", "app_id"),
-            ("bulk_edit_preset", "text"),
-            ("paired_device", "name"),
-        ];
-        let pool = crate::db::open_direct_pool(app).await?;
-        let mut found = None;
-        for (table, column) in COLUMNS {
-            let sql = format!("SELECT {column} FROM {table} WHERE {column} LIKE 'enc1:%' LIMIT 1");
-            match sqlx::query_scalar::<_, String>(&sql).fetch_optional(&pool).await {
-                Ok(Some(v)) => {
-                    found = Some(v);
-                    break;
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    pool.close().await;
-                    return Err(format!("couldn't read {table}: {e}"));
-                }
-            }
-        }
-        pool.close().await;
-        Ok(found)
-    }
-
-    fn random_key() -> Key {
-        use chacha20poly1305::aead::rand_core::RngCore;
-        let mut key = [0u8; KEY_LEN];
-        OsRng.fill_bytes(&mut key);
-        key
-    }
-
-    fn decode_key(encoded: &str) -> Result<Key, String> {
-        let bytes = BASE64.decode(encoded).map_err(|e| format!("stored key is not valid base64: {e}"))?;
-        bytes.try_into().map_err(|_| "stored key is not the expected length".to_string())
     }
 
     // --- OS vault --------------------------------------------------------
