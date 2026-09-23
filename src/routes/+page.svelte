@@ -70,6 +70,20 @@
   let mediaKeyPermissionRequested = $state(false);
   let taskListContent = $state("");
   let notToDoContent = $state("");
+  // saveTaskList/saveNotToDoList were previously fired off with `void` and no
+  // error handling anywhere in the app -- a failed debounced save (a
+  // transient encryption-key hiccup, a busy DB, anything) vanished silently:
+  // the textarea kept showing what was typed (it's just bound local state),
+  // "Auto-saves as you type" kept saying so, but the row in SQLite never
+  // changed. That's invisible here, in whichever window has the edit, and
+  // only shows up as *missing* content somewhere that does its own fresh
+  // read, most consequentially the break overlay on its next open (see
+  // CLAUDE.md's "Debugging from production logs" -- this is exactly the
+  // silently-discarded-Result pattern it calls out). Surfacing it here, next
+  // to the same hint that made the false promise, at least makes a failure
+  // visible and diagnosable instead of a silent, unrecoverable data loss.
+  let taskSaveError = $state<string | null>(null);
+  let notToDoSaveError = $state<string | null>(null);
   let pairedDevices = $state<PairedDeviceInfo[]>([]);
   let pairedDevicesLoaded = $state(false);
   let syncingDeviceId = $state<string | null>(null);
@@ -110,14 +124,26 @@
   function scheduleTaskSave() {
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
     taskSaveTimer = setTimeout(() => {
-      void saveTaskList(localDateStamp(), taskListContent);
+      void saveTaskList(localDateStamp(), taskListContent)
+        .then(() => (taskSaveError = null))
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          taskSaveError = msg;
+          void logError(`main window: saveTaskList failed: ${msg}`);
+        });
     }, 800);
   }
 
   function scheduleNotToDoSave() {
     if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
     notToDoSaveTimer = setTimeout(() => {
-      void saveNotToDoList(localDateStamp(), notToDoContent);
+      void saveNotToDoList(localDateStamp(), notToDoContent)
+        .then(() => (notToDoSaveError = null))
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          notToDoSaveError = msg;
+          void logError(`main window: saveNotToDoList failed: ${msg}`);
+        });
     }, 800);
   }
 
@@ -433,7 +459,11 @@
 3."
       rows="5"
     ></textarea>
-    <p class="hint">Auto-saves as you type.</p>
+    {#if taskSaveError}
+      <p class="hint error">Couldn't save: {taskSaveError}. Retype the last change to try again.</p>
+    {:else}
+      <p class="hint">Auto-saves as you type.</p>
+    {/if}
   </section>
 
   <section class="card">
@@ -446,7 +476,11 @@
 3."
       rows="3"
     ></textarea>
-    <p class="hint">Auto-saves as you type.</p>
+    {#if notToDoSaveError}
+      <p class="hint error">Couldn't save: {notToDoSaveError}. Retype the last change to try again.</p>
+    {:else}
+      <p class="hint">Auto-saves as you type.</p>
+    {/if}
   </section>
 
   {#if pairedDevicesLoaded && pairedDevices.length > 0}
@@ -731,6 +765,10 @@
     font-size: 12px;
     color: var(--text-dim);
     margin: 8px 0 0;
+  }
+
+  .hint.error {
+    color: var(--danger);
   }
 
   .saved {

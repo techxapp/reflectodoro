@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { error as logError } from "@tauri-apps/plugin-log";
   import {
     clusterReflectionRows,
     getReflectionsForDate,
@@ -52,6 +53,15 @@
   // problem instead of sitting on "Loading..." forever.
   let loadError = $state<string | null>(null);
   let screenTimeError = $state<string | null>(null);
+  // saveTaskList/saveNotToDoList's debounced calls used to be fire-and-forget
+  // everywhere in the app, so a failed write (transient encryption-key
+  // hiccup, busy DB, anything) vanished with no trace: the textarea kept
+  // showing what was typed since it's just bound local state, but the row in
+  // SQLite never changed -- only visible later, as *missing* content, on
+  // whatever window next did its own fresh read (most consequentially the
+  // break overlay). See +page.svelte's identical fix for the full reasoning.
+  let taskSaveError = $state<string | null>(null);
+  let notToDoSaveError = $state<string | null>(null);
   let expandedClusters = $state<Set<number>>(new Set());
   let editingId = $state<number | null>(null);
   let editText = $state("");
@@ -184,6 +194,11 @@
   async function load() {
     loading = true;
     loadError = null;
+    // A save failure banner is specific to the day it happened on; carrying
+    // it over to whatever day the user navigates to next would misattribute
+    // it. taskList/notToDo themselves get replaced by the fetch below.
+    taskSaveError = null;
+    notToDoSaveError = null;
     const stamp = selectedStamp;
     const generation = ++loadGeneration;
     try {
@@ -261,7 +276,13 @@
     const stamp = selectedStamp;
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
     taskSaveTimer = setTimeout(() => {
-      void saveTaskList(stamp, content);
+      void saveTaskList(stamp, content)
+        .then(() => (taskSaveError = null))
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          taskSaveError = msg;
+          void logError(`entries: saveTaskList failed: ${msg}`);
+        });
     }, 800);
   }
 
@@ -270,7 +291,13 @@
     const stamp = selectedStamp;
     if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
     notToDoSaveTimer = setTimeout(() => {
-      void saveNotToDoList(stamp, content);
+      void saveNotToDoList(stamp, content)
+        .then(() => (notToDoSaveError = null))
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          notToDoSaveError = msg;
+          void logError(`entries: saveNotToDoList failed: ${msg}`);
+        });
     }, 800);
   }
 
@@ -798,6 +825,9 @@
 3."
           rows="5"
         ></textarea>
+        {#if taskSaveError}
+          <p class="hint error">Couldn't save: {taskSaveError}. Retype the last change to try again.</p>
+        {/if}
       </div>
 
       <div class="task-list">
@@ -810,6 +840,9 @@
 3."
           rows="3"
         ></textarea>
+        {#if notToDoSaveError}
+          <p class="hint error">Couldn't save: {notToDoSaveError}. Retype the last change to try again.</p>
+        {/if}
       </div>
 
       {#snippet editButton(row: { id: number; text: string })}
@@ -1681,6 +1714,10 @@
   .hint {
     color: var(--text-dim);
     font-size: 13px;
+  }
+
+  .hint.error {
+    color: var(--danger);
   }
 
   .screen-time h2 {

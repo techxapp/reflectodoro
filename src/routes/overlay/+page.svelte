@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { info as logInfo } from "@tauri-apps/plugin-log";
+  import { error as logError, info as logInfo } from "@tauri-apps/plugin-log";
   import {
     findMissedSlots,
     saveReflection,
@@ -63,6 +63,17 @@
   // Win-key-suppressing window with no working exit. See submitReflection.
   let isSubmitting = $state(false);
   let saveError = $state<string | null>(null);
+  // Separate from saveError above (the reflection submit's own failure
+  // state) -- this covers the Most Important Tasks / Not To Do panels'
+  // independent debounced auto-save. Both used to be fire-and-forget with no
+  // error handling anywhere in the app: a failed save left whatever was
+  // typed visible in this textarea (it's just bound local state) while the
+  // database row never changed, so the very next break -- a fresh overlay
+  // load, doing its own independent read -- would show older content with
+  // no trace of what happened. See +page.svelte's identical fix for the
+  // full reasoning.
+  let taskSaveError = $state<string | null>(null);
+  let notToDoSaveError = $state<string | null>(null);
   let showEscapeHatch = $state(false);
   let closingAfterFailure = $state(false);
   // How much of the viewport the on-screen keyboard is currently covering.
@@ -272,14 +283,26 @@
   function scheduleTaskSave() {
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
     taskSaveTimer = setTimeout(() => {
-      void saveTaskList(localDateStamp(), taskListContent);
+      void saveTaskList(localDateStamp(), taskListContent)
+        .then(() => (taskSaveError = null))
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          taskSaveError = msg;
+          void logError(`[overlay] saveTaskList failed: ${msg}`);
+        });
     }, 800);
   }
 
   function scheduleNotToDoSave() {
     if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
     notToDoSaveTimer = setTimeout(() => {
-      void saveNotToDoList(localDateStamp(), notToDoContent);
+      void saveNotToDoList(localDateStamp(), notToDoContent)
+        .then(() => (notToDoSaveError = null))
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          notToDoSaveError = msg;
+          void logError(`[overlay] saveNotToDoList failed: ${msg}`);
+        });
     }, 800);
   }
 
@@ -359,7 +382,20 @@
         await refreshCoverage();
         await prefillReflection();
         await refreshComingNext();
-        // Unlike the three calls above (cheap local DB reads, harmless to
+        // Most Important Tasks / Not To Do only ever change live via the
+        // tasklist://updated/nottodolist://updated broadcast (see
+        // listenForTaskListUpdates below) -- normally enough, but this
+        // window is precreated once and can stay mounted for an entire
+        // session, so if a broadcast was ever missed (a P2P sync or a file
+        // import writes these tables directly from Rust with no broadcast of
+        // its own) the textarea would keep showing whatever it last had
+        // until the next one landed. Re-reading here on every new break
+        // guarantees it's never more than one break behind, the same
+        // freshness guarantee refreshComingNext/prefillReflection already
+        // give the panels next to it.
+        taskListContent = await getTaskList(localDateStamp());
+        notToDoContent = await getNotToDoList(localDateStamp());
+        // Unlike the calls above (cheap local DB reads, harmless to
         // re-run on every slot-start change including the close-triggered
         // one back to ""), this hits an external network API -- only worth
         // doing when a break is actually opening, not also when it closes
@@ -519,7 +555,11 @@
           rows="5"
           onfocus={scrollFieldIntoView}
         ></textarea>
-        <p class="hint">Auto-saves as you type.</p>
+        {#if taskSaveError}
+          <p class="hint error">Couldn't save: {taskSaveError}. Retype the last change to try again.</p>
+        {:else}
+          <p class="hint">Auto-saves as you type.</p>
+        {/if}
       </section>
 
       <section class="panel side">
@@ -531,7 +571,11 @@
           rows="3"
           onfocus={scrollFieldIntoView}
         ></textarea>
-        <p class="hint">Auto-saves as you type.</p>
+        {#if notToDoSaveError}
+          <p class="hint error">Couldn't save: {notToDoSaveError}. Retype the last change to try again.</p>
+        {:else}
+          <p class="hint">Auto-saves as you type.</p>
+        {/if}
       </section>
 
       {#if mediaControlAvailable}
