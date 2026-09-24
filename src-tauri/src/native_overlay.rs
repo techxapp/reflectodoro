@@ -242,7 +242,8 @@ pub async fn refresh_coming_next_text(app: &AppHandle) {
 /// never logged.
 pub async fn refresh_quote_text(app: &AppHandle) -> bool {
     let (slot_at_start, break_end) = {
-        let overlay = app.state::<AppState>().overlay.lock().unwrap();
+        let state = app.state::<AppState>();
+        let overlay = state.overlay.lock().unwrap();
         (overlay.current_slot_start.clone(), overlay.break_end.clone())
     };
     // Concentration mode's 1-minute break is too short to read a quote in --
