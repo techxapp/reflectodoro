@@ -1122,6 +1122,7 @@ pub fn run() {
             commands::can_query_usage_stats,
             commands::request_usage_stats_permission,
             commands::fetch_quote,
+            commands::default_quote_api_attribution,
             import::import_data,
             key_store::get_key_storage_status,
             key_store::retry_key_resolution,

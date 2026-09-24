@@ -2497,6 +2497,36 @@ export async function saveQuoteApiUrl(url: string): Promise<void> {
   );
 }
 
+// Credit line shown under the quote text, same blank-means-off philosophy as
+// the URL above. Accepts HTML (so it can carry a clickable link) -- rendered
+// through sanitizeAttributionHtml (sanitizeHtml.ts) wherever it's displayed,
+// never trusted as-is, since this app_setting row can also arrive via file
+// import. Seeded by db.rs's SEED_SETTINGS/existing-install backfill from
+// db.rs's DEFAULT_QUOTE_API_ATTRIBUTION const (the single source of truth --
+// fetched live via the default_quote_api_attribution command wherever the
+// frontend needs the default itself, e.g. Settings' "Reset to default"),
+// not a read-side fallback here, for the same reason as the URL.
+
+const QUOTE_API_ATTRIBUTION_KEY = "quote_api_attribution";
+
+export async function getQuoteApiAttribution(): Promise<string> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(
+    `SELECT value FROM app_setting WHERE key = $1`,
+    [QUOTE_API_ATTRIBUTION_KEY],
+  );
+  return rows[0]?.value ?? "";
+}
+
+export async function saveQuoteApiAttribution(html: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [QUOTE_API_ATTRIBUTION_KEY, html],
+  );
+}
+
 // --- Theme (Settings -> Appearance) --------------------------------------
 //
 // "auto" (default) follows the OS light/dark setting via app.css's

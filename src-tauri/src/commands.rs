@@ -954,6 +954,17 @@ pub fn dev_force_close(app: AppHandle, state: State<AppState>) -> Result<(), Str
 /// still shows *something* rather than nothing. Errors are returned for the
 /// caller to fail silently on (no quote panel shown) -- never surfaced as a
 /// visible error on the break screen.
+/// Returns the Quote API attribution's default HTML, for Settings'
+/// "Reset to default" button and the field's placeholder. The single source
+/// of truth is `db::DEFAULT_QUOTE_API_ATTRIBUTION` (also what seeds
+/// `app_setting` on install and backfills existing databases) -- the
+/// frontend fetches it here rather than keeping its own hardcoded copy, so
+/// the default only ever lives in one place.
+#[tauri::command]
+pub fn default_quote_api_attribution() -> String {
+    crate::db::DEFAULT_QUOTE_API_ATTRIBUTION.to_string()
+}
+
 #[tauri::command]
 pub async fn fetch_quote(url: String) -> Result<String, String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {

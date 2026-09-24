@@ -19,8 +19,10 @@
     nextWorkSlotStartIso,
     getReflectionTextForSlot,
     getQuoteApiUrl,
+    getQuoteApiAttribution,
   } from "$lib/db";
   import { breakQualifiesForQuote } from "$lib/grid";
+  import { sanitizeAttributionHtml } from "$lib/sanitizeHtml";
 
   interface OverlayState {
     open: boolean;
@@ -45,6 +47,7 @@
   let comingNextText = $state<string | null>(null);
   let quoteApiUrl = $state<string | null>(null);
   let quoteText = $state<string | null>(null);
+  let quoteAttribution = $state<string>("");
   // Break-screen media control. Shown only where MediaRemote actually
   // resolved (macOS), since that's the only platform that can play/pause
   // another app's media from here without a permission.
@@ -406,6 +409,11 @@
         // give the panels next to it.
         taskListContent = await getTaskList(localDateStamp());
         notToDoContent = await getNotToDoList(localDateStamp());
+        // Same freshness reasoning as the task lists above -- a cheap local
+        // read, re-run on every slot-start change so a Settings edit made
+        // while this window sat precreated/hidden shows up on the next
+        // break rather than needing an app restart.
+        quoteAttribution = await getQuoteApiAttribution();
         // Unlike the calls above (cheap local DB reads, harmless to
         // re-run on every slot-start change including the close-triggered
         // one back to ""), this hits an external network API -- only worth
@@ -447,6 +455,7 @@
     }
     taskListContent = await getTaskList(localDateStamp());
     notToDoContent = await getNotToDoList(localDateStamp());
+    quoteAttribution = await getQuoteApiAttribution();
 
     unlistenTasks = await listenForTaskListUpdates((content) => {
       taskListContent = content;
@@ -621,6 +630,9 @@
       {#if quoteText}
         <section class="panel side quote-panel">
           <p class="quote-text">{quoteText}</p>
+          {#if quoteAttribution.trim()}
+            <p class="quote-attribution">{@html sanitizeAttributionHtml(quoteAttribution)}</p>
+          {/if}
         </section>
       {/if}
     </div>
@@ -712,6 +724,16 @@
     font-style: italic;
     line-height: 1.5;
     opacity: 0.85;
+  }
+
+  .quote-attribution {
+    margin: 6px 0 0;
+    font-size: 0.8em;
+    opacity: 0.6;
+  }
+
+  .quote-attribution :global(a) {
+    color: inherit;
   }
 
   /* Large displays: the fixed small type/padding left the content floating in

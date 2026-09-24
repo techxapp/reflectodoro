@@ -282,6 +282,17 @@ const FULL_SCHEMA_SQL: &str = r#"
 /// that downgrading to a build which *does* read them still behaves
 /// correctly, and so an existing install's record of having completed those
 /// passes stays intact.
+/// Default credit line for the Quote API panel, shown under the fetched
+/// quote text. Rendered as sanitized HTML (see `sanitizeAttributionHtml` in
+/// `src/lib/sanitizeHtml.ts`) rather than plain text, since a credit line
+/// meaningfully wants a clickable link. This is the single source of truth
+/// for the default -- the seed list and the existing-install backfill below
+/// both read it, and the frontend's "Reset to default" button fetches it via
+/// `commands::default_quote_api_attribution` rather than keeping its own
+/// hardcoded copy, the same way `quote_api_url`'s default lives only here.
+pub(crate) const DEFAULT_QUOTE_API_ATTRIBUTION: &str =
+    "Inspirational quotes provided by <a href=\"https://zenquotes.io/\" target=\"_blank\">ZenQuotes API</a>";
+
 const SEED_SETTINGS: &[(&str, &str)] = &[
     ("breakit_length", "12"),
     ("breakit_include_special", "false"),
@@ -302,6 +313,7 @@ const SEED_SETTINGS: &[(&str, &str)] = &[
     ("device_name", ""),
     ("screen_time_app_threshold_minutes", "5"),
     ("quote_api_url", "https://zenquotes.io/api/random"),
+    ("quote_api_attribution", DEFAULT_QUOTE_API_ATTRIBUTION),
     ("data_encryption_migrated", "true"),
     ("screen_time_encryption_migrated", "true"),
     ("reflection_timestamp_encryption_migrated", "true"),
@@ -469,7 +481,25 @@ async fn ensure_schema_on_pool(pool: &SqlitePool) -> Result<(), SchemaError> {
     }
 
     verify_final_shape(pool).await?;
+    backfill_quote_api_attribution(pool).await?;
     log::info!("existing database schema verified as current");
+    Ok(())
+}
+
+/// One-shot backfill for `quote_api_attribution` on databases created before
+/// it existed. Self-terminating, no flag needed: once the row exists --
+/// whether from this backfill or a user edit/blank-out -- `WHERE NOT EXISTS`
+/// is never true again, so this is a no-op on every later launch.
+async fn backfill_quote_api_attribution(pool: &SqlitePool) -> Result<(), SchemaError> {
+    sqlx::query(
+        "INSERT INTO app_setting (key, value) \
+         SELECT 'quote_api_attribution', ? \
+         WHERE NOT EXISTS (SELECT 1 FROM app_setting WHERE key = 'quote_api_attribution')",
+    )
+    .bind(DEFAULT_QUOTE_API_ATTRIBUTION)
+    .execute(pool)
+    .await
+    .map_err(|e| SchemaError::Unavailable(format!("couldn't backfill quote_api_attribution: {e}")))?;
     Ok(())
 }
 

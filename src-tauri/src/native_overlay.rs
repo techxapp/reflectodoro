@@ -286,6 +286,27 @@ pub async fn refresh_quote_text(app: &AppHandle) -> bool {
     true
 }
 
+/// Reads the Quote API credit line (`app_setting.quote_api_attribution`) and
+/// stores it in `AppState.quote_attribution_html`. Unlike `refresh_quote_text`
+/// this is a plain local `app_setting` read with no network round trip, so
+/// it's called synchronously before the overlay is shown (same "computed
+/// once at open time" treatment `refresh_missed_slot_count`/
+/// `refresh_coming_next_text` get), not deferred to a background task. The
+/// value is raw HTML from Settings -- `native_overlay.html` sanitizes it
+/// before rendering, exactly like the desktop overlay does via
+/// `sanitizeAttributionHtml`.
+pub async fn refresh_quote_attribution(app: &AppHandle) {
+    let html = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM app_setting WHERE key = 'quote_api_attribution'",
+    )
+    .fetch_optional(pool(app).await)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+    *app.state::<AppState>().quote_attribution_html.lock().unwrap() = html;
+}
+
 /// Mirrors db.ts's `splitReflectionForSlots` exactly: when there's more than one covered
 /// (missed) slot and `text` splits into exactly as many non-blank lines as there are slots,
 /// returns those lines in slot order (index 0 = oldest slot). `None` on any mismatch -- caller

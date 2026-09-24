@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
   import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
+  import { sanitizeAttributionHtml } from "$lib/sanitizeHtml";
   import {
     getBreakitSettings,
     saveBreakitSettings,
@@ -41,6 +42,8 @@
     saveDeviceName,
     getQuoteApiUrl,
     saveQuoteApiUrl,
+    getQuoteApiAttribution,
+    saveQuoteApiAttribution,
     getThemePreference,
     saveThemePreference,
     type ThemePreference,
@@ -180,6 +183,14 @@
   let quoteApiUrl = $state("");
   let quoteApiUrlLoaded = $state(false);
   let quoteApiUrlSaved = $state(false);
+
+  let quoteApiAttribution = $state("");
+  let quoteApiAttributionLoaded = $state(false);
+  let quoteApiAttributionSaved = $state(false);
+  // Fetched from Rust (single source of truth is db.rs's
+  // DEFAULT_QUOTE_API_ATTRIBUTION const), not hardcoded here -- see
+  // resetQuoteApiAttributionToDefault below.
+  let defaultQuoteApiAttribution = $state("");
 
   let overlayGranted = $state(false);
   let overlayChecked = $state(false);
@@ -455,6 +466,15 @@
   });
 
   onMount(async () => {
+    quoteApiAttribution = await getQuoteApiAttribution();
+    quoteApiAttributionLoaded = true;
+  });
+
+  onMount(async () => {
+    defaultQuoteApiAttribution = await invoke<string>("default_quote_api_attribution");
+  });
+
+  onMount(async () => {
     themePreference = await getThemePreference();
     themeLoaded = true;
   });
@@ -706,6 +726,17 @@
     setTimeout(() => (quoteApiUrlSaved = false), 2000);
   }
 
+  async function saveQuoteApiAttributionSetting(e: Event) {
+    e.preventDefault();
+    await saveQuoteApiAttribution(quoteApiAttribution.trim());
+    quoteApiAttributionSaved = true;
+    setTimeout(() => (quoteApiAttributionSaved = false), 2000);
+  }
+
+  function resetQuoteApiAttributionToDefault() {
+    quoteApiAttribution = defaultQuoteApiAttribution;
+  }
+
   async function saveWellnessExclusions(e: Event) {
     e.preventDefault();
     await saveWellnessTextExclusions(wellnessExclusions);
@@ -937,6 +968,38 @@
         Shown at the end of the break screen. Leave blank to disable. Expects a JSON response with
         a quote field (e.g. <code>quote</code>/<code>content</code>/<code>text</code>, optionally
         <code>author</code>) &mdash; falls back to showing the raw response text otherwise.
+      </p>
+    {/if}
+
+    {#if quoteApiAttributionLoaded}
+      <form onsubmit={saveQuoteApiAttributionSetting}>
+        <label class="grow">
+          Quote API attribution
+          <textarea
+            rows="2"
+            bind:value={quoteApiAttribution}
+            placeholder={defaultQuoteApiAttribution}
+          ></textarea>
+        </label>
+        <button type="submit">Save</button>
+        <button type="button" onclick={resetQuoteApiAttributionToDefault}>Reset to default</button>
+        {#if quoteApiAttributionSaved}
+          <span class="hint saved">Saved</span>
+        {/if}
+      </form>
+      {#if quoteApiAttribution.trim()}
+        <p class="hint quote-attribution-preview">
+          Preview: {@html sanitizeAttributionHtml(quoteApiAttribution)}
+        </p>
+      {/if}
+      <p class="hint">
+        Shown under the quote, credited to whichever API you're calling above. Accepts a small set
+        of HTML (links and basic formatting) &mdash; anything else is stripped before it's shown.
+        Leave blank to show no attribution. <strong
+          >If you change the Quote API URL, check that service's own documentation and update this
+          attribution to match its requirements &mdash; we are not responsible for any compliance
+          issues arising from missing or incorrect attribution.</strong
+        >
       </p>
     {/if}
 

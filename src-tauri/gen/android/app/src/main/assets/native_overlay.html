@@ -87,6 +87,16 @@
     opacity: 0.85;
   }
 
+  .quote-attribution {
+    margin: 6px 0 0;
+    font-size: 13px;
+    opacity: 0.6;
+  }
+
+  .quote-attribution a {
+    color: inherit;
+  }
+
   h2 {
     font-size: 15px;
     margin: 0 0 12px;
@@ -235,6 +245,7 @@
 
     <section class="panel" id="quote-panel" style="display: none">
       <p class="quote-text" id="quote-text"></p>
+      <p class="quote-attribution" id="quote-attribution" style="display: none"></p>
     </section>
   </div>
 
@@ -255,7 +266,74 @@
       missed_slot_count: 1,
       coming_next_text: "",
       quote_text: "",
+      quote_attribution_html: "",
     };
+
+    // Allowlist HTML sanitizer for the Quote API attribution credit line --
+    // mirrors sanitizeAttributionHtml in src/lib/sanitizeHtml.ts exactly
+    // (same allowlist, same rules), reimplemented as plain JS since this
+    // file has no bundler/imports. This is the one place in this file that
+    // renders anything via innerHTML instead of textContent -- see the
+    // comment at the quote_text render below for why that's textContent
+    // only, and keep it that way; only the sanitizer's own output goes
+    // through innerHTML.
+    var ATTRIBUTION_ALLOWED_TAGS = { A: 1, B: 1, I: 1, EM: 1, STRONG: 1, BR: 1, SPAN: 1, P: 1 };
+    var ATTRIBUTION_ALLOWED_ATTRS = { A: ["href", "target"] };
+
+    function sanitizeAttributionNode(node, out) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        out.push(node.cloneNode(false));
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return;
+      }
+      var tag = node.tagName;
+      if (!ATTRIBUTION_ALLOWED_TAGS[tag]) {
+        for (var i = 0; i < node.childNodes.length; i++) {
+          sanitizeAttributionNode(node.childNodes[i], out);
+        }
+        return;
+      }
+      var clean = document.createElement(tag);
+      var allowedAttrs = ATTRIBUTION_ALLOWED_ATTRS[tag] || [];
+      for (var a = 0; a < allowedAttrs.length; a++) {
+        var attrName = allowedAttrs[a];
+        var value = node.getAttribute(attrName);
+        if (value == null) continue;
+        if (attrName === "href") {
+          if (!/^https?:\/\//i.test(value.trim())) continue;
+          clean.setAttribute("href", value);
+        } else if (attrName === "target") {
+          if (value === "_blank") {
+            clean.setAttribute("target", "_blank");
+            clean.setAttribute("rel", "noopener noreferrer");
+          }
+        }
+      }
+      var childOut = [];
+      for (var c = 0; c < node.childNodes.length; c++) {
+        sanitizeAttributionNode(node.childNodes[c], childOut);
+      }
+      for (var j = 0; j < childOut.length; j++) {
+        clean.appendChild(childOut[j]);
+      }
+      out.push(clean);
+    }
+
+    function sanitizeAttributionHtml(html) {
+      if (!html) return "";
+      var doc = new DOMParser().parseFromString(html, "text/html");
+      var container = document.createElement("div");
+      var out = [];
+      for (var i = 0; i < doc.body.childNodes.length; i++) {
+        sanitizeAttributionNode(doc.body.childNodes[i], out);
+      }
+      for (var j = 0; j < out.length; j++) {
+        container.appendChild(out[j]);
+      }
+      return container.innerHTML;
+    }
     var pendingBreakitCheck = false;
     var taskSaveTimer = null;
     var notToDoSaveTimer = null;
@@ -267,6 +345,7 @@
     var comingNextEl = document.getElementById("coming-next");
     var quotePanelEl = document.getElementById("quote-panel");
     var quoteTextEl = document.getElementById("quote-text");
+    var quoteAttributionEl = document.getElementById("quote-attribution");
     var breakitInputEl = document.getElementById("breakit-input");
     var breakitPendingEl = document.getElementById("breakit-pending");
     var breakitMatchedEl = document.getElementById("breakit-matched");
@@ -356,6 +435,15 @@
         quotePanelEl.style.display = "";
       } else {
         quotePanelEl.style.display = "none";
+      }
+
+      // Only place in this file using innerHTML -- always through
+      // sanitizeAttributionHtml above, never the raw stored value.
+      if (state.quote_text && state.quote_attribution_html) {
+        quoteAttributionEl.innerHTML = sanitizeAttributionHtml(state.quote_attribution_html);
+        quoteAttributionEl.style.display = "";
+      } else {
+        quoteAttributionEl.style.display = "none";
       }
 
       breakitPendingEl.style.display = (state.breakit_matched || state.breakit_limit_reached) ? "none" : "";
