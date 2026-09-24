@@ -22,6 +22,8 @@
     saveBreakNotificationPersistentEnabled,
     getHideOverlayOnCallEnabled,
     saveHideOverlayOnCallEnabled,
+    getNightPauseConfig,
+    saveNightPauseConfig,
     getOverlayAutoCloseMinutes,
     saveOverlayAutoCloseMinutes,
     getCheckinAutoCloseMinutes,
@@ -127,6 +129,24 @@
   let hideOverlayOnCallEnabled = $state(true);
   let hideOverlayOnCallLoaded = $state(false);
   let hideOverlayOnCallBusy = $state(false);
+
+  let nightPauseEnabled = $state(true);
+  let nightPauseStart = $state("22:00");
+  let nightPauseEnd = $state("08:00");
+  let nightPauseLoaded = $state(false);
+  let nightPauseBusy = $state(false);
+  let nightPauseSaved = $state(false);
+
+  function minutesToHhMm(minutes: number): string {
+    const h = Math.floor(minutes / 60) % 24;
+    const m = minutes % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  }
+
+  function hhMmToMinutes(hhMm: string): number {
+    const [h, m] = hhMm.split(":").map(Number);
+    return (h % 24) * 60 + (m % 60);
+  }
 
   let isMacos = $state(false);
   let isWindows = $state(false);
@@ -407,6 +427,14 @@
   });
 
   onMount(async () => {
+    const config = await getNightPauseConfig();
+    nightPauseEnabled = config.enabled;
+    nightPauseStart = minutesToHhMm(config.startMinutes);
+    nightPauseEnd = minutesToHhMm(config.endMinutes);
+    nightPauseLoaded = true;
+  });
+
+  onMount(async () => {
     screenTimeTrackingEnabled = await getScreenTimeTrackingEnabled();
     screenTimeTrackingLoaded = true;
   });
@@ -592,6 +620,32 @@
     } finally {
       hideOverlayOnCallBusy = false;
     }
+  }
+
+  async function toggleNightPauseEnabled() {
+    const next = !nightPauseEnabled;
+    nightPauseBusy = true;
+    try {
+      await saveNightPauseConfig({
+        enabled: next,
+        startMinutes: hhMmToMinutes(nightPauseStart),
+        endMinutes: hhMmToMinutes(nightPauseEnd),
+      });
+      nightPauseEnabled = next;
+    } finally {
+      nightPauseBusy = false;
+    }
+  }
+
+  async function saveNightPauseWindow(e: Event) {
+    e.preventDefault();
+    await saveNightPauseConfig({
+      enabled: nightPauseEnabled,
+      startMinutes: hhMmToMinutes(nightPauseStart),
+      endMinutes: hhMmToMinutes(nightPauseEnd),
+    });
+    nightPauseSaved = true;
+    setTimeout(() => (nightPauseSaved = false), 2000);
   }
 
   async function toggleMacosHideMenuBarDock() {
@@ -977,6 +1031,41 @@
       <p class="hint">
         While a call is ringing or in progress, the break screen steps aside so you can answer,
         and returns when the call ends. Applies from the next break.
+      </p>
+    {/if}
+
+    {#if isAndroid && nightPauseLoaded}
+      <div class="data-row">
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={nightPauseEnabled}
+            disabled={nightPauseBusy}
+            onchange={toggleNightPauseEnabled}
+          />
+          Pause breaks overnight
+        </label>
+      </div>
+      <form onsubmit={saveNightPauseWindow}>
+        <label>
+          Starts at
+          <input type="time" bind:value={nightPauseStart} />
+        </label>
+        <label>
+          Ends at
+          <input type="time" bind:value={nightPauseEnd} />
+        </label>
+        <button type="submit">Save</button>
+        {#if nightPauseSaved}
+          <span class="hint saved">Saved</span>
+        {/if}
+      </form>
+      <p class="hint">
+        Pomodoro mode pauses itself for this window (it can wrap past midnight, like the default
+        10pm&ndash;8am) and resumes on its own at the end, exactly like picking a pause from the
+        Timer tab's dropdown. To resume early, set Pomodoro back to On &mdash; it stays on for the
+        rest of that night. A break already open when the window starts still runs its course, and
+        nothing missed is made up afterward.
       </p>
     {/if}
 

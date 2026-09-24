@@ -445,7 +445,11 @@ export async function saveReflection(coveredSlots: string[], text: string): Prom
  * insert/update a row for a slot far in the future relative to when it's
  * saved, and an id-ordered query would then surface that future entry as the
  * "last" one even while sitting inside an earlier break. Returns null when no
- * such reflection exists (fresh install, or the very first slot of all). */
+ * such reflection exists (fresh install, or the very first slot of all), and
+ * also when that most recent row is just "skip" (case-insensitive, trimmed) --
+ * the app's placeholder convention for a deliberately-skipped slot (see
+ * import.rs's is_ignorable_entry) isn't useful content to pre-fill with, so
+ * it's treated the same as no prior reflection rather than looked past. */
 export async function getLastReflectionText(
   beforeSlotStartIso: string,
 ): Promise<string | null> {
@@ -455,7 +459,9 @@ export async function getLastReflectionText(
     [beforeSlotStartIso],
   );
   if (rows[0]?.text === undefined) return null;
-  return decryptField(rows[0].text);
+  const text = await decryptField(rows[0].text);
+  if (text.trim().toLowerCase() === "skip") return null;
+  return text;
 }
 
 export interface WellnessCheckValues {
@@ -1306,6 +1312,76 @@ export async function loadAndSyncHideOverlayOnCallSetting(): Promise<boolean> {
   await syncHideOverlayOnCallToBackend(enabled);
   return enabled;
 }
+
+// --- Android "night pause" (Settings) -----------------------------------
+// Android only in effect (see CLAUDE.md's "Android" -- Night pause). On by
+// default, window 22:00-08:00 (wraps midnight). Config only: the pause
+// itself is expressed through the ordinary snooze (run_scheduler arms one
+// until the window's end when it starts), so nothing here drives any
+// night-pause-specific UI -- the main window's existing Pomodoro dropdown
+// and "Resumes at HH:MM" hint show it, and picking "Pomodoro: On" resumes.
+
+export interface NightPauseConfig {
+  enabled: boolean;
+  startMinutes: number;
+  endMinutes: number;
+}
+
+const NIGHT_PAUSE_ENABLED_KEY = "night_pause_enabled";
+const NIGHT_PAUSE_START_MINUTES_KEY = "night_pause_start_minutes";
+const NIGHT_PAUSE_END_MINUTES_KEY = "night_pause_end_minutes";
+const NIGHT_PAUSE_DEFAULT_START_MINUTES = 22 * 60;
+const NIGHT_PAUSE_DEFAULT_END_MINUTES = 8 * 60;
+
+export async function getNightPauseConfig(): Promise<NightPauseConfig> {
+  const db = await getDb();
+  const rows = await db.select<{ key: string; value: string }[]>(
+    `SELECT key, value FROM app_setting WHERE key IN ($1, $2, $3)`,
+    [NIGHT_PAUSE_ENABLED_KEY, NIGHT_PAUSE_START_MINUTES_KEY, NIGHT_PAUSE_END_MINUTES_KEY],
+  );
+  const byKey = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  return {
+    enabled: (byKey[NIGHT_PAUSE_ENABLED_KEY] ?? "true") === "true",
+    startMinutes: Number(byKey[NIGHT_PAUSE_START_MINUTES_KEY] ?? NIGHT_PAUSE_DEFAULT_START_MINUTES),
+    endMinutes: Number(byKey[NIGHT_PAUSE_END_MINUTES_KEY] ?? NIGHT_PAUSE_DEFAULT_END_MINUTES),
+  };
+}
+
+export async function saveNightPauseConfig(config: NightPauseConfig): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [NIGHT_PAUSE_ENABLED_KEY, String(config.enabled)],
+  );
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [NIGHT_PAUSE_START_MINUTES_KEY, String(config.startMinutes)],
+  );
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [NIGHT_PAUSE_END_MINUTES_KEY, String(config.endMinutes)],
+  );
+  await syncNightPauseConfigToBackend(config);
+}
+
+export async function syncNightPauseConfigToBackend(config: NightPauseConfig): Promise<void> {
+  await invoke("set_night_pause_config", {
+    enabled: config.enabled,
+    startMinutes: config.startMinutes,
+    endMinutes: config.endMinutes,
+  });
+}
+
+/** Call once on app boot (main window) so Rust's in-memory config matches SQLite. */
+export async function loadAndSyncNightPauseConfig(): Promise<NightPauseConfig> {
+  const config = await getNightPauseConfig();
+  await syncNightPauseConfigToBackend(config);
+  return config;
+}
+
 
 // --- macOS media-toggle guard (see media.rs's macos_impl module) -------
 //

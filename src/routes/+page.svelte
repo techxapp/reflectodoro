@@ -17,6 +17,7 @@
     saveMediaPauseOnBreakEnabled,
     loadAndSyncBreakNotificationPersistentSetting,
     loadAndSyncHideOverlayOnCallSetting,
+    loadAndSyncNightPauseConfig,
     loadAndSyncMediaToggleGuard,
     loadAndSyncMacosHideMenuBarDockSetting,
     loadAndSyncMacosMediaKeyFallbackSetting,
@@ -38,9 +39,15 @@
 
   type SnoozeInfo = { resume_at: string; minutes: number };
   const SNOOZE_MINUTES_OPTIONS = [30, 60, 120, 360, 720];
+  // Handles arbitrary durations, not just SNOOZE_MINUTES_OPTIONS' round
+  // values -- night pause arms a pause lasting until its window's end (see
+  // customPauseMinutes below), which is rarely a whole number of hours.
+  // Output for the fixed options is unchanged ("30 min", "1 hr", "12 hr").
   function snoozeOptionLabel(minutes: number): string {
-    const hours = minutes / 60;
-    return `Pause for ${hours < 1 ? `${minutes} min` : `${hours} hr`}`;
+    if (minutes < 60) return `Pause for ${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest === 0 ? `Pause for ${hours} hr` : `Pause for ${hours} hr ${rest} min`;
   }
 
   let now = $state(new Date());
@@ -115,6 +122,14 @@
   // plain enabled flag (POMODORO_ENABLED is false for both a snooze and a
   // permanent Off -- snoozeInfo is what tells them apart).
   const pomodoroSelection = $derived(snoozeInfo ? String(snoozeInfo.minutes) : enabled ? "on" : "off");
+  // A pause the user didn't pick from this dropdown -- in practice night
+  // pause, which arms one lasting until its window's end (see CLAUDE.md's
+  // "Android" / Night pause). Its duration won't match any fixed option, so
+  // without surfacing it as an option of its own the <select> would render
+  // with nothing selected while the pause is active.
+  const customPauseMinutes = $derived(
+    snoozeInfo && !SNOOZE_MINUTES_OPTIONS.includes(snoozeInfo.minutes) ? snoozeInfo.minutes : null,
+  );
   const snoozeResumeLabel = $derived.by(() => {
     if (!snoozeInfo) return "";
     const resumeAt = new Date(snoozeInfo.resume_at);
@@ -299,6 +314,7 @@
     await refreshMediaPauseStatus();
     await loadAndSyncBreakNotificationPersistentSetting();
     await loadAndSyncHideOverlayOnCallSetting();
+    await loadAndSyncNightPauseConfig();
     await loadAndSyncMediaToggleGuard();
     await loadAndSyncMacosHideMenuBarDockSetting();
     await loadAndSyncScreenTimeTrackingSetting();
@@ -385,6 +401,9 @@
         {#each SNOOZE_MINUTES_OPTIONS as minutes (minutes)}
           <option value={String(minutes)}>{snoozeOptionLabel(minutes)}</option>
         {/each}
+        {#if customPauseMinutes !== null}
+          <option value={String(customPauseMinutes)}>{snoozeOptionLabel(customPauseMinutes)}</option>
+        {/if}
         <option value="off">Pomodoro: Off</option>
       </select>
 

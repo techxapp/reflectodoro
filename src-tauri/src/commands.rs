@@ -336,6 +336,27 @@ pub struct SnoozeInfo {
 pub fn snooze_pomodoro(app: AppHandle, minutes: u32) -> SnoozeInfo {
     let minutes = minutes.clamp(SNOOZE_MIN_MINUTES, SNOOZE_MAX_MINUTES);
     let resume_at = chrono::Local::now() + chrono::Duration::minutes(minutes as i64);
+    arm_snooze(&app, resume_at)
+}
+
+/// Arms a pause that auto-resumes at `resume_at`, shared by
+/// `snooze_pomodoro` (the user picking a duration from the main window's
+/// dropdown) and by `run_scheduler`'s night-pause trigger (the scheduler
+/// arming one for the user at the start of their configured overnight
+/// window -- see CLAUDE.md's "Android" / Night pause). Night pause
+/// deliberately reuses this whole mechanism rather than having its own:
+/// the wall-clock auto-resume poll, the main window's dropdown/"Resumes at"
+/// hint, the Android SharedPreferences persistence, and `.setup()`'s
+/// cold-start restore then all apply to it with no extra code.
+///
+/// `resume_at` is an absolute instant rather than a duration because night
+/// pause's is a wall-clock target (the window's end); `SnoozeInfo.minutes`
+/// is derived from it purely for display. Note `snooze_pomodoro`'s
+/// `[SNOOZE_MIN_MINUTES, SNOOZE_MAX_MINUTES]` clamp stays on the user-facing
+/// command only -- a night-pause window can legitimately be far longer than
+/// any dropdown option.
+pub(crate) fn arm_snooze(app: &AppHandle, resume_at: chrono::DateTime<chrono::Local>) -> SnoozeInfo {
+    let minutes = (resume_at - chrono::Local::now()).num_minutes().max(0) as u32;
     let resume_at_iso = resume_at.to_rfc3339();
 
     POMODORO_ENABLED.store(false, Ordering::SeqCst);
@@ -346,7 +367,7 @@ pub fn snooze_pomodoro(app: AppHandle, minutes: u32) -> SnoozeInfo {
         resume_at: resume_at_iso,
         minutes,
     };
-    log::info!("snooze_pomodoro: pausing for {minutes} min, resuming at {}", info.resume_at);
+    log::info!("arm_snooze: pausing for {minutes} min, resuming at {}", info.resume_at);
 
     let _ = app.emit("pomodoro://enabled-changed", false);
     let _ = app.emit("pomodoro://snooze-changed", Some(info.clone()));
@@ -876,6 +897,38 @@ pub fn get_hide_overlay_on_call_enabled() -> bool {
 #[tauri::command]
 pub fn set_hide_overlay_on_call_enabled(enabled: bool) {
     HIDE_OVERLAY_ON_CALL_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+/// Mirrors `app_setting.night_pause_enabled`/`night_pause_start_minutes`/
+/// `night_pause_end_minutes` (see CLAUDE.md's "Android" -- Night pause).
+/// Snake_case fields, no camelCase rename -- matches `SnoozeInfo`'s
+/// convention, read directly on the frontend.
+#[derive(Clone, serde::Serialize)]
+pub struct NightPauseConfig {
+    pub enabled: bool,
+    pub start_minutes: u32,
+    pub end_minutes: u32,
+}
+
+#[tauri::command]
+pub fn get_night_pause_config() -> NightPauseConfig {
+    NightPauseConfig {
+        enabled: crate::NIGHT_PAUSE_ENABLED.load(Ordering::SeqCst),
+        start_minutes: crate::NIGHT_PAUSE_START_MINUTES.load(Ordering::SeqCst),
+        end_minutes: crate::NIGHT_PAUSE_END_MINUTES.load(Ordering::SeqCst),
+    }
+}
+
+/// Android only in effect -- `run_scheduler`'s night-pause trigger, the sole
+/// consumer of these, is `#[cfg(target_os = "android")]`-gated. Nothing is
+/// mirrored into SharedPreferences: night pause expresses itself purely
+/// through the existing `POMODORO_ENABLED`/snooze state (see
+/// `arm_snooze`), which Kotlin already persists and restores on its own.
+#[tauri::command]
+pub fn set_night_pause_config(enabled: bool, start_minutes: u32, end_minutes: u32) {
+    crate::NIGHT_PAUSE_ENABLED.store(enabled, Ordering::SeqCst);
+    crate::NIGHT_PAUSE_START_MINUTES.store(start_minutes, Ordering::SeqCst);
+    crate::NIGHT_PAUSE_END_MINUTES.store(end_minutes, Ordering::SeqCst);
 }
 
 /// Only available when dev_mode is on -- bypasses the unlock formula entirely.

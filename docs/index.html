@@ -1603,6 +1603,13 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
+              <p class="timeline-date">Thursday, Sep 24, 2026</p>
+              <ul class="timeline-items">
+                <li>Android can now pause breaks overnight on its own. Set a window in Settings &mdash; 10pm to 8am by default, on unless you turn it off &mdash; and Pomodoro mode pauses itself when it starts and resumes when it ends, so the schedule no longer interrupts your sleep. To get breaks back early, just set Pomodoro to On; it stays on for the rest of that night</li>
+                <li>Fixed Android playing two notification sounds for a single break. If the system had killed the app in the background, its &ldquo;tap to reopen&rdquo; notification sounded moments before the real break notification &mdash; worst overnight, where an aggressive battery manager could repeat it every 25-30 minutes all night. The recovery notification is now silent, and still there to tap</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
               <p class="timeline-date">Wednesday, Sep 23, 2026</p>
               <ul class="timeline-items">
                 <li>Fixed Most Important Tasks and the Not To Do list going missing on the break screen: a failed save could vanish silently while the text box still showed what you'd typed, and the break screen didn't always pick up the latest content if it missed a live update. Saves now show an inline error when something goes wrong, and the break screen re-reads the latest lists every time a new break opens</li>
@@ -1658,23 +1665,15 @@
                 <li>Simplified how the app sets up its local database on first launch, and cleaned out the upgrade machinery left over from earlier versions. Existing reflections, settings and pairings are untouched</li>
               </ul>
             </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Thursday, Sep 17, 2026</p>
-              <ul class="timeline-items">
-                <li>Extended encryption at rest to your screen time history: the names of the apps you use are now encrypted on disk the same way your reflections and task lists already are</li>
-                <li>Added per-device auto-sync for paired devices, plus a home-screen widget to sync and manage pairings without opening Settings</li>
-                <li>Added saveable bulk-edit Prefill presets for recurring routines (sleep, lunch, ...), with buttons to apply all of them or just the ones you select at once</li>
-                <li>Fixed the main window's clock freezing after switching tabs, updated the snooze duration options, and switched the reflection list to show entries oldest-first, matching &ldquo;View all&rdquo;</li>
-              </ul>
-            </div>
             <p class="timeline-tier reveal">Previous 3 weeks</p>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Sep 14 &ndash; 20, 2026</p>
               <ul class="timeline-items">
-                <li>Added a daily cap on emergency-exit (breakit) code uses, a &ldquo;Coming next&rdquo; preview and bulk-edit/full-day view for reflections, an auto-scrolling reflection list newest-first sorted, and a configurable quote panel pulling short text from a user-set API for the end of a break</li>
-                <li>Added encryption at rest for reflections and task lists, with the key held in your operating system's own secure storage (Windows Credential Manager, macOS Keychain, Linux Secret Service, Android Keystore), and added a privacy policy page</li>
-                <li>Fixed the macOS break screen getting hidden behind fullscreen apps and related media-pause bugs, the overlay clock showing stale time right when a break opens, and the reflection field pre-filling from the wrong slot instead of your last entry</li>
-                <li>Added the Google Play Store listing identifier, kept Android debug symbols for crash reports, improved macOS startup diagnostics, and stopped writing the emergency-exit challenge value to the log file</li>
+                <li>Added a daily cap on emergency-exit (breakit) code uses, a &ldquo;Coming next&rdquo; preview, bulk-edit and full-day views for reflections with saveable Prefill presets for recurring routines (sleep, lunch, ...), an auto-scrolling reflection list now ordered oldest-first to match &ldquo;View all&rdquo;, and a configurable quote panel pulling short text from a user-set API for the end of a break</li>
+                <li>Added encryption at rest for reflections, task lists and your screen time history &mdash; the names of the apps you use are encrypted on disk too &mdash; with the key held in your operating system's own secure storage (Windows Credential Manager, macOS Keychain, Linux Secret Service, Android Keystore), and added a privacy policy page</li>
+                <li>Added per-device auto-sync for paired devices, plus a home-screen widget to sync and manage pairings without opening Settings</li>
+                <li>Fixed the macOS break screen getting hidden behind fullscreen apps and related media-pause bugs, the main window and overlay clocks freezing or showing stale time, and the reflection field pre-filling from the wrong slot instead of your last entry</li>
+                <li>Added the Google Play Store listing identifier, kept Android debug symbols for crash reports, improved macOS startup diagnostics, refreshed the snooze duration options, and stopped writing the emergency-exit challenge value to the log file</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">
