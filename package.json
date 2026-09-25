@@ -4,6 +4,7 @@
   "description": "",
   "type": "module",
   "scripts": {
+    "release": "node scripts/release.mjs",
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
