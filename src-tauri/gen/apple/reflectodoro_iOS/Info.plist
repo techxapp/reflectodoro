@@ -20,6 +20,12 @@
 	<string>0.15.0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_reflectodoro._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Reflectodoro uses your local network to find and sync with your other devices on the same wifi. Nothing is sent to any server.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

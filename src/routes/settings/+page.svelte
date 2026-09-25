@@ -1280,12 +1280,18 @@
     <p class="hint">
       Sync reflections, task lists, wellness check-ins, and screen time directly with another
       device on the same wifi network &mdash; no account, no cloud. Settings are never included.
-      <br/> For auto-sync to work, both laptop and phone should be active at start of break.
+      {#if !isIos}
+        <br/> For auto-sync to work, both laptop and phone should be active at start of break.
+      {/if}
     </p>
     {#if isIos}
-      <p class="hint warning">
-        Not available on iPhone yet &mdash; this device can't find or be found by other devices. Use
-        Data export/import above to move entries across in the meantime.
+      <p class="hint">
+        On iPhone this is manual only, and works while Reflectodoro is open &mdash; iOS suspends
+        apps in the background, so a sync started on your laptop won't reach a phone in your
+        pocket. The first time it runs, iOS asks for Local Network permission; if that was
+        declined, turn it back on in iOS Settings &rarr; Reflectodoro &rarr; Local Network, then
+        reopen this page. A denied permission looks exactly like an empty network here: every
+        device stays offline.
       </p>
     {/if}
 
@@ -1297,15 +1303,17 @@
             ></span>
             <span class="paired-device-name">{deviceLabel(device.name, device.deviceId)} <span class="hint">({device.platform})</span></span>
             <span class="hint">Last synced: {formatLastSync(device.lastSyncAt)}</span>
-            <label class="checkbox auto-sync-checkbox">
-              <input
-                type="checkbox"
-                checked={device.autoSyncEnabled}
-                disabled={autoSyncBusyId === device.deviceId}
-                onchange={() => toggleDeviceAutoSync(device)}
-              />
-              Auto-sync
-            </label>
+            {#if !isIos}
+              <label class="checkbox auto-sync-checkbox">
+                <input
+                  type="checkbox"
+                  checked={device.autoSyncEnabled}
+                  disabled={autoSyncBusyId === device.deviceId}
+                  onchange={() => toggleDeviceAutoSync(device)}
+                />
+                Auto-sync
+              </label>
+            {/if}
             <button
               type="button"
               onclick={() => runDeviceSync(device)}

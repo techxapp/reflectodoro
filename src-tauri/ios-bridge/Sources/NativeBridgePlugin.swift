@@ -3,6 +3,11 @@
 // the main thread (`.setup()`, synchronous commands). So no method here may
 // hop to the main thread: nothing UIKit, only thread-safe Foundation /
 // UserNotifications / ActivityKit calls.
+//
+// Nothing here may depend on the *caller's* run loop either: the ipc-queue
+// call is a one-shot with none. The Bonjour methods at the bottom are the
+// case that needs one, and they own a dedicated thread for it -- see
+// P2pBonjour.swift.
 
 import AVFoundation
 import Foundation
@@ -51,6 +56,17 @@ class PersistSnoozeArgs: Decodable {
 
 class PathArgs: Decodable {
   let path: String
+}
+
+class RegisterP2pServiceArgs: Decodable {
+  let deviceId: String
+  let name: String
+  let platform: String
+  let port: Int
+}
+
+class DiscoverP2pServicesArgs: Decodable {
+  let timeoutMs: Int
 }
 
 private func parseIso(_ s: String) -> Date? {
@@ -296,6 +312,36 @@ class NativeBridgePlugin: Plugin {
     } catch {
       invoke.reject("couldn't exclude \(args.path) from backup: \(error)")
     }
+  }
+
+  // --- P2P LAN sync: Bonjour discovery -------------------------------------
+
+  /// Advertises this device so peers' `browse_lan` can find it. Resolves as
+  /// soon as the publish is dispatched, not when it completes: NetService
+  /// reports the outcome on a delegate callback (logged in P2pBonjour.swift),
+  /// and the Rust caller is `advertise_self`, reached from `.setup()` -- the
+  /// one place that must not block. Same shape, and same reasoning, as the
+  /// Kotlin registerP2pService.
+  @objc public func registerP2pService(_ invoke: Invoke) throws {
+    let args = try invoke.parseArgs(RegisterP2pServiceArgs.self)
+    P2pBonjour.shared.publish(
+      deviceId: args.deviceId, name: args.name, platform: args.platform, port: args.port)
+    invoke.resolve()
+  }
+
+  @objc public func unregisterP2pService(_ invoke: Invoke) {
+    P2pBonjour.shared.unpublish()
+    invoke.resolve()
+  }
+
+  /// Runs a browse burst for `timeoutMs` and resolves with
+  /// `{"devices": [{deviceId, name, platform, host, port}]}` -- the same JSON
+  /// the Kotlin discoverP2pServices produces, so p2p_sync.rs's two mobile
+  /// arms share one parser. Resolves from the burst's timer, well after this
+  /// method returns.
+  @objc public func discoverP2pServices(_ invoke: Invoke) throws {
+    let args = try invoke.parseArgs(DiscoverP2pServicesArgs.self)
+    P2pBonjour.shared.discover(invoke: invoke, timeoutMs: args.timeoutMs)
   }
 }
 

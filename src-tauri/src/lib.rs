@@ -1273,14 +1273,17 @@ pub fn run() {
             // this device has no usable network interface) logs and leaves
             // the rest of the app unaffected.
             //
-            // Not on iOS yet: with no LAN discovery there (p2p_sync.rs) no
-            // peer could reach the listener, and opening it would risk an
-            // unexplained Local Network permission prompt.
-            #[cfg(not(target_os = "ios"))]
-            {
-                let p2p_listener_handle = handle.clone();
-                tauri::async_runtime::spawn(p2p_sync::run_listener(p2p_listener_handle));
-            }
+            // iOS runs both too, as of Bonjour discovery landing there
+            // (p2p_sync.rs). The listener used to be skipped on iOS because,
+            // with nothing discoverable, it could only produce an
+            // unexplained Local Network permission prompt -- that prompt is
+            // now both expected and explained, by the
+            // NSLocalNetworkUsageDescription string in gen/apple/project.yml.
+            // What iOS can't do is accept a connection while suspended, so a
+            // sync a desktop peer starts only lands if the app is open on the
+            // phone.
+            let p2p_listener_handle = handle.clone();
+            tauri::async_runtime::spawn(p2p_sync::run_listener(p2p_listener_handle));
             p2p_sync::advertise_self(&handle);
 
             Ok(())

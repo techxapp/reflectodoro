@@ -6,6 +6,10 @@
 //! touching the main thread, so these are safe to call from `.setup()` and
 //! from synchronous commands (which run on the main thread) -- see the
 //! Swift file's header before adding anything UIKit-based.
+//!
+//! One exception: `discover_p2p_services` blocks its caller for the length of
+//! its browse window, so it must only be called from async code on the tokio
+//! pool. Everything else here returns promptly.
 #![cfg(target_os = "ios")]
 
 use serde_json::Value;
@@ -113,6 +117,44 @@ impl<R: Runtime> IosBridge<R> {
 
     pub fn exclude_from_backup(&self, path: &str) -> Result<Value, PluginInvokeError> {
         self.0.run_mobile_plugin("excludeFromBackup", serde_json::json!({ "path": path }))
+    }
+
+    /// Advertises this device on the LAN for P2P sync (p2p_sync.rs) via
+    /// Bonjour -- `mdns-sd`'s raw multicast sockets would need Apple's
+    /// restricted multicast entitlement, so like Android this goes through
+    /// the native API instead (see P2pBonjour.swift for why `NetService`
+    /// rather than Network.framework). `device_id`/`name`/`platform` become
+    /// the service's TXT record; `port` is p2p_sync::PORT, the same Rust TCP
+    /// listener desktop peers connect to -- only discovery is native.
+    ///
+    /// Returns as soon as the publish is dispatched, so it stays safe to call
+    /// from `.setup()`.
+    pub fn register_p2p_service(&self, device_id: &str, name: &str, platform: &str, port: u16) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin(
+            "registerP2pService",
+            serde_json::json!({ "deviceId": device_id, "name": name, "platform": platform, "port": port }),
+        )
+    }
+
+    /// Stops advertising. Only called as the unregister-before-register half
+    /// of `advertise_self`'s idempotency, same as Android's.
+    pub fn unregister_p2p_service(&self) -> Result<Value, PluginInvokeError> {
+        self.0.run_mobile_plugin("unregisterP2pService", ())
+    }
+
+    /// Runs a Bonjour browse burst for `timeout_ms` and returns
+    /// `{"devices": [{deviceId, name, platform, host, port}]}` -- deliberately
+    /// the exact JSON shape Android's `discover_p2p_services` returns, so
+    /// p2p_sync's two mobile arms can share one parser.
+    ///
+    /// Unlike everything else in this file, this **blocks the calling thread
+    /// for the full `timeout_ms`** (~3s) while the burst runs. That's fine
+    /// only because its one caller is `browse_lan`, reached from async
+    /// commands on the tokio pool -- never from `.setup()` or a synchronous
+    /// command, which would be the main thread.
+    pub fn discover_p2p_services(&self, timeout_ms: u64) -> Result<Value, PluginInvokeError> {
+        self.0
+            .run_mobile_plugin("discoverP2pServices", serde_json::json!({ "timeoutMs": timeout_ms }))
     }
 }
 

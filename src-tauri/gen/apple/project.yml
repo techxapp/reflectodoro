@@ -60,6 +60,24 @@ targets:
         CFBundleShortVersionString: 0.15.0
         CFBundleVersion: "0.15.0"
         NSSupportsLiveActivities: true
+        # Local Network access. iOS 14+ requires this string for anything
+        # that touches the LAN: the Bonjour publish and browse in
+        # ios-bridge's P2pBonjour.swift, p2p_sync.rs's TCP listener on
+        # 47811, and its outbound connects. There is no API before iOS 18 to
+        # ask whether it was granted, and a denied browse returns no services
+        # and no error -- so a denial is indistinguishable from an empty wifi
+        # all the way up to the UI, which is why Settings carries a hint
+        # about it.
+        NSLocalNetworkUsageDescription: >-
+          Reflectodoro uses your local network to find and sync with your
+          other devices on the same wifi. Nothing is sent to any server.
+        # Required to *browse* (publishing doesn't need it, but there's no
+        # reason to leave it out). Note the type omits the ".local." suffix
+        # that p2p_sync.rs's SERVICE_TYPE carries: a browse for a type that
+        # isn't listed here returns zero results with no error, which looks
+        # exactly like "no peers on this network".
+        NSBonjourServices:
+          - _reflectodoro._tcp
     entitlements:
       path: reflectodoro_iOS/reflectodoro_iOS.entitlements
     scheme:
