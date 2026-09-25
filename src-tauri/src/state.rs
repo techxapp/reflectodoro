@@ -167,6 +167,15 @@ pub struct AppState {
     /// and arrives via a state re-push. Cleared at every break open and close
     /// so a previous break's quote never flashes; empty hides the panel.
     pub quote_text: Mutex<String>,
+    /// The Quote API panel's credit line (`app_setting.quote_api_attribution`),
+    /// Android only -- same reasoning as `quote_text`, but unlike it this is a
+    /// local `app_setting` read with no network round trip, so it's populated
+    /// synchronously alongside `quote_api_url` in
+    /// `native_overlay::refresh_quote_text` rather than deferred to a
+    /// background fetch. Rendered by `native_overlay.html` through its own
+    /// sanitizer (mirroring `sanitizeAttributionHtml` in
+    /// `src/lib/sanitizeHtml.ts`) -- never trusted as raw HTML as-is.
+    pub quote_attribution_html: Mutex<String>,
 }
 
 impl AppState {
@@ -183,6 +192,7 @@ impl AppState {
             missed_slot_count: Mutex::new(1),
             coming_next_text: Mutex::new(String::new()),
             quote_text: Mutex::new(String::new()),
+            quote_attribution_html: Mutex::new(String::new()),
         }
     }
 }

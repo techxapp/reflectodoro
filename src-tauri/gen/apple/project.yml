@@ -57,8 +57,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.15.0
-        CFBundleVersion: "0.15.0"
+        CFBundleShortVersionString: 0.16.0
+        CFBundleVersion: "0.16.0"
         NSSupportsLiveActivities: true
         # Local Network access. iOS 14+ requires this string for anything
         # that touches the LAN: the Bonjour publish and browse in
@@ -139,8 +139,8 @@ targets:
       path: ReflectodoroLiveActivity/Info.plist
       properties:
         CFBundleDisplayName: Reflectodoro
-        CFBundleShortVersionString: 0.15.0
-        CFBundleVersion: "0.15.0"
+        CFBundleShortVersionString: 0.16.0
+        CFBundleVersion: "0.16.0"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

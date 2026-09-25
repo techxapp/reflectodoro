@@ -68,7 +68,7 @@ use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Local, SecondsFormat, Utc};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snow::params::NoiseParams;
 use spake2::{Ed25519Group, Identity, Password, Spake2};
@@ -969,7 +969,66 @@ async fn apply_payload(app: &AppHandle, payload: &SyncPayload) -> Result<SyncRes
         import::import_screen_time_sessions(&mut tx, &cipher, &payload.screen_time_session).await?;
     import::import_bulk_edit_presets(&mut tx, &cipher, &payload.bulk_edit_preset, import::ImportMode::Merge).await?;
 
+    // Every other write path to these two tables (saveTaskList/saveNotToDoList
+    // in db.ts) broadcasts `tasklist://updated`/`nottodolist://updated` after
+    // the write so any already-open window (main, or the break overlay, which
+    // is precreated once and can stay mounted -- and un-remounted -- for an
+    // entire session) picks up the edit live. A sync-applied merge writes the
+    // same tables directly from Rust and has no such broadcast, so an overlay
+    // that was already open before this sync landed kept showing whatever it
+    // loaded at its own mount time through every break until the app was next
+    // restarted -- a real instance of this reached a live break screen. Only
+    // today's row matters, since that's the only date any open window holds
+    // in memory; read the post-merge content back inside the same transaction
+    // so the broadcast can't race a concurrent write to the same row.
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let today_task_list = if payload.daily_task_list.iter().any(|r| r.date == today) {
+        let content: Option<String> = sqlx::query_scalar("SELECT content FROM daily_task_list WHERE date = ?")
+            .bind(&today)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        match content {
+            Some(c) => Some(cipher.decrypt(&c).await?),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let today_not_to_do = if payload.not_to_do_list.iter().any(|r| r.date == today) {
+        let content: Option<String> = sqlx::query_scalar("SELECT content FROM not_to_do_list WHERE date = ?")
+            .bind(&today)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        match content {
+            Some(c) => Some(cipher.decrypt(&c).await?),
+            None => None,
+        }
+    } else {
+        None
+    };
+
     tx.commit().await.map_err(|e| format!("failed to commit sync-apply transaction: {e}"))?;
+
+    // Emitted with the same event name/shape saveTaskList/saveNotToDoList use
+    // (see db.ts's TaskListUpdate/NotToDoUpdate) so the existing
+    // listenForTaskListUpdates/listenForNotToDoListUpdates listeners in every
+    // window apply it unchanged. sourceLabel is deliberately a value no real
+    // window label can equal, so every window (not just "other" windows)
+    // applies the update -- this change didn't originate from any of them.
+    if let Some(content) = today_task_list {
+        let _ = app.emit(
+            "tasklist://updated",
+            serde_json::json!({ "date": today, "content": content, "sourceLabel": "" }),
+        );
+    }
+    if let Some(content) = today_not_to_do {
+        let _ = app.emit(
+            "nottodolist://updated",
+            serde_json::json!({ "date": today, "content": content, "sourceLabel": "" }),
+        );
+    }
 
     Ok(SyncResult {
         // Set by the caller (sync_with_device_inner) where the outgoing

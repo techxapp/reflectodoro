@@ -11,9 +11,10 @@
 //! payload client-side -- this module trusts its input.
 use std::collections::HashMap;
 
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, Sqlite, Transaction};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use crate::crypto::FieldCipher;
 use crate::db;
@@ -833,7 +834,66 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
         }
     }
 
+    // Same staleness gap as p2p_sync.rs's apply_payload, and the same fix:
+    // saveTaskList/saveNotToDoList (db.ts) broadcast tasklist://updated/
+    // nottodolist://updated after every write so an already-open window
+    // (most notably the break overlay, precreated once and potentially still
+    // mounted from hours earlier) picks up the change live, but a file import
+    // writes these tables directly from Rust with no such broadcast. Only
+    // today's row matters, since that's the only date any open window holds
+    // in memory; read the post-write content back inside the same
+    // transaction so the broadcast can't race a concurrent write to the same
+    // row. Correct under both modes: Replace's fresh insert and Merge's
+    // line-merge both already landed in the table by this point.
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let today_task_list = if data.daily_task_list.iter().any(|r| r.date == today) {
+        let content: Option<String> = sqlx::query_scalar("SELECT content FROM daily_task_list WHERE date = ?")
+            .bind(&today)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        match content {
+            Some(c) => Some(cipher.decrypt(&c).await?),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let today_not_to_do = if data.not_to_do_list.iter().any(|r| r.date == today) {
+        let content: Option<String> = sqlx::query_scalar("SELECT content FROM not_to_do_list WHERE date = ?")
+            .bind(&today)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        match content {
+            Some(c) => Some(cipher.decrypt(&c).await?),
+            None => None,
+        }
+    } else {
+        None
+    };
+
     tx.commit().await.map_err(|e| format!("failed to commit import transaction: {e}"))?;
+
+    // Same event name/shape saveTaskList/saveNotToDoList use (see db.ts's
+    // TaskListUpdate/NotToDoUpdate), so the existing
+    // listenForTaskListUpdates/listenForNotToDoListUpdates listeners in every
+    // window apply it unchanged. sourceLabel is a value no real window label
+    // can equal, so every window applies the update, including the one that
+    // triggered the import (Settings' own task-list state, if it's ever
+    // rendered there, should reflect the import too).
+    if let Some(content) = today_task_list {
+        let _ = app.emit(
+            "tasklist://updated",
+            serde_json::json!({ "date": today, "content": content, "sourceLabel": "" }),
+        );
+    }
+    if let Some(content) = today_not_to_do {
+        let _ = app.emit(
+            "nottodolist://updated",
+            serde_json::json!({ "date": today, "content": content, "sourceLabel": "" }),
+        );
+    }
 
     Ok(ImportResult {
         reflection_count: data.reflection.len(),

@@ -63,6 +63,8 @@
       --brand-soft: rgba(220, 79, 44, 0.10);
       --brand-line: rgba(220, 79, 44, 0.30);
       --ok: #16a34a;
+      --bad: #d32b2b;
+      --info: #2563eb;
       --shadow-sm: 0 1px 2px rgba(16, 18, 22, 0.05), 0 6px 16px -10px rgba(16, 18, 22, 0.18);
       --shadow-md: 0 12px 34px -18px rgba(16, 18, 22, 0.32);
       --shadow-lg: 0 34px 70px -34px rgba(16, 18, 22, 0.42);
@@ -93,6 +95,8 @@
         --brand-soft: rgba(91, 140, 255, 0.16);
         --brand-line: rgba(91, 140, 255, 0.36);
         --ok: #43c877;
+        --bad: #ff6b6b;
+        --info: #5b8cff;
         --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40), 0 6px 16px -10px rgba(0, 0, 0, 0.60);
         --shadow-md: 0 12px 34px -18px rgba(0, 0, 0, 0.75);
         --shadow-lg: 0 34px 70px -34px rgba(0, 0, 0, 0.90);
@@ -119,6 +123,8 @@
       --brand-soft: rgba(91, 140, 255, 0.16);
       --brand-line: rgba(91, 140, 255, 0.36);
       --ok: #43c877;
+      --bad: #ff6b6b;
+      --info: #5b8cff;
       --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40), 0 6px 16px -10px rgba(0, 0, 0, 0.60);
       --shadow-md: 0 12px 34px -18px rgba(0, 0, 0, 0.75);
       --shadow-lg: 0 34px 70px -34px rgba(0, 0, 0, 0.90);
@@ -611,8 +617,8 @@
     }
     .support-table td:first-child { font-weight: 500; }
     .support-table .yes { color: var(--ok); font-weight: 700; }
-    .support-table .no { color: var(--text-faint); font-weight: 700; }
-    .support-table .partial { color: var(--brand); font-weight: 700; }
+    .support-table .no { color: var(--bad); font-weight: 700; }
+    .support-table .partial { color: var(--info); font-weight: 700; }
     .table-note {
       display: block; font-size: 10.5px; font-weight: 500;
       color: var(--text-faint); margin-top: 3px; white-space: normal;
@@ -854,12 +860,12 @@
             <div class="mock-bar">
               <span class="lock">&#128274;</span> Break in progress
             </div>
-            <p class="mock-clock mono">04:32</p>
+            <p class="mock-clock mono">03:27</p>
             <span class="mock-label">What did you do in the last pomodoro?</span>
-            <div class="mock-field">Refactored the scheduler so it sleeps to the exact boundary<span class="caret"></span></div>
+            <div class="mock-field">Built a non-dismissible pomodoro break screen to capture self-reflection <span class="caret"></span></div>
             <div class="mock-challenge">
               <span>Emergency exit &mdash; type it exactly</span>
-              <div class="code-str mono">7hKp2mRtXaQ9vLd</div>
+              <div class="code-str mono">7hKp2mRtXa1m</div>
             </div>
             <div class="mock-foot">
               <span>Reflection still required</span>
@@ -970,16 +976,16 @@
             <div class="frame">
               <div class="carousel-track" id="carouselTrack" tabindex="0" role="group" aria-label="Screenshots carousel">
                 <div class="carousel-slide" data-caption="Main window &mdash; wall-clock countdown and Most Important Tasks">
-                  <img class="shot" src="screenshots/SS3.png" alt="Main timer window with wall-clock countdown and Most Important Tasks panel" />
+                  <img class="shot" data-src-light="screenshots/SS3.png" data-src-dark="screenshots/SS3_dark.png" src="screenshots/SS3.png" alt="Main timer window with wall-clock countdown and Most Important Tasks panel" />
                 </div>
                 <div class="carousel-slide" data-caption="Break screen &mdash; reflection required, with the emergency-exit challenge">
-                  <img class="shot" src="screenshots/SS1.png" alt="Break screen requiring a written reflection, with the emergency-exit code challenge" loading="lazy" />
+                  <img class="shot" data-src-light="screenshots/SS1.png" data-src-dark="screenshots/SS1_dark.png" src="screenshots/SS1.png" alt="Break screen requiring a written reflection, with the emergency-exit code challenge" loading="lazy" />
                 </div>
                 <div class="carousel-slide" data-caption="Wellness check-in at the end of the break">
-                  <img class="shot" src="screenshots/SS2.png" alt="Wellness check-in prompt for relaxed eyes, exercise, water, and washroom breaks" loading="lazy" />
+                  <img class="shot" data-src-light="screenshots/SS2.png" data-src-dark="screenshots/SS2_dark.png" src="screenshots/SS2.png" alt="Wellness check-in prompt for relaxed eyes, exercise, water, and washroom breaks" loading="lazy" />
                 </div>
                 <div class="carousel-slide" data-caption="Entries &mdash; daily wellness stats and reflection history">
-                  <img class="shot" src="screenshots/SS4.png" alt="Entries view showing daily wellness stats and reflection history on a calendar" loading="lazy" />
+                  <img class="shot" data-src-light="screenshots/SS4.png" data-src-dark="screenshots/SS4_dark.png" src="screenshots/SS4.png" alt="Entries view showing daily wellness stats and reflection history on a calendar" loading="lazy" />
                 </div>
               </div>
             </div>
@@ -1198,8 +1204,8 @@
                   <th scope="col">Feature</th>
                   <th scope="col">Windows</th>
                   <th scope="col">Android</th>
-                  <th scope="col">Linux</th>
                   <th scope="col">macOS</th>
+                  <th scope="col">Linux</th>
                 </tr>
               </thead>
               <tbody>
@@ -1214,8 +1220,8 @@
                   <td>No free pass (reflection required)</td>
                   <td class="yes">&#10003;</td>
                   <td class="yes">&#10003;</td>
-                  <td class="partial">&#10003;<span class="table-note">Only X11 Desktop Supported</span></td>
                   <td class="yes">&#10003;</td>
+                  <td class="partial">&#10003;<span class="table-note">Only X11 based Desktops Supported</span></td>
                 </tr>
                 <tr>
                   <td>Emergency exit challenge</td>
@@ -1242,8 +1248,8 @@
                   <td>Auto-pause media on break</td>
                   <td class="yes">&#10003;</td>
                   <td class="yes">&#10003;</td>
-                  <td class="yes">&#10003;</td>
                   <td class="partial">&#10003;<span class="table-note">Best effort</span></td>
+                  <td class="yes">&#10003;</td>
                 </tr>
                 <tr>
                   <td>Cross-device sync (Local)</td>
@@ -1263,8 +1269,8 @@
                   <td>App usage screen time</td>
                   <td class="yes">&#10003;</td>
                   <td class="yes">&#10003;</td>
-                  <td class="no">&#10007;<span class="table-note">Planned</span></td>
                   <td class="yes">&#10003;</td>
+                  <td class="no">&#10007;<span class="table-note">Planned</span></td>
                 </tr>
               </tbody>
             </table>
@@ -1280,8 +1286,8 @@
             <h2>Most focus apps let you shrug off the break.</h2>
             <p>Plenty of Pomodoro apps exist &mdash; a few even lock the screen. Almost none also make you say what
                you did before letting you back in. Here's how Reflectodoro stacks up against the well-known
-               names in each camp: a gamified timer, a mainstream cross-platform app, a paid enforced-break
-               competitor, and the closest open-source analog.</p>
+               names in each camp: a paid enforced-break competitor, a gamified timer, a mainstream
+               cross-platform app, and the closest open-source analog.</p>
           </div>
 
           <div class="table-wrap reveal">
@@ -1290,9 +1296,9 @@
                 <tr>
                   <th scope="col">Feature</th>
                   <th scope="col">Reflectodoro</th>
+                  <th scope="col">FocusMe</th>
                   <th scope="col">Forest</th>
                   <th scope="col">Focus To-Do</th>
-                  <th scope="col">FocusMe</th>
                   <th scope="col">pomohardo</th>
                 </tr>
               </thead>
@@ -1301,21 +1307,21 @@
                   <td>Written reflection required to unlock the break</td>
                   <td class="yes">&#10003;</td>
                   <td class="no">&#10007;</td>
-                  <td class="partial">&#10003;<span class="table-note">Optional, skippable</span></td>
                   <td class="no">&#10007;</td>
+                  <td class="partial">&#10003;<span class="table-note">Optional, skippable</span></td>
                   <td class="no">&#10007;</td>
                 </tr>
                 <tr>
                   <td>Break screen resists closing (fullscreen, skip-protected)</td>
                   <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
                   <td class="no">&#10007;<span class="table-note">Breaks are on trust</span></td>
                   <td class="no">&#10007;<span class="table-note">Break can be skipped</span></td>
-                  <td class="yes">&#10003;</td>
                   <td class="yes">&#10003;</td>
                 </tr>
                 <tr>
                   <td>Fixed Wall-clock slots (not a rolling timer)</td>
-                  <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;<span class="table-note">Zero-config, Just install app and you are good to go.</span></td>
                   <td class="no">&#10007;</td>
                   <td class="no">&#10007;</td>
                   <td class="no">&#10007;</td>
@@ -1324,9 +1330,9 @@
                 <tr>
                   <td>Desktop: Windows, macOS &amp; Linux</td>
                   <td class="yes">&#10003;</td>
+                  <td class="yes">&#10003;</td>
                   <td class="no">&#10007;<span class="table-note">No desktop app</span></td>
                   <td class="partial">&#10003;<span class="table-note">No Linux</span></td>
-                  <td class="yes">&#10003;</td>
                   <td class="yes">&#10003;</td>
                 </tr>
                 <tr>
@@ -1349,41 +1355,41 @@
                   <td>Your entries encrypted at rest on your device</td>
                   <td class="yes">&#10003;</td>
                   <td class="no">&#10007;<span class="table-note">Only in-transit encryption documented</span></td>
-                  <td class="partial">&#10003;<span class="table-note">Profile content only, per its privacy policy</span></td>
                   <td class="no">&#10007;<span class="table-note">Only in-transit encryption documented</span></td>
+                  <td class="partial">&#10003;<span class="table-note">Profile content only, per its privacy policy</span></td>
                   <td class="no">&#10007;<span class="table-note">Probabily No</span></td>
                 </tr>
                 <tr>
                   <td>Is your data visible to the app maker?</td>
                   <td class="yes">No<span class="table-note">No server; it never leaves your device automatically.</span></td>
+                  <td class="partial">Partly<span class="table-note">Device ID &amp; synced plans; blocking stays local</span></td>
                   <td class="no">Yes<span class="table-note">Account &amp; content stored on its servers, per store listing</span></td>
                   <td class="partial">If you sign in<span class="table-note">Synced tasks are stored server-side; local mode isn't</span></td>
-                  <td class="partial">Partly<span class="table-note">Device ID &amp; synced plans; blocking stays local</span></td>
                   <td class="yes">Probabily No<span class="table-note">No account mentioned</span></td>
                 </tr>
                 <tr>
                   <td>Analyzes your data (cloud-side)?</td>
                   <td class="yes">No<span class="table-note">Nothing is sent anywhere to analyze</span></td>
+                  <td class="partial">Usage analytics<span class="table-note">&ldquo;Analysing website and service use&rdquo;</span></td>
                   <td class="partial">Usage &amp; diagnostics<span class="table-note">Collected, per store listing</span></td>
                   <td class="partial">Usage &amp; crash analytics<span class="table-note">Says task content isn't read</span></td>
-                  <td class="partial">Usage analytics<span class="table-note">&ldquo;Analysing website and service use&rdquo;</span></td>
                   <td class="yes">Probabily No</td>
                 </tr>
                 <tr>
                   <td>Shares data with third parties?</td>
                   <td class="yes">No<span class="table-note">Nothing you write leaves your device</span></td>
+                  <td class="no">Yes<span class="table-note">Google Analytics, Meta Pixel, Clarity (website)</span></td>
                   <td class="no">Yes<span class="table-note">Email shared for marketing, per store listing</span></td>
                   <td class="no">Yes<span class="table-note">Firebase, Bugly, payment providers</span></td>
-                  <td class="no">Yes<span class="table-note">Google Analytics, Meta Pixel, Clarity (website)</span></td>
                   <td class="yes">Probabily No</td>
                 </tr>
                 <tr>
                   <td>Local-only mode available?</td>
-                  <td class="yes">Always<span class="table-note">Local is the only mode; LAN sync is optional</span></td>
+                  <td class="yes">&#10003;<span class="table-note">Always, Local is the only mode; LAN sync is optional</span></td>
+                  <td class="yes">&#10003;<span class="table-note">Blocking works without an account</span></td>
                   <td class="partial">Not documented</td>
                   <td class="yes">&#10003;<span class="table-note">Local mode, no account; no sync</span></td>
-                  <td class="yes">&#10003;<span class="table-note">Blocking works without an account</span></td>
-                  <td class="yes">Config file only<span class="table-note">No account mentioned</span></td>
+                  <td class="yes">&#10003;<span class="table-note">No account mentioned</span></td>
                 </tr>
                 <tr>
                   <td>Open source</td>
@@ -1441,10 +1447,9 @@
             <details class="faq-item reveal">
               <summary>Can I still answer a phone call while the break screen is up on Android?</summary>
               <div class="faq-answer">
-                <p>Yes. Android's break screen is a system overlay drawn on top of other apps, not a lock
-                   screen, so incoming-call UI and the notification shade still work over it. If the call's
+                <p>Yes. The break screen will auto-close if there is incoming normal/VoIP call. If the call's
                    own full-screen UI doesn't pop up automatically, pull down the notification bar from the
-                   top of the screen and answer from there &mdash; the break screen resumes underneath once
+                   top of the screen and answer from there &mdash; the break screen resumes once
                    you're done.</p>
               </div>
             </details>
@@ -1578,7 +1583,7 @@
               <p>Help documenting tasks, tracking progress, and summarizing your reflections.</p>
             </div>
             <div class="card reveal">
-              <span class="roadmap-badge">Planned</span>
+              <span class="roadmap-badge">In Progress</span>
               <h3>iOS build &#127843;</h3>
               <p>Add support for same app on iOS.</p>
             </div>
@@ -1597,20 +1602,30 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
+              <p class="timeline-date">Thursday, Sep 24, 2026</p>
+              <ul class="timeline-items">
+                <li>Android can now pause breaks overnight on its own. Set a window in Settings &mdash; 10pm to 8am by default, on unless you turn it off &mdash; and Pomodoro mode pauses itself when it starts and resumes when it ends, so the schedule no longer interrupts your sleep. To get breaks back early, just set Pomodoro to On; it stays on for the rest of that night</li>
+                <li>Fixed Android playing two notification sounds for a single break. If the system had killed the app in the background, its &ldquo;tap to reopen&rdquo; notification sounded moments before the real break notification &mdash; worst overnight, where an aggressive battery manager could repeat it every 25-30 minutes all night. The recovery notification is now silent, and still there to tap</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
               <p class="timeline-date">Wednesday, Sep 23, 2026</p>
               <ul class="timeline-items">
+                <li>Fixed Most Important Tasks and the Not To Do list going missing on the break screen: a failed save could vanish silently while the text box still showed what you'd typed, and the break screen didn't always pick up the latest content if it missed a live update. Saves now show an inline error when something goes wrong, and the break screen re-reads the latest lists every time a new break opens</li>
+                <li>Added media pause-on-break to iOS, and fixed the Timer page overflowing the screen on some iPhones</li>
+                <li>Fixed iOS break notifications and the Lock Screen countdown to follow Concentration mode's shorter break timing instead of always assuming a 5-minute break</li>
+                <li>Concentration mode's 1-minute break now skips the quote panel entirely -- too short to read one, so the break screen no longer shows it and no call is made to your quote API for it</li>
                 <li>iPhone can now sync directly with your other devices over wifi, the same way your laptop and Android phone already do &mdash; pair once with a PIN, then sync with a tap from either side, with no account, no cloud and nothing passing through anyone else's server. Syncing on iPhone is manual and works while the app is open, since iOS suspends apps in the background</li>
-                <li>iPhone now pauses whatever else is playing when a break starts, and the end-of-break quote panel works there too</li>
-                <li>Fixed Concentration mode's break reminders arriving at the normal schedule's times on iPhone rather than its own, and the Timer page running off the edge of the screen there</li>
                 <li>New app icons for iPhone and iPad</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Tuesday, Sep 22, 2026</p>
               <ul class="timeline-items">
-                <li>First iPhone version: the same wall-clock schedule as every other platform, a break reminder with a Lock Screen and Dynamic Island countdown, the reflection screen with the emergency-exit code, and your entries encrypted on disk with the key held in the iPhone's Keychain. iOS doesn't let any app cover other apps, so a break arrives as a notification and the reflection screen appears when you open the app. Not on the App Store yet</li>
-                <li>Added a theme setting &mdash; Auto, Light or Dark &mdash; in Settings, so you can pick one regardless of what your system is set to</li>
-                <li>Lengthened Concentration mode's short break to a full minute, and redesigned the app icon</li>
+                <li>Shipped iOS Phase 1: Reflectodoro now runs on iPhone and iPad &mdash; wall-clock break scheduling, break notifications, a Live Activity countdown on the Lock Screen, the full break screen with the emergency-exit challenge, and Keychain-backed encryption. Not yet distributed through the App Store; for now it's installed from Xcode</li>
+                <li>Added a Theme setting (Auto/Light/Dark) to Settings, applied instantly across every open window</li>
+                <li>Lengthened Concentration mode's short break from 30 seconds to a full minute, and gave the app a redesigned hourglass icon across desktop, Android, and iOS</li>
+                <li>Minor layout polish to the home screen and Settings pages</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">
@@ -1651,25 +1666,15 @@
                 <li>Simplified how the app sets up its local database on first launch, and cleaned out the upgrade machinery left over from earlier versions. Existing reflections, settings and pairings are untouched</li>
               </ul>
             </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Thursday, Sep 17, 2026</p>
-              <ul class="timeline-items">
-                <li>Extended encryption at rest to your screen time history: the names of the apps you use are now encrypted on disk the same way your reflections and task lists already are</li>
-                <li>Added per-device auto-sync for paired devices, plus a home-screen widget to sync and manage pairings without opening Settings</li>
-                <li>Added saveable bulk-edit Prefill presets for recurring routines (sleep, lunch, ...), with buttons to apply all of them or just the ones you select at once</li>
-                <li>Fixed the main window's clock freezing after switching tabs, updated the snooze duration options, and switched the reflection list to show entries oldest-first, matching &ldquo;View all&rdquo;</li>
-              </ul>
-            </div>
             <p class="timeline-tier reveal">Previous 3 weeks</p>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Sep 14 &ndash; 20, 2026</p>
               <ul class="timeline-items">
-                <li>Added encryption at rest: your reflections and task lists are now stored encrypted on disk, with the key held in your operating system's own secure storage (Windows Credential Manager, macOS Keychain, Linux Secret Service, Android Keystore). Existing entries are encrypted automatically on first launch, and exports stay readable so you can still move your data between devices</li>
-                <li>Added a configurable quote panel to the break screen, pulling short text from a user-set API endpoint, and a &ldquo;Coming next&rdquo; preview that stays visible after saving</li>
-                <li>Added a daily cap on emergency-exit (breakit) code uses, a bulk-edit and full-day view for reflections, an auto-scrolling reflection list, and newest-first sorting on the Entries page</li>
-                <li>Added a privacy policy page, and stopped writing the emergency-exit challenge value to the log file, so logs stay safe to share when reporting a bug</li>
-                <li>Fixed the macOS break screen getting hidden behind fullscreen apps and related media-pause bugs, the break screen's clock showing stale time right when a break opened, and the reflection field pre-filling from the wrong slot instead of your last entry</li>
-                <li>Kept Android debug symbols for crash reports, improved macOS startup diagnostics, and added the Google Play Store listing identifier</li>
+                <li>Added a daily cap on emergency-exit (breakit) code uses, a &ldquo;Coming next&rdquo; preview, bulk-edit and full-day views for reflections with saveable Prefill presets for recurring routines (sleep, lunch, ...), an auto-scrolling reflection list now ordered oldest-first to match &ldquo;View all&rdquo;, and a configurable quote panel pulling short text from a user-set API for the end of a break</li>
+                <li>Added encryption at rest for reflections, task lists and your screen time history &mdash; the names of the apps you use are encrypted on disk too &mdash; with the key held in your operating system's own secure storage (Windows Credential Manager, macOS Keychain, Linux Secret Service, Android Keystore), and added a privacy policy page</li>
+                <li>Added per-device auto-sync for paired devices, plus a home-screen widget to sync and manage pairings without opening Settings</li>
+                <li>Fixed the macOS break screen getting hidden behind fullscreen apps and related media-pause bugs, the main window and overlay clocks freezing or showing stale time, and the reflection field pre-filling from the wrong slot instead of your last entry</li>
+                <li>Added the Google Play Store listing identifier, kept Android debug symbols for crash reports, improved macOS startup diagnostics, refreshed the snooze duration options, and stopped writing the emergency-exit challenge value to the log file</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">
@@ -1747,10 +1752,20 @@
         if (set === 'light') return false;
         return mql.matches;
       }
+      function updateScreenshots() {
+        var dark = isDark();
+        var imgs = document.querySelectorAll('.shot[data-src-light]');
+        for (var i = 0; i < imgs.length; i++) {
+          var img = imgs[i];
+          var wanted = dark ? img.getAttribute('data-src-dark') : img.getAttribute('data-src-light');
+          if (wanted && img.getAttribute('src') !== wanted) img.setAttribute('src', wanted);
+        }
+      }
       function paint() {
         icon.innerHTML = isDark() ? '&#9728;' : '&#9789;';
         btn.setAttribute('aria-label', isDark() ? 'Switch to light theme' : 'Switch to dark theme');
         if (metaTheme) metaTheme.setAttribute('content', isDark() ? '#0a0c11' : '#fbfaf9');
+        updateScreenshots();
       }
       btn.addEventListener('click', function () {
         var next = isDark() ? 'light' : 'dark';

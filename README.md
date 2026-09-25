@@ -1,10 +1,9 @@
 # Reflectodoro
 
 A Pomodoro app whose real point is forcing a short self-reflection ("what did I do?") at
-the end of every break, enforced via a hard-to-dismiss overlay. Windows, macOS, Linux, and
-Android, built with Tauri 2 + SvelteKit. iOS is planned on the same stack but not started.
+the end of every break, enforced via a hard-to-dismiss overlay. Built with Tauri 2 + SvelteKit.
 
-[Download the latest release](https://github.com/techxapp/reflectodoro/releases/latest) &middot;
+[Download the latest build](https://github.com/techxapp/reflectodoro/releases/latest) &middot;
 [Project page](https://reflectodoro.droplee.com)
 
 See [CLAUDE.md](./CLAUDE.md) for architecture and data model.
@@ -13,12 +12,11 @@ See [CLAUDE.md](./CLAUDE.md) for architecture and data model.
 
 https://v2.tauri.app/start/prerequisites/
 
-For Android, you additionally need the mobile prerequisites (Android Studio, an Android SDK
-with API 36 + build-tools 36.0.0, the NDK, and a JDK 17): see
-https://v2.tauri.app/start/prerequisites/#android. Set `ANDROID_HOME`/`NDK_HOME` per that
-guide before running any `tauri android` command.
+
 
 ## Run it in development
+
+### Run the Desktop app in development
 
 ```
 npm install
@@ -35,6 +33,24 @@ This launches the app in an Android emulator or a connected device over USB debu
 Some behavior is native-only and can't be exercised this way from a desktop emulator alone
 (the "Display over other apps" permission prompt, persistent break notifications, and audio
 focus pausing) — see [CLAUDE.md](./CLAUDE.md)'s "Android" section for how those work.
+
+### Run the iOS app in development
+
+```
+npx tauri ios dev "iPhone 17 Pro"
+```
+
+Use `npx tauri ios dev`, not `npm run tauri ios dev` — `tauri-wrapper.js` re-splits its
+arguments on spaces, so a simulator name passed through npm arrives as several separate
+arguments. `tauri ios init`/`dev` install `libimobiledevice`/`ios-deploy` via Homebrew; if
+Homebrew isn't writable, `ios dev` just warns, but `ios init` refuses unless an
+`idevicesyslog` is on `PATH` (only needed to stream logs from a physical device). There's no
+Apple Developer account yet, so the app isn't distributed — it's installed straight from
+Xcode with a free personal team, and those installs stop launching after 7 days. iOS also
+can't enforce a break the way the other platforms do (no drawing over other apps, no
+foreground scheduling), so it's notifications plus a Live Activity instead, with the overlay
+only appearing once the app is opened — see [CLAUDE.md](./CLAUDE.md)'s "iOS" section for the
+full picture.
 
 ## Build a production installer
 
@@ -54,9 +70,7 @@ Gatekeeper will flag it on first launch — right-click the app and choose "Open
 The Linux build ships as a single `.AppImage` (not `.deb`/`.rpm`, so the app's built-in
 updater keeps working the same way it does on Windows/macOS — see CLAUDE.md). Make it
 executable before first run (`chmod +x Reflectodoro*.AppImage`); some distros also need
-`libfuse2` installed for the AppImage runtime to mount itself. There's no
-Gatekeeper-equivalent signing gate on Linux, so this is comparatively simpler than macOS's
-workaround. Note the tray icon needs the AppIndicator/KStatusNotifierItem extension to
+`libfuse2` installed for the AppImage runtime to mount itself. Note the tray icon needs the AppIndicator/KStatusNotifierItem extension to
 appear at all on a vanilla GNOME (especially under Wayland) — KDE/XFCE work out of the
 box.
 
@@ -71,10 +85,7 @@ your own keystore and to set `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD
 npm run tauri android build -- --apk --split-per-abi --target aarch64 armv7
 ```
 
-Produces APKs under `src-tauri/gen/android/app/build/outputs/apk/`. On first install, the
-app needs the "Display over other apps" permission granted manually in Android system
-settings for the break screen to draw over other apps (it falls back to a notification
-otherwise) — see [CLAUDE.md](./CLAUDE.md)'s "Android" section.
+Produces APKs under `src-tauri/gen/android/app/build/outputs/apk/`. — see [CLAUDE.md](./CLAUDE.md)'s "Android" section fro more details.
 
 ## Recommended IDE Setup
 

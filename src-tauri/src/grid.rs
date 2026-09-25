@@ -47,6 +47,28 @@ pub fn next_work_slot_start_iso(break_slot_start_iso: &str) -> Option<String> {
     Some((dt + ChronoDuration::minutes(5)).to_rfc3339())
 }
 
+/// A break shorter than this gets no end-of-break quote at all -- the panel
+/// stays hidden *and* no request is made to the user-configured quote API.
+/// Concentration mode's 1-minute `:25` break is the case this exists for:
+/// too short to read a quote in, and fetching one anyway would spend a
+/// request (often against a rate-limited free API) on something nobody sees.
+pub const MIN_QUOTE_BREAK_MINUTES: i64 = 2;
+
+/// Whether a break running `break_start_iso`..`break_end_iso` is long enough
+/// to show a quote (see `MIN_QUOTE_BREAK_MINUTES`). Mirrored in
+/// `src/lib/grid.ts` as `breakQualifiesForQuote`. Deliberately returns `true`
+/// when either timestamp is missing/unparseable: the quote panel is a nicety,
+/// and the pre-existing behavior (always fetch) is the safer fallback.
+pub fn break_qualifies_for_quote(break_start_iso: &str, break_end_iso: &str) -> bool {
+    let (Ok(start), Ok(end)) = (
+        DateTime::parse_from_rfc3339(break_start_iso),
+        DateTime::parse_from_rfc3339(break_end_iso),
+    ) else {
+        return true;
+    };
+    end - start >= ChronoDuration::minutes(MIN_QUOTE_BREAK_MINUTES)
+}
+
 /// Builds "today's wall-clock HH:mm:00" in the Local timezone, for `now`'s
 /// hour and the given `minute`. Deliberately does NOT go through
 /// `DateTime::<Local>::with_minute` (which routes through chrono's
@@ -208,6 +230,64 @@ pub fn next_work_slot_start_iso_for(break_slot_start_iso: &str, mode: Mode) -> O
 
 fn hour_start(dt: DateTime<chrono::FixedOffset>) -> Option<DateTime<chrono::FixedOffset>> {
     dt.with_minute(0)?.with_second(0)?.with_nanosecond(0)
+}
+
+/// Whether `now`'s minute-of-day falls inside the configured night-pause
+/// window `[start_minutes, end_minutes)`, e.g. 22:00-08:00 (see CLAUDE.md's
+/// "Android" -- Night pause). Handles the midnight-wrap case
+/// (`start_minutes > end_minutes`) the same way a plain range comparison
+/// can't -- membership there means "at or after start, OR before end".
+/// `start_minutes == end_minutes` is treated as "no window configured" (always
+/// `false`) rather than "always paused", a safer default for a cleared/bad
+/// config than silently pausing the whole app forever.
+///
+/// `cfg`-gated like `upcoming_break_starts` below, for the same reason: its
+/// only caller (`run_scheduler`'s night-pause trigger) is Android-only, so
+/// this would otherwise warn as dead code on every desktop build.
+#[cfg(any(test, target_os = "android"))]
+pub fn is_within_night_pause(now: DateTime<Local>, start_minutes: u32, end_minutes: u32) -> bool {
+    if start_minutes == end_minutes {
+        return false;
+    }
+    let minute_of_day = now.hour() * 60 + now.minute();
+    if start_minutes < end_minutes {
+        minute_of_day >= start_minutes && minute_of_day < end_minutes
+    } else {
+        minute_of_day >= start_minutes || minute_of_day < end_minutes
+    }
+}
+
+/// Builds today's wall-clock `hour:minute:00`, for an arbitrary hour (unlike
+/// `at_minute`, which is pinned to `now`'s own hour) -- needed because
+/// `night_pause_window_end` below has to land on `end_minutes`' own hour,
+/// which is usually not `now`'s hour. Same DST handling as `at_minute`.
+#[cfg(any(test, target_os = "android"))]
+fn at_hour_minute(now: DateTime<Local>, hour: u32, minute: u32) -> DateTime<Local> {
+    let naive = now
+        .naive_local()
+        .date()
+        .and_hms_opt(hour, minute, 0)
+        .expect("hour/minute in valid range");
+    resolve_local(&Local, naive)
+}
+
+/// If `now` currently falls inside the night-pause window, the instant the
+/// window ends (today or tomorrow, whichever is next) -- `None` if not
+/// currently in the window (including a disabled/equal-bounds config). This
+/// is what `run_scheduler`'s night-pause trigger arms the ordinary snooze
+/// against, so the existing expiry poll resumes Pomodoro mode exactly when
+/// the window ends. Same `cfg` gating as `is_within_night_pause` above.
+#[cfg(any(test, target_os = "android"))]
+pub fn night_pause_window_end(now: DateTime<Local>, start_minutes: u32, end_minutes: u32) -> Option<DateTime<Local>> {
+    if !is_within_night_pause(now, start_minutes, end_minutes) {
+        return None;
+    }
+    let end_today = at_hour_minute(now, end_minutes / 60, end_minutes % 60);
+    let minute_of_day = now.hour() * 60 + now.minute();
+    // If today's clock has already passed end_minutes (only possible in the
+    // wrapping case, e.g. it's 23:00 and the window ends at 08:00), the
+    // window's end is tomorrow's occurrence instead.
+    Some(if minute_of_day >= end_minutes { end_today + ChronoDuration::days(1) } else { end_today })
 }
 
 /// Start instants of the next `n` break slots strictly after `now`, oldest
@@ -414,11 +494,78 @@ mod tests {
     }
 
     #[test]
+    fn night_pause_non_wrapping_window() {
+        // e.g. a lunch-hour-shaped window, 12:00-13:00 -- doesn't wrap midnight.
+        assert!(!is_within_night_pause(local(11, 59), 12 * 60, 13 * 60));
+        assert!(is_within_night_pause(local(12, 0), 12 * 60, 13 * 60));
+        assert!(is_within_night_pause(local(12, 30), 12 * 60, 13 * 60));
+        assert!(!is_within_night_pause(local(13, 0), 12 * 60, 13 * 60));
+    }
+
+    #[test]
+    fn night_pause_wrapping_window() {
+        // Default 10pm-8am window, wraps past midnight.
+        let start = 22 * 60;
+        let end = 8 * 60;
+        assert!(!is_within_night_pause(local(21, 59), start, end));
+        assert!(is_within_night_pause(local(22, 0), start, end));
+        assert!(is_within_night_pause(local(23, 30), start, end));
+        assert!(is_within_night_pause(local(0, 0), start, end));
+        assert!(is_within_night_pause(local(7, 59), start, end));
+        assert!(!is_within_night_pause(local(8, 0), start, end));
+        assert!(!is_within_night_pause(local(12, 0), start, end));
+    }
+
+    #[test]
+    fn night_pause_equal_start_and_end_is_always_disabled() {
+        assert!(!is_within_night_pause(local(22, 0), 22 * 60, 22 * 60));
+        assert!(!is_within_night_pause(local(0, 0), 0, 0));
+    }
+
+    #[test]
+    fn night_pause_window_end_not_currently_in_window() {
+        assert_eq!(night_pause_window_end(local(12, 0), 22 * 60, 8 * 60), None);
+    }
+
+    #[test]
+    fn night_pause_window_end_before_midnight_lands_tomorrow() {
+        // 11pm, window 10pm-8am -- end hasn't happened yet today, so it's tomorrow 8am.
+        let end = night_pause_window_end(local(23, 0), 22 * 60, 8 * 60).unwrap();
+        assert_eq!(end, Local.with_ymd_and_hms(2026, 8, 20, 8, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn night_pause_window_end_after_midnight_lands_today() {
+        // 1am, window 10pm-8am -- the window already crossed into today, ends today 8am.
+        let end = night_pause_window_end(local(1, 0), 22 * 60, 8 * 60).unwrap();
+        assert_eq!(end, local(8, 0));
+    }
+
+    #[test]
+    fn night_pause_window_end_non_wrapping() {
+        let end = night_pause_window_end(local(12, 30), 12 * 60, 13 * 60).unwrap();
+        assert_eq!(end, local(13, 0));
+    }
+
+    #[test]
     fn second_break_slot_wraps_hour() {
         let slot = slot_for(local(10, 58));
         assert_eq!(slot.phase, Phase::Break);
         assert_eq!(slot.start, local(10, 55));
         assert_eq!(slot.end, local(11, 0));
+    }
+
+    #[test]
+    fn quote_panel_is_skipped_only_for_the_one_minute_concentration_break() {
+        let c = Mode::Concentration;
+        let short = slot_for_mode(local_hms(10, 25, 30), c);
+        assert!(!break_qualifies_for_quote(&short.start_iso(), &short.end.to_rfc3339()));
+        let long = slot_for_mode(local_hms(10, 55, 0), c);
+        assert!(break_qualifies_for_quote(&long.start_iso(), &long.end.to_rfc3339()));
+        let normal = slot_for_mode(local_hms(10, 26, 0), Mode::Normal);
+        assert!(break_qualifies_for_quote(&normal.start_iso(), &normal.end.to_rfc3339()));
+        // Missing/unparseable timestamps keep the pre-existing behavior.
+        assert!(break_qualifies_for_quote("", ""));
     }
 
     // --- DST regression tests -------------------------------------------

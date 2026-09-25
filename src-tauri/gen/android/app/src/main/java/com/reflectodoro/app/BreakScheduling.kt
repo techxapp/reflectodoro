@@ -10,8 +10,15 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import java.util.Calendar
 
-const val WAKE_CHANNEL_ID = "reflectodoro_wake"
+// v2: silenced (see ensureWakeChannel) -- a NotificationChannel's sound is
+// immutable once created, so silencing the old "reflectodoro_wake" channel in
+// code wouldn't have taken effect on any device that already had it. Bumping
+// the id creates a fresh, genuinely-silent channel instead; the old one is
+// deleted in ensureWakeChannel below rather than left behind as user-visible
+// clutter in the app's notification-channel settings.
+const val WAKE_CHANNEL_ID = "reflectodoro_wake_v2"
 const val WAKE_NOTIFICATION_ID = 1002
+private const val LEGACY_WAKE_CHANNEL_ID = "reflectodoro_wake"
 const val BREAK_CHANNEL_ID = "reflectodoro_break"
 const val BREAK_NOTIFICATION_ID = 1003
 
@@ -166,7 +173,17 @@ fun canScheduleExactAlarm(context: Context): Boolean {
  * the one place in the app that *does* auto-launch unprompted -- see
  * BreakAlarmReceiver's own doc comment for why that's a scoped exception to
  * postBreakNotification's "never auto-launch over active use" rule below,
- * not a reversal of it. */
+ * not a reversal of it.
+ *
+ * Deliberately silent (see ensureWakeChannel): the auto-launch above usually
+ * lands the freshly-restarted process straight into the live break slot,
+ * whose own run_scheduler iteration then posts the real, correctly-alerting
+ * break notification (postBreakNotification) within seconds. A sound here
+ * too meant two audible alerts back-to-back for one break -- confirmed as a
+ * real, repeated user complaint (worst overnight, when an OEM process-killer
+ * repeatedly kills and this recovery path repeatedly fires). This
+ * notification stays visual-only so the fallback "tap to reopen" affordance
+ * is preserved without doubling the alert. */
 fun postWakeNotification(context: Context) {
   ensureWakeChannel(context)
   val pendingOpen = PendingIntent.getActivity(
@@ -190,6 +207,14 @@ fun postWakeNotification(context: Context) {
 private fun ensureWakeChannel(context: Context) {
   if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
   val manager = context.getSystemService(NotificationManager::class.java)
+  // Deletes the old sounding channel on any device that still has it from
+  // before this notification was silenced -- a NotificationChannel's sound
+  // can't be changed in place once created, and leaving the old channel
+  // around would also show as a confusing duplicate "wake-up" entry in the
+  // app's system notification-channel settings.
+  if (manager.getNotificationChannel(LEGACY_WAKE_CHANNEL_ID) != null) {
+    manager.deleteNotificationChannel(LEGACY_WAKE_CHANNEL_ID)
+  }
   if (manager.getNotificationChannel(WAKE_CHANNEL_ID) != null) return
   val channel = NotificationChannel(
     WAKE_CHANNEL_ID,
@@ -197,6 +222,12 @@ private fun ensureWakeChannel(context: Context) {
     NotificationManager.IMPORTANCE_DEFAULT,
   )
   channel.description = "Lets you reopen Reflectodoro if its background timer was stopped by the system"
+  // Silent by design -- see postWakeNotification's doc comment: this fires
+  // alongside an auto-launch that (almost always) triggers the real,
+  // correctly-alerting break notification moments later, so alerting here
+  // too just doubles the sound for one break.
+  channel.setSound(null, null)
+  channel.enableVibration(false)
   manager.createNotificationChannel(channel)
 }
 

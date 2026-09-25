@@ -17,6 +17,7 @@
     saveMediaPauseOnBreakEnabled,
     loadAndSyncBreakNotificationPersistentSetting,
     loadAndSyncHideOverlayOnCallSetting,
+    loadAndSyncNightPauseConfig,
     loadAndSyncMediaToggleGuard,
     loadAndSyncMacosHideMenuBarDockSetting,
     loadAndSyncMacosMediaKeyFallbackSetting,
@@ -38,9 +39,15 @@
 
   type SnoozeInfo = { resume_at: string; minutes: number };
   const SNOOZE_MINUTES_OPTIONS = [30, 60, 120, 360, 720];
+  // Handles arbitrary durations, not just SNOOZE_MINUTES_OPTIONS' round
+  // values -- night pause arms a pause lasting until its window's end (see
+  // customPauseMinutes below), which is rarely a whole number of hours.
+  // Output for the fixed options is unchanged ("30 min", "1 hr", "12 hr").
   function snoozeOptionLabel(minutes: number): string {
-    const hours = minutes / 60;
-    return `Pause for ${hours < 1 ? `${minutes} min` : `${hours} hr`}`;
+    if (minutes < 60) return `Pause for ${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest === 0 ? `Pause for ${hours} hr` : `Pause for ${hours} hr ${rest} min`;
   }
 
   let now = $state(new Date());
@@ -70,6 +77,20 @@
   let mediaKeyPermissionRequested = $state(false);
   let taskListContent = $state("");
   let notToDoContent = $state("");
+  // saveTaskList/saveNotToDoList were previously fired off with `void` and no
+  // error handling anywhere in the app -- a failed debounced save (a
+  // transient encryption-key hiccup, a busy DB, anything) vanished silently:
+  // the textarea kept showing what was typed (it's just bound local state),
+  // "Auto-saves as you type" kept saying so, but the row in SQLite never
+  // changed. That's invisible here, in whichever window has the edit, and
+  // only shows up as *missing* content somewhere that does its own fresh
+  // read, most consequentially the break overlay on its next open (see
+  // CLAUDE.md's "Debugging from production logs" -- this is exactly the
+  // silently-discarded-Result pattern it calls out). Surfacing it here, next
+  // to the same hint that made the false promise, at least makes a failure
+  // visible and diagnosable instead of a silent, unrecoverable data loss.
+  let taskSaveError = $state<string | null>(null);
+  let notToDoSaveError = $state<string | null>(null);
   let pairedDevices = $state<PairedDeviceInfo[]>([]);
   let pairedDevicesLoaded = $state(false);
   let syncingDeviceId = $state<string | null>(null);
@@ -101,6 +122,14 @@
   // plain enabled flag (POMODORO_ENABLED is false for both a snooze and a
   // permanent Off -- snoozeInfo is what tells them apart).
   const pomodoroSelection = $derived(snoozeInfo ? String(snoozeInfo.minutes) : enabled ? "on" : "off");
+  // A pause the user didn't pick from this dropdown -- in practice night
+  // pause, which arms one lasting until its window's end (see CLAUDE.md's
+  // "Android" / Night pause). Its duration won't match any fixed option, so
+  // without surfacing it as an option of its own the <select> would render
+  // with nothing selected while the pause is active.
+  const customPauseMinutes = $derived(
+    snoozeInfo && !SNOOZE_MINUTES_OPTIONS.includes(snoozeInfo.minutes) ? snoozeInfo.minutes : null,
+  );
   const snoozeResumeLabel = $derived.by(() => {
     if (!snoozeInfo) return "";
     const resumeAt = new Date(snoozeInfo.resume_at);
@@ -110,14 +139,26 @@
   function scheduleTaskSave() {
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
     taskSaveTimer = setTimeout(() => {
-      void saveTaskList(localDateStamp(), taskListContent);
+      void saveTaskList(localDateStamp(), taskListContent)
+        .then(() => (taskSaveError = null))
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          taskSaveError = msg;
+          void logError(`main window: saveTaskList failed: ${msg}`);
+        });
     }, 800);
   }
 
   function scheduleNotToDoSave() {
     if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
     notToDoSaveTimer = setTimeout(() => {
-      void saveNotToDoList(localDateStamp(), notToDoContent);
+      void saveNotToDoList(localDateStamp(), notToDoContent)
+        .then(() => (notToDoSaveError = null))
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          notToDoSaveError = msg;
+          void logError(`main window: saveNotToDoList failed: ${msg}`);
+        });
     }, 800);
   }
 
@@ -273,6 +314,7 @@
     await refreshMediaPauseStatus();
     await loadAndSyncBreakNotificationPersistentSetting();
     await loadAndSyncHideOverlayOnCallSetting();
+    await loadAndSyncNightPauseConfig();
     await loadAndSyncMediaToggleGuard();
     await loadAndSyncMacosHideMenuBarDockSetting();
     await loadAndSyncScreenTimeTrackingSetting();
@@ -359,6 +401,9 @@
         {#each SNOOZE_MINUTES_OPTIONS as minutes (minutes)}
           <option value={String(minutes)}>{snoozeOptionLabel(minutes)}</option>
         {/each}
+        {#if customPauseMinutes !== null}
+          <option value={String(customPauseMinutes)}>{snoozeOptionLabel(customPauseMinutes)}</option>
+        {/if}
         <option value="off">Pomodoro: Off</option>
       </select>
 
@@ -433,7 +478,11 @@
 3."
       rows="5"
     ></textarea>
-    <p class="hint">Auto-saves as you type.</p>
+    {#if taskSaveError}
+      <p class="hint error">Couldn't save: {taskSaveError}. Retype the last change to try again.</p>
+    {:else}
+      <p class="hint">Auto-saves as you type.</p>
+    {/if}
   </section>
 
   <section class="card">
@@ -446,7 +495,11 @@
 3."
       rows="3"
     ></textarea>
-    <p class="hint">Auto-saves as you type.</p>
+    {#if notToDoSaveError}
+      <p class="hint error">Couldn't save: {notToDoSaveError}. Retype the last change to try again.</p>
+    {:else}
+      <p class="hint">Auto-saves as you type.</p>
+    {/if}
   </section>
 
   {#if pairedDevicesLoaded && pairedDevices.length > 0}
@@ -731,6 +784,10 @@
     font-size: 12px;
     color: var(--text-dim);
     margin: 8px 0 0;
+  }
+
+  .hint.error {
+    color: var(--danger);
   }
 
   .saved {

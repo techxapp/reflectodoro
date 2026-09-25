@@ -208,6 +208,38 @@ pub(crate) static BREAK_NOTIFICATION_PERSISTENT_ENABLED: AtomicBool = AtomicBool
 /// mid-break takes effect from the next break.
 pub(crate) static HIDE_OVERLAY_ON_CALL_ENABLED: AtomicBool = AtomicBool::new(true);
 
+/// Android only in effect (see CLAUDE.md's "Android" -- Night pause):
+/// whether the scheduler auto-pauses Pomodoro mode for the duration of a
+/// configured overnight window. Backed by `app_setting.night_pause_enabled`;
+/// same load/push pattern as `HIDE_OVERLAY_ON_CALL_ENABLED`. Defaults to
+/// `true` here too, matching the migration's default -- on by default for
+/// both new and existing Android installs.
+///
+/// Night pause deliberately has **no enforcement mechanism of its own**: when
+/// the window starts, `run_scheduler` arms the ordinary snooze
+/// (`commands::arm_snooze`) with a resume time of the window's end, so the
+/// existing `POMODORO_ENABLED` gate suppresses new breaks, the existing
+/// wall-clock expiry poll resumes at the window's end, the main window's
+/// existing dropdown/"Resumes at" hint displays it, and Android's existing
+/// SharedPreferences persistence + `.setup()` restore carry it across a
+/// process kill. "Resume early" is just picking Pomodoro: On.
+///
+/// The trigger is `#[cfg(target_os = "android")]`-gated in `run_scheduler`
+/// rather than relying on these atomics being false off-Android: the
+/// `app_setting` row seeds to `true` on *every* platform and the frontend
+/// syncs it unconditionally (same as the other "Android only in effect"
+/// toggles), so desktop would otherwise silently stop opening breaks
+/// overnight with no Settings control to turn it off.
+pub(crate) static NIGHT_PAUSE_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Minute-of-day (0-1439) the night-pause window starts/ends. Backed by
+/// `app_setting.night_pause_start_minutes`/`night_pause_end_minutes`.
+/// Defaults to 22:00/08:00, matching the migration's default. See
+/// `grid::is_within_night_pause` for how a window that wraps past midnight
+/// (`start > end`, the default case) is handled.
+pub(crate) static NIGHT_PAUSE_START_MINUTES: AtomicU32 = AtomicU32::new(22 * 60);
+pub(crate) static NIGHT_PAUSE_END_MINUTES: AtomicU32 = AtomicU32::new(8 * 60);
+
 /// Whether foreground-app focus tracking is running (see screen_time.rs).
 /// Backed by `app_setting.screen_time_tracking_enabled`; same load/push
 /// pattern as `MEDIA_PAUSE_ON_BREAK_ENABLED`. Defaults to `true` here too,
@@ -422,6 +454,11 @@ async fn run_scheduler(app: AppHandle) {
     }
     let mut last_phase: Option<Phase> = None;
     let mut expected_wake: Option<DateTime<Local>> = None;
+    // Night pause edge detection (Android only) -- see the trigger in the
+    // loop below. Starts `false` so a process launched mid-window arms the
+    // pause on its first iteration.
+    #[cfg(target_os = "android")]
+    let mut was_in_night_pause = false;
     // Consumed by the first iteration only -- see force_break_on_start.
     let mut force_break_pending = force_break_on_start();
     if force_break_pending {
@@ -500,6 +537,47 @@ async fn run_scheduler(app: AppHandle) {
                 // independent of the grace-period check above.
                 last_phase = None;
             }
+        }
+
+        // Night pause (Android only -- see NIGHT_PAUSE_ENABLED's doc comment
+        // for why this is cfg-gated rather than relying on the atomics):
+        // entering the configured overnight window arms the *ordinary*
+        // snooze, with the window's end as its resume time. Everything after
+        // that -- suppressing new breaks, resuming on time, displaying the
+        // pause, surviving a process kill -- is the existing snooze
+        // machinery, unchanged.
+        #[cfg(target_os = "android")]
+        {
+            let in_night_pause = NIGHT_PAUSE_ENABLED.load(Ordering::SeqCst)
+                && grid::is_within_night_pause(
+                    now,
+                    NIGHT_PAUSE_START_MINUTES.load(Ordering::SeqCst),
+                    NIGHT_PAUSE_END_MINUTES.load(Ordering::SeqCst),
+                );
+            // Only on the false->true edge, and only while Pomodoro mode is
+            // actually running: re-arming every iteration would rewrite the
+            // atomics, re-emit events and re-write SharedPreferences every
+            // MOBILE_POLL_INTERVAL all night, and arming over a deliberate
+            // Off (or over a snooze the user picked themselves) would both
+            // clobber their choice and let the expiry poll silently switch
+            // Pomodoro mode back on at the window's end. A user who turns it
+            // back On mid-window therefore stays on for the rest of that
+            // window, which is exactly the "resume for tonight" behavior
+            // wanted.
+            if in_night_pause && !was_in_night_pause && POMODORO_ENABLED.load(Ordering::SeqCst) {
+                if let Some(window_end) = grid::night_pause_window_end(
+                    now,
+                    NIGHT_PAUSE_START_MINUTES.load(Ordering::SeqCst),
+                    NIGHT_PAUSE_END_MINUTES.load(Ordering::SeqCst),
+                ) {
+                    log::info!(
+                        "scheduler: entering night-pause window -- pausing Pomodoro mode until {}",
+                        window_end.to_rfc3339()
+                    );
+                    commands::arm_snooze(&app, window_end);
+                }
+            }
+            was_in_night_pause = in_night_pause;
         }
 
         let mut slot = grid::slot_for_mode(now, current_mode());
@@ -1024,6 +1102,8 @@ pub fn run() {
             commands::set_break_notification_persistent_enabled,
             commands::get_hide_overlay_on_call_enabled,
             commands::set_hide_overlay_on_call_enabled,
+            commands::get_night_pause_config,
+            commands::set_night_pause_config,
             commands::get_macos_hide_menu_bar_dock_enabled,
             commands::set_macos_hide_menu_bar_dock_enabled,
             commands::get_macos_media_key_fallback_enabled,
@@ -1042,6 +1122,7 @@ pub fn run() {
             commands::can_query_usage_stats,
             commands::request_usage_stats_permission,
             commands::fetch_quote,
+            commands::default_quote_api_attribution,
             import::import_data,
             key_store::get_key_storage_status,
             key_store::retry_key_resolution,
@@ -1197,6 +1278,7 @@ pub fn run() {
                     Ok(_) => {}
                     Err(e) => log::error!("failed to read persisted snooze-until: {e:?}"),
                 }
+
             }
 
             #[cfg(target_os = "ios")]

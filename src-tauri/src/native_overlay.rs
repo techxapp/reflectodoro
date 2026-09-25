@@ -241,7 +241,18 @@ pub async fn refresh_coming_next_text(app: &AppHandle) {
 /// on the break screen -- same as the desktop overlay. The quote body is
 /// never logged.
 pub async fn refresh_quote_text(app: &AppHandle) -> bool {
-    let slot_at_start = app.state::<AppState>().overlay.lock().unwrap().current_slot_start.clone();
+    let (slot_at_start, break_end) = {
+        let state = app.state::<AppState>();
+        let overlay = state.overlay.lock().unwrap();
+        (overlay.current_slot_start.clone(), overlay.break_end.clone())
+    };
+    // Concentration mode's 1-minute break is too short to read a quote in --
+    // skip the panel *and* the outbound request entirely (see
+    // grid::MIN_QUOTE_BREAK_MINUTES).
+    if !crate::grid::break_qualifies_for_quote(&slot_at_start, &break_end) {
+        log::info!("quote: skipping fetch, break too short for the quote panel");
+        return false;
+    }
     let url = sqlx::query_scalar::<_, String>("SELECT value FROM app_setting WHERE key = 'quote_api_url'")
         .fetch_optional(pool(app).await)
         .await
@@ -274,6 +285,27 @@ pub async fn refresh_quote_text(app: &AppHandle) -> bool {
     *state.quote_text.lock().unwrap() = text;
     log::info!("quote: fetched, pushing to overlay");
     true
+}
+
+/// Reads the Quote API credit line (`app_setting.quote_api_attribution`) and
+/// stores it in `AppState.quote_attribution_html`. Unlike `refresh_quote_text`
+/// this is a plain local `app_setting` read with no network round trip, so
+/// it's called synchronously before the overlay is shown (same "computed
+/// once at open time" treatment `refresh_missed_slot_count`/
+/// `refresh_coming_next_text` get), not deferred to a background task. The
+/// value is raw HTML from Settings -- `native_overlay.html` sanitizes it
+/// before rendering, exactly like the desktop overlay does via
+/// `sanitizeAttributionHtml`.
+pub async fn refresh_quote_attribution(app: &AppHandle) {
+    let html = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM app_setting WHERE key = 'quote_api_attribution'",
+    )
+    .fetch_optional(pool(app).await)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+    *app.state::<AppState>().quote_attribution_html.lock().unwrap() = html;
 }
 
 /// Mirrors db.ts's `splitReflectionForSlots` exactly: when there's more than one covered

@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { info as logInfo } from "@tauri-apps/plugin-log";
+  import { error as logError, info as logInfo } from "@tauri-apps/plugin-log";
   import {
     findMissedSlots,
     saveReflection,
@@ -19,7 +19,10 @@
     nextWorkSlotStartIso,
     getReflectionTextForSlot,
     getQuoteApiUrl,
+    getQuoteApiAttribution,
   } from "$lib/db";
+  import { breakQualifiesForQuote } from "$lib/grid";
+  import { sanitizeAttributionHtml } from "$lib/sanitizeHtml";
 
   interface OverlayState {
     open: boolean;
@@ -44,6 +47,7 @@
   let comingNextText = $state<string | null>(null);
   let quoteApiUrl = $state<string | null>(null);
   let quoteText = $state<string | null>(null);
+  let quoteAttribution = $state<string>("");
   // Break-screen media control. Shown only where MediaRemote actually
   // resolved (macOS), since that's the only platform that can play/pause
   // another app's media from here without a permission.
@@ -63,6 +67,17 @@
   // Win-key-suppressing window with no working exit. See submitReflection.
   let isSubmitting = $state(false);
   let saveError = $state<string | null>(null);
+  // Separate from saveError above (the reflection submit's own failure
+  // state) -- this covers the Most Important Tasks / Not To Do panels'
+  // independent debounced auto-save. Both used to be fire-and-forget with no
+  // error handling anywhere in the app: a failed save left whatever was
+  // typed visible in this textarea (it's just bound local state) while the
+  // database row never changed, so the very next break -- a fresh overlay
+  // load, doing its own independent read -- would show older content with
+  // no trace of what happened. See +page.svelte's identical fix for the
+  // full reasoning.
+  let taskSaveError = $state<string | null>(null);
+  let notToDoSaveError = $state<string | null>(null);
   let showEscapeHatch = $state(false);
   let closingAfterFailure = $state(false);
   // How much of the viewport the on-screen keyboard is currently covering.
@@ -144,6 +159,16 @@
    * fetch(), to sidestep third-party CORS -- see that command's doc comment. */
   async function refreshQuote() {
     if (!quoteApiUrl) {
+      quoteText = null;
+      return;
+    }
+    // Concentration mode's 1-minute break is too short to read a quote in --
+    // hide the panel *and* skip the outbound request entirely for it (see
+    // breakQualifiesForQuote / grid::MIN_QUOTE_BREAK_MINUTES).
+    if (
+      overlayState &&
+      !breakQualifiesForQuote(overlayState.current_slot_start, overlayState.break_end)
+    ) {
       quoteText = null;
       return;
     }
@@ -272,14 +297,26 @@
   function scheduleTaskSave() {
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
     taskSaveTimer = setTimeout(() => {
-      void saveTaskList(localDateStamp(), taskListContent);
+      void saveTaskList(localDateStamp(), taskListContent)
+        .then(() => (taskSaveError = null))
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          taskSaveError = msg;
+          void logError(`[overlay] saveTaskList failed: ${msg}`);
+        });
     }, 800);
   }
 
   function scheduleNotToDoSave() {
     if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
     notToDoSaveTimer = setTimeout(() => {
-      void saveNotToDoList(localDateStamp(), notToDoContent);
+      void saveNotToDoList(localDateStamp(), notToDoContent)
+        .then(() => (notToDoSaveError = null))
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          notToDoSaveError = msg;
+          void logError(`[overlay] saveNotToDoList failed: ${msg}`);
+        });
     }, 800);
   }
 
@@ -359,7 +396,25 @@
         await refreshCoverage();
         await prefillReflection();
         await refreshComingNext();
-        // Unlike the three calls above (cheap local DB reads, harmless to
+        // Most Important Tasks / Not To Do only ever change live via the
+        // tasklist://updated/nottodolist://updated broadcast (see
+        // listenForTaskListUpdates below) -- normally enough, but this
+        // window is precreated once and can stay mounted for an entire
+        // session, so if a broadcast was ever missed (a P2P sync or a file
+        // import writes these tables directly from Rust with no broadcast of
+        // its own) the textarea would keep showing whatever it last had
+        // until the next one landed. Re-reading here on every new break
+        // guarantees it's never more than one break behind, the same
+        // freshness guarantee refreshComingNext/prefillReflection already
+        // give the panels next to it.
+        taskListContent = await getTaskList(localDateStamp());
+        notToDoContent = await getNotToDoList(localDateStamp());
+        // Same freshness reasoning as the task lists above -- a cheap local
+        // read, re-run on every slot-start change so a Settings edit made
+        // while this window sat precreated/hidden shows up on the next
+        // break rather than needing an app restart.
+        quoteAttribution = await getQuoteApiAttribution();
+        // Unlike the calls above (cheap local DB reads, harmless to
         // re-run on every slot-start change including the close-triggered
         // one back to ""), this hits an external network API -- only worth
         // doing when a break is actually opening, not also when it closes
@@ -400,6 +455,7 @@
     }
     taskListContent = await getTaskList(localDateStamp());
     notToDoContent = await getNotToDoList(localDateStamp());
+    quoteAttribution = await getQuoteApiAttribution();
 
     unlistenTasks = await listenForTaskListUpdates((content) => {
       taskListContent = content;
@@ -519,7 +575,11 @@
           rows="5"
           onfocus={scrollFieldIntoView}
         ></textarea>
-        <p class="hint">Auto-saves as you type.</p>
+        {#if taskSaveError}
+          <p class="hint error">Couldn't save: {taskSaveError}. Retype the last change to try again.</p>
+        {:else}
+          <p class="hint">Auto-saves as you type.</p>
+        {/if}
       </section>
 
       <section class="panel side">
@@ -531,7 +591,11 @@
           rows="3"
           onfocus={scrollFieldIntoView}
         ></textarea>
-        <p class="hint">Auto-saves as you type.</p>
+        {#if notToDoSaveError}
+          <p class="hint error">Couldn't save: {notToDoSaveError}. Retype the last change to try again.</p>
+        {:else}
+          <p class="hint">Auto-saves as you type.</p>
+        {/if}
       </section>
 
       {#if mediaControlAvailable}
@@ -566,6 +630,9 @@
       {#if quoteText}
         <section class="panel side quote-panel">
           <p class="quote-text">{quoteText}</p>
+          {#if quoteAttribution.trim()}
+            <p class="quote-attribution">{@html sanitizeAttributionHtml(quoteAttribution)}</p>
+          {/if}
         </section>
       {/if}
     </div>
@@ -657,6 +724,16 @@
     font-style: italic;
     line-height: 1.5;
     opacity: 0.85;
+  }
+
+  .quote-attribution {
+    margin: 6px 0 0;
+    font-size: 0.8em;
+    opacity: 0.6;
+  }
+
+  .quote-attribution :global(a) {
+    color: inherit;
   }
 
   /* Large displays: the fixed small type/padding left the content floating in

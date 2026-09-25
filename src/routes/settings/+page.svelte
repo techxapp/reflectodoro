@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
   import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
+  import { sanitizeAttributionHtml } from "$lib/sanitizeHtml";
   import {
     getBreakitSettings,
     saveBreakitSettings,
@@ -22,6 +23,8 @@
     saveBreakNotificationPersistentEnabled,
     getHideOverlayOnCallEnabled,
     saveHideOverlayOnCallEnabled,
+    getNightPauseConfig,
+    saveNightPauseConfig,
     getOverlayAutoCloseMinutes,
     saveOverlayAutoCloseMinutes,
     getCheckinAutoCloseMinutes,
@@ -39,6 +42,8 @@
     saveDeviceName,
     getQuoteApiUrl,
     saveQuoteApiUrl,
+    getQuoteApiAttribution,
+    saveQuoteApiAttribution,
     getThemePreference,
     saveThemePreference,
     type ThemePreference,
@@ -128,6 +133,24 @@
   let hideOverlayOnCallLoaded = $state(false);
   let hideOverlayOnCallBusy = $state(false);
 
+  let nightPauseEnabled = $state(true);
+  let nightPauseStart = $state("22:00");
+  let nightPauseEnd = $state("08:00");
+  let nightPauseLoaded = $state(false);
+  let nightPauseBusy = $state(false);
+  let nightPauseSaved = $state(false);
+
+  function minutesToHhMm(minutes: number): string {
+    const h = Math.floor(minutes / 60) % 24;
+    const m = minutes % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  }
+
+  function hhMmToMinutes(hhMm: string): number {
+    const [h, m] = hhMm.split(":").map(Number);
+    return (h % 24) * 60 + (m % 60);
+  }
+
   let isMacos = $state(false);
   let isWindows = $state(false);
   // Gates the "not captured on this platform yet" screen-time hint on
@@ -160,6 +183,14 @@
   let quoteApiUrl = $state("");
   let quoteApiUrlLoaded = $state(false);
   let quoteApiUrlSaved = $state(false);
+
+  let quoteApiAttribution = $state("");
+  let quoteApiAttributionLoaded = $state(false);
+  let quoteApiAttributionSaved = $state(false);
+  // Fetched from Rust (single source of truth is db.rs's
+  // DEFAULT_QUOTE_API_ATTRIBUTION const), not hardcoded here -- see
+  // resetQuoteApiAttributionToDefault below.
+  let defaultQuoteApiAttribution = $state("");
 
   let overlayGranted = $state(false);
   let overlayChecked = $state(false);
@@ -407,6 +438,14 @@
   });
 
   onMount(async () => {
+    const config = await getNightPauseConfig();
+    nightPauseEnabled = config.enabled;
+    nightPauseStart = minutesToHhMm(config.startMinutes);
+    nightPauseEnd = minutesToHhMm(config.endMinutes);
+    nightPauseLoaded = true;
+  });
+
+  onMount(async () => {
     screenTimeTrackingEnabled = await getScreenTimeTrackingEnabled();
     screenTimeTrackingLoaded = true;
   });
@@ -424,6 +463,15 @@
   onMount(async () => {
     quoteApiUrl = await getQuoteApiUrl();
     quoteApiUrlLoaded = true;
+  });
+
+  onMount(async () => {
+    quoteApiAttribution = await getQuoteApiAttribution();
+    quoteApiAttributionLoaded = true;
+  });
+
+  onMount(async () => {
+    defaultQuoteApiAttribution = await invoke<string>("default_quote_api_attribution");
   });
 
   onMount(async () => {
@@ -594,6 +642,32 @@
     }
   }
 
+  async function toggleNightPauseEnabled() {
+    const next = !nightPauseEnabled;
+    nightPauseBusy = true;
+    try {
+      await saveNightPauseConfig({
+        enabled: next,
+        startMinutes: hhMmToMinutes(nightPauseStart),
+        endMinutes: hhMmToMinutes(nightPauseEnd),
+      });
+      nightPauseEnabled = next;
+    } finally {
+      nightPauseBusy = false;
+    }
+  }
+
+  async function saveNightPauseWindow(e: Event) {
+    e.preventDefault();
+    await saveNightPauseConfig({
+      enabled: nightPauseEnabled,
+      startMinutes: hhMmToMinutes(nightPauseStart),
+      endMinutes: hhMmToMinutes(nightPauseEnd),
+    });
+    nightPauseSaved = true;
+    setTimeout(() => (nightPauseSaved = false), 2000);
+  }
+
   async function toggleMacosHideMenuBarDock() {
     const next = !macosHideMenuBarDockEnabled;
     macosHideMenuBarDockBusy = true;
@@ -650,6 +724,17 @@
     await saveQuoteApiUrl(quoteApiUrl.trim());
     quoteApiUrlSaved = true;
     setTimeout(() => (quoteApiUrlSaved = false), 2000);
+  }
+
+  async function saveQuoteApiAttributionSetting(e: Event) {
+    e.preventDefault();
+    await saveQuoteApiAttribution(quoteApiAttribution.trim());
+    quoteApiAttributionSaved = true;
+    setTimeout(() => (quoteApiAttributionSaved = false), 2000);
+  }
+
+  function resetQuoteApiAttributionToDefault() {
+    quoteApiAttribution = defaultQuoteApiAttribution;
   }
 
   async function saveWellnessExclusions(e: Event) {
@@ -886,6 +971,38 @@
       </p>
     {/if}
 
+    {#if quoteApiAttributionLoaded}
+      <form onsubmit={saveQuoteApiAttributionSetting}>
+        <label class="grow">
+          Quote API attribution
+          <textarea
+            rows="2"
+            bind:value={quoteApiAttribution}
+            placeholder={defaultQuoteApiAttribution}
+          ></textarea>
+        </label>
+        <button type="submit">Save</button>
+        <button type="button" onclick={resetQuoteApiAttributionToDefault}>Reset to default</button>
+        {#if quoteApiAttributionSaved}
+          <span class="hint saved">Saved</span>
+        {/if}
+      </form>
+      {#if quoteApiAttribution.trim()}
+        <p class="hint quote-attribution-preview">
+          Preview: {@html sanitizeAttributionHtml(quoteApiAttribution)}
+        </p>
+      {/if}
+      <p class="hint">
+        Shown under the quote, credited to whichever API you're calling above. Accepts a small set
+        of HTML (links and basic formatting) &mdash; anything else is stripped before it's shown.
+        Leave blank to show no attribution. <strong
+          >If you change the Quote API URL, check that service's own documentation and update this
+          attribution to match its requirements &mdash; we are not responsible for any compliance
+          issues arising from missing or incorrect attribution.</strong
+        >
+      </p>
+    {/if}
+
     {#if isAndroid && overlayChecked}
       <div class="data-row">
         <span>Break screen (draw over other apps): {overlayGranted ? "Granted" : "Not granted"}</span>
@@ -977,6 +1094,41 @@
       <p class="hint">
         While a call is ringing or in progress, the break screen steps aside so you can answer,
         and returns when the call ends. Applies from the next break.
+      </p>
+    {/if}
+
+    {#if isAndroid && nightPauseLoaded}
+      <div class="data-row">
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={nightPauseEnabled}
+            disabled={nightPauseBusy}
+            onchange={toggleNightPauseEnabled}
+          />
+          Pause breaks overnight
+        </label>
+      </div>
+      <form onsubmit={saveNightPauseWindow}>
+        <label>
+          Starts at
+          <input type="time" bind:value={nightPauseStart} />
+        </label>
+        <label>
+          Ends at
+          <input type="time" bind:value={nightPauseEnd} />
+        </label>
+        <button type="submit">Save</button>
+        {#if nightPauseSaved}
+          <span class="hint saved">Saved</span>
+        {/if}
+      </form>
+      <p class="hint">
+        Pomodoro mode pauses itself for this window (it can wrap past midnight, like the default
+        10pm&ndash;8am) and resumes on its own at the end, exactly like picking a pause from the
+        Timer tab's dropdown. To resume early, set Pomodoro back to On &mdash; it stays on for the
+        rest of that night. A break already open when the window starts still runs its course, and
+        nothing missed is made up afterward.
       </p>
     {/if}
 
