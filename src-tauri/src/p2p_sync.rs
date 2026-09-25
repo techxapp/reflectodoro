@@ -30,8 +30,9 @@
 //! ## Wire protocol
 //!
 //! One TCP connection per pairing attempt or sync session, to `PORT` on the
-//! peer's LAN address (found via mDNS -- `mdns-sd` on desktop, `NsdManager`
-//! via `android_bridge.rs` on Android). Every message is framed with a
+//! peer's LAN address (found via mDNS/Bonjour -- `mdns-sd` on desktop,
+//! `NsdManager` via `android_bridge.rs` on Android, `NetService` via
+//! `ios_bridge.rs` on iOS). Every message is framed with a
 //! `write_frame`/`read_frame` u32-be length prefix.
 //!
 //! - **Pairing** (dialer writes tag `TAG_PAIRING` first): a raw (unencrypted
@@ -399,7 +400,7 @@ async fn recv_encrypted_json<T: DeserializeOwned, S: AsyncReadExt + Unpin>(
 /// above, confirmed live: a fresh Android install advertised with a blank
 /// name because `get_device_name` read `app_setting.device_name` before
 /// `ensureDeviceName` had written anything to it), or later, whenever the
-/// user renames this device in Settings. Both platform variants
+/// user renames this device in Settings. All three platform variants
 /// unregister any previous registration before registering fresh, making
 /// repeat calls idempotent rather than erroring or leaving stale
 /// duplicate entries.
@@ -469,13 +470,35 @@ pub fn advertise_self(app: &AppHandle) {
     });
 }
 
-/// iOS LAN discovery isn't built yet (planned: Bonjour via Network.framework's
-/// NWListener/NWBrowser -- mdns-sd's raw multicast sockets would need Apple's
-/// restricted multicast entitlement). Until then iOS neither advertises nor
-/// finds peers, so pairing/sync report the peer as not found.
+/// iOS advertises over Bonjour through `ios-bridge`'s P2pBonjour.swift --
+/// structurally the same as the Android arm above (a native discovery API
+/// under the same Rust TCP/Noise stack), for the same reason: `mdns-sd`'s raw
+/// multicast sockets would need Apple's restricted multicast entitlement,
+/// which a free personal team can't request anyway. See P2pBonjour.swift for
+/// why `NetService` rather than Network.framework's NWListener/NWBrowser.
 #[cfg(target_os = "ios")]
-pub fn advertise_self(_app: &AppHandle) {
-    log::info!("p2p_sync: LAN advertisement not available on iOS yet");
+pub fn advertise_self(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let device_id = match get_or_create_device_id_after_db_ready(&app).await {
+            Ok(id) => id,
+            Err(e) => {
+                log::error!("p2p_sync: couldn't determine device id, LAN advertisement skipped: {e}");
+                return;
+            }
+        };
+        let name = get_device_name(&app).await;
+        let bridge = app.state::<crate::ios_bridge::IosBridge<tauri::Wry>>();
+        // Harmless no-op on the common first-call case (nothing published
+        // yet) -- see this function's doc comment on the desktop variant.
+        if let Err(e) = bridge.unregister_p2p_service() {
+            log::warn!("p2p_sync: Bonjour unpublish-before-republish failed (fine on first call): {e:?}");
+        }
+        match bridge.register_p2p_service(&device_id, &name, &platform_str(), PORT) {
+            Ok(_) => log::info!("p2p_sync: Bonjour publish dispatched for {device_id} ({name})"),
+            Err(e) => log::error!("p2p_sync: Bonjour publish failed: {e:?}"),
+        }
+    });
 }
 
 /// Called from the frontend once it knows the real `device_name` -- after
@@ -535,15 +558,16 @@ async fn browse_lan(app: &AppHandle, window: Duration) -> Result<Vec<(Discovered
     Ok(found)
 }
 
-#[cfg(target_os = "android")]
-async fn browse_lan(app: &AppHandle, window: Duration) -> Result<Vec<(DiscoveredDevice, SocketAddr)>, String> {
-    let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
-    let value = bridge
-        .discover_p2p_services(window.as_millis() as u64)
-        .map_err(|e| format!("{e:?}"))?;
-    // Wrapped in {"devices": [...]} on the Kotlin side (NativeBridgePlugin.kt's
-    // discoverP2pServices) since Invoke.resolve() expects a JSObject, not a
-    // bare array.
+/// Shared by both mobile platforms: Android's `NsdManager` browse and iOS's
+/// Bonjour browse deliberately resolve the *same* JSON, so this parser is the
+/// one place either of them turns into `SocketAddr`s. Keeping it shared is
+/// what stops the two from quietly drifting apart -- a difference here would
+/// show up only as one platform silently finding no peers.
+///
+/// The payload is wrapped in `{"devices": [...]}` on both native sides, since
+/// `Invoke.resolve()` takes an object rather than a bare array.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn parse_discovered(value: &serde_json::Value) -> Vec<(DiscoveredDevice, SocketAddr)> {
     let entries = value.get("devices").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let mut found = Vec::new();
     for entry in entries {
@@ -558,12 +582,31 @@ async fn browse_lan(app: &AppHandle, window: Duration) -> Result<Vec<(Discovered
         let Ok(ip) = host.parse() else { continue };
         found.push((DiscoveredDevice { device_id, name, platform }, SocketAddr::new(ip, port)));
     }
-    Ok(found)
+    found
 }
 
+#[cfg(target_os = "android")]
+async fn browse_lan(app: &AppHandle, window: Duration) -> Result<Vec<(DiscoveredDevice, SocketAddr)>, String> {
+    let bridge = app.state::<crate::android_bridge::AndroidBridge<tauri::Wry>>();
+    let value = bridge
+        .discover_p2p_services(window.as_millis() as u64)
+        .map_err(|e| format!("{e:?}"))?;
+    Ok(parse_discovered(&value))
+}
+
+/// iOS's Bonjour browse (P2pBonjour.swift). The peer count is logged because
+/// on iOS it is the *only* observable signal that the Local Network
+/// permission was denied: a denied browse returns no services and no error,
+/// so it reads exactly like an empty wifi network all the way up to the UI.
 #[cfg(target_os = "ios")]
-async fn browse_lan(_app: &AppHandle, _window: Duration) -> Result<Vec<(DiscoveredDevice, SocketAddr)>, String> {
-    Ok(Vec::new())
+async fn browse_lan(app: &AppHandle, window: Duration) -> Result<Vec<(DiscoveredDevice, SocketAddr)>, String> {
+    let bridge = app.state::<crate::ios_bridge::IosBridge<tauri::Wry>>();
+    let value = bridge
+        .discover_p2p_services(window.as_millis() as u64)
+        .map_err(|e| format!("{e:?}"))?;
+    let found = parse_discovered(&value);
+    log::info!("p2p_sync: Bonjour browse resolved {} peer(s)", found.len());
+    Ok(found)
 }
 
 async fn resolve_peer(app: &AppHandle, device_id: &str) -> Result<SocketAddr, String> {
