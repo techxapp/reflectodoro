@@ -159,7 +159,11 @@ pub(crate) static POMODORO_SNOOZE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
 pub(crate) static POMODORO_SNOOZE_MINUTES: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) const SNOOZE_MIN_MINUTES: u32 = 30;
-pub(crate) const SNOOZE_MAX_MINUTES: u32 = 120;
+// Must stay >= the largest value in the main window's SNOOZE_MINUTES_OPTIONS
+// (src/routes/+page.svelte) -- otherwise snooze_pomodoro silently clamps a
+// longer dropdown pick down to this ceiling (e.g. "Pause for 6 hr"/"12 hr"
+// actually resuming after only 2 hr, the bug this constant used to cause).
+pub(crate) const SNOOZE_MAX_MINUTES: u32 = 720;
 
 /// How often `run_scheduler`'s loop re-checks wall-clock time against
 /// `POMODORO_SNOOZE_UNTIL_MS` while a snooze is pending, on every platform
