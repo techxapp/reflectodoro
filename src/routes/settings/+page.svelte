@@ -1,13 +1,16 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { save as saveDialog, open as openDialog, ask } from "@tauri-apps/plugin-dialog";
   import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
   import { sanitizeAttributionHtml } from "$lib/sanitizeHtml";
   import {
     getBreakitSettings,
     saveBreakitSettings,
     exportAllData,
+    countEntriesOlderThan,
+    deleteEntriesOlderThan,
+    deleteAllData,
     parseAndValidateExport,
     importData,
     readTextFile,
@@ -213,6 +216,77 @@
   let importBusy = $state(false);
   let importStatus = $state<"idle" | "success" | "error">("idle");
   let importMessage = $state("");
+
+  // --- Delete data (Advanced) ---------------------------------------------
+
+  let deleteOlderDays = $state(90);
+  let deleteBusy = $state(false);
+  let deleteStatus = $state<"idle" | "checking" | "cancelled" | "success" | "error">("idle");
+  let deleteMessage = $state("");
+
+  async function runDeleteOlder() {
+    const days = Math.max(1, Math.floor(Number(deleteOlderDays) || 0));
+    if (!days) return;
+    deleteOlderDays = days;
+    deleteBusy = true;
+    deleteStatus = "checking";
+    deleteMessage = "Checking…";
+    try {
+      const count = await countEntriesOlderThan(days);
+      if (count === 0) {
+        deleteStatus = "success";
+        deleteMessage = `Nothing older than ${days} day${days === 1 ? "" : "s"}.`;
+        return;
+      }
+      // Native dialog, not window.confirm(): webview JS dialogs aren't reliable on every platform.
+      const ok = await ask(
+        `Delete ${count} record${count === 1 ? "" : "s"} (reflections, check-ins, task lists, screen time) ` +
+          `from before ${days} day${days === 1 ? "" : "s"} ago?\n\n` +
+          `This can't be undone. It only affects this device: a paired device that still has these ` +
+          `entries will send them back on its next sync.`,
+        { title: "Delete older entries", kind: "warning", okLabel: "Delete", cancelLabel: "Cancel" },
+      );
+      if (!ok) {
+        deleteStatus = "cancelled";
+        deleteMessage = "Cancelled. Nothing was deleted.";
+        return;
+      }
+      await deleteEntriesOlderThan(days);
+      deleteStatus = "success";
+      deleteMessage = `Deleted ${count} record${count === 1 ? "" : "s"}.`;
+    } catch (e) {
+      deleteStatus = "error";
+      deleteMessage = e instanceof Error ? e.message : String(e);
+    } finally {
+      deleteBusy = false;
+    }
+  }
+
+  async function runDeleteAll() {
+    deleteBusy = true;
+    deleteStatus = "idle";
+    try {
+      const ok = await ask(
+        "Delete ALL reflections, check-ins, task lists, screen time and saved prefill presets?\n\n" +
+          "This can't be undone. Consider exporting your data first. Settings and paired devices are kept, " +
+          "and a paired device that still has your entries will send them back on its next sync.",
+        { title: "Delete all data", kind: "warning", okLabel: "Delete all", cancelLabel: "Cancel" },
+      );
+      if (!ok) {
+        deleteStatus = "cancelled";
+        deleteMessage = "Cancelled. Nothing was deleted.";
+        return;
+      }
+      await deleteAllData();
+      deleteStatus = "success";
+      deleteMessage = "All data deleted.";
+    } catch (e) {
+      deleteStatus = "error";
+      deleteMessage = e instanceof Error ? e.message : String(e);
+    } finally {
+      deleteBusy = false;
+    }
+  }
 
   // --- P2P LAN device pairing/sync ---------------------------------------
 
@@ -1561,9 +1635,40 @@
     <div id="advanced-settings" class="advanced">
       {#if !isAndroid}
         <EncryptionKeyCard />
-      {:else}
-        <p class="hint">No advanced settings on this device yet.</p>
       {/if}
+
+      <section class="card">
+        <h2>Delete data</h2>
+        <p class="hint">
+          Free up space or start fresh. Deletes reflections, wellness check-ins, task lists and screen
+          time on this device only. Settings, paired devices and the encryption key are kept.
+        </p>
+
+        <div class="data-row">
+          <label>
+            Delete entries older than
+            <input type="number" min="1" step="1" bind:value={deleteOlderDays} style="width: 5em" />
+            days
+          </label>
+          <button type="button" class="danger" disabled={deleteBusy} onclick={runDeleteOlder}>
+            Delete older entries&hellip;
+          </button>
+        </div>
+
+        <div class="data-row">
+          <button type="button" class="danger" disabled={deleteBusy} onclick={runDeleteAll}>
+            Delete all data&hellip;
+          </button>
+        </div>
+
+        {#if deleteStatus === "checking" || deleteStatus === "cancelled"}
+          <p class="hint">{deleteMessage}</p>
+        {:else if deleteStatus === "success"}
+          <p class="hint saved">{deleteMessage}</p>
+        {:else if deleteStatus === "error"}
+          <p class="hint error">{deleteMessage}</p>
+        {/if}
+      </section>
     </div>
   {/if}
 </div>

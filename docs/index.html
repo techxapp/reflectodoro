@@ -1602,6 +1602,12 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
+              <p class="timeline-date">Friday, Sep 25, 2026</p>
+              <ul class="timeline-items">
+                <li>Added a &ldquo;Delete data&rdquo; card to Settings &rarr; Advanced settings: delete every entry older than a number of days you choose, or wipe all your data outright. Both ask for confirmation first, keep your settings, paired devices and encryption key, and only affect the device you're on</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
               <p class="timeline-date">Thursday, Sep 24, 2026</p>
               <ul class="timeline-items">
                 <li>Android can now pause breaks overnight on its own. Set a window in Settings &mdash; 10pm to 8am by default, on unless you turn it off &mdash; and Pomodoro mode pauses itself when it starts and resumes when it ends, so the schedule no longer interrupts your sleep. To get breaks back early, just set Pomodoro to On; it stays on for the rest of that night</li>
@@ -1657,21 +1663,14 @@
                 <li>Stopped the break screen itself from writing the emergency-exit challenge to the log file, finishing the change made earlier in the week so logs are safe to share when reporting a bug</li>
               </ul>
             </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Friday, Sep 18, 2026</p>
-              <ul class="timeline-items">
-                <li>Extended encryption at rest to when each reflection was written and last edited. These timestamps were previously readable on disk, and could reveal your sleep and working patterns to anyone with access to the database file &mdash; without decrypting a single entry</li>
-                <li>Rebuilt how device sync works out what changed, fixing three ways entries could silently never reach a paired device: after a system clock change, when passing between three or more paired devices, and when restoring an older backup onto a device that was already paired</li>
-                <li>Added an &ldquo;Export system info&rdquo; button to the About page, so a bug report can include your OS, display and device details without you having to hunt for them</li>
-                <li>Simplified how the app sets up its local database on first launch, and cleaned out the upgrade machinery left over from earlier versions. Existing reflections, settings and pairings are untouched</li>
-              </ul>
-            </div>
             <p class="timeline-tier reveal">Previous 3 weeks</p>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Sep 14 &ndash; 20, 2026</p>
               <ul class="timeline-items">
                 <li>Added a daily cap on emergency-exit (breakit) code uses, a &ldquo;Coming next&rdquo; preview, bulk-edit and full-day views for reflections with saveable Prefill presets for recurring routines (sleep, lunch, ...), an auto-scrolling reflection list now ordered oldest-first to match &ldquo;View all&rdquo;, and a configurable quote panel pulling short text from a user-set API for the end of a break</li>
-                <li>Added encryption at rest for reflections, task lists and your screen time history &mdash; the names of the apps you use are encrypted on disk too &mdash; with the key held in your operating system's own secure storage (Windows Credential Manager, macOS Keychain, Linux Secret Service, Android Keystore), and added a privacy policy page</li>
+                <li>Added encryption at rest for reflections, task lists and your screen time history &mdash; the names of the apps you use are encrypted on disk too &mdash; with the key held in your operating system's own secure storage (Windows Credential Manager, macOS Keychain, Linux Secret Service, Android Keystore), and added a privacy policy page. Encryption now covers when each reflection was written and last edited too, since those timestamps alone could reveal your sleep and working patterns</li>
+                <li>Rebuilt how device sync works out what changed, fixing three ways entries could silently never reach a paired device: after a system clock change, when passing between three or more paired devices, and when restoring an older backup onto an already-paired device</li>
+                <li>Added an &ldquo;Export system info&rdquo; button to the About page so a bug report can include your OS, display and device details, and simplified how the app sets up its local database on first launch (existing reflections, settings and pairings are untouched)</li>
                 <li>Added per-device auto-sync for paired devices, plus a home-screen widget to sync and manage pairings without opening Settings</li>
                 <li>Fixed the macOS break screen getting hidden behind fullscreen apps and related media-pause bugs, the main window and overlay clocks freezing or showing stale time, and the reflection field pre-filling from the wrong slot instead of your last entry</li>
                 <li>Added the Google Play Store listing identifier, kept Android debug symbols for crash reports, improved macOS startup diagnostics, refreshed the snooze duration options, and stopped writing the emergency-exit challenge value to the log file</li>

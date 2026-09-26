@@ -888,6 +888,62 @@ export async function deleteDayScreenTime(dateStamp: string): Promise<void> {
   await db.execute(`DELETE FROM screen_time_session WHERE date(started_at, 'localtime') = $1`, [dateStamp]);
 }
 
+/** Tables/predicates for "older than N days": every date-keyed content table,
+ * each compared as a local calendar date against today minus N days. */
+const OLDER_THAN_TARGETS: { table: string; dateExpr: string }[] = [
+  { table: "reflection", dateExpr: "date(slot_start_at, 'localtime')" },
+  { table: "wellness_check", dateExpr: "date(slot_start_at, 'localtime')" },
+  { table: "daily_task_list", dateExpr: "date" },
+  { table: "not_to_do_list", dateExpr: "date" },
+  { table: "screen_time_session", dateExpr: "date(started_at, 'localtime')" },
+];
+
+function cutoffModifier(days: number): string {
+  const n = Math.max(1, Math.floor(Number.isFinite(days) ? days : 1));
+  return `-${n} days`;
+}
+
+/** How many rows deleteEntriesOlderThan(days) would remove, for the confirm. */
+export async function countEntriesOlderThan(days: number): Promise<number> {
+  const db = await getDb();
+  const modifier = cutoffModifier(days);
+  let total = 0;
+  for (const { table, dateExpr } of OLDER_THAN_TARGETS) {
+    const rows = await db.select<{ n: number }[]>(
+      `SELECT COUNT(*) AS n FROM ${table} WHERE ${dateExpr} < date('now', 'localtime', $1)`,
+      [modifier],
+    );
+    total += rows[0]?.n ?? 0;
+  }
+  return total;
+}
+
+/**
+ * Deletes reflections, check-ins, both task lists and screen time from local
+ * days strictly before today minus `days`. Same sequential-idempotent-delete
+ * and local-only (sync is additive) caveats as deleteDayEntries. Bulk-edit
+ * presets aren't date-based and are kept.
+ */
+export async function deleteEntriesOlderThan(days: number): Promise<void> {
+  const db = await getDb();
+  const modifier = cutoffModifier(days);
+  for (const { table, dateExpr } of OLDER_THAN_TARGETS) {
+    await db.execute(
+      `DELETE FROM ${table} WHERE ${dateExpr} < date('now', 'localtime', $1)`,
+      [modifier],
+    );
+  }
+}
+
+/** Wipes all user content. Settings, paired devices and the encryption key are kept. */
+export async function deleteAllData(): Promise<void> {
+  const db = await getDb();
+  for (const { table } of OLDER_THAN_TARGETS) {
+    await db.execute(`DELETE FROM ${table}`);
+  }
+  await db.execute(`DELETE FROM bulk_edit_preset`);
+}
+
 export async function getTaskList(dateStamp: string): Promise<string> {
   const db = await getDb();
   const rows = await db.select<{ content: string }[]>(
