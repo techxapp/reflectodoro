@@ -931,6 +931,48 @@ pub fn set_night_pause_config(enabled: bool, start_minutes: u32, end_minutes: u3
     crate::NIGHT_PAUSE_END_MINUTES.store(end_minutes, Ordering::SeqCst);
 }
 
+/// Mirrors `app_setting.auto_pause_on_wake_enabled`/`..._off_minutes`/
+/// `..._remaining_minutes`/`..._pause_minutes` (see CLAUDE.md's "Auto-pause
+/// on wake"). Snake_case fields, no camelCase rename -- same convention as
+/// `NightPauseConfig`/`SnoozeInfo`, read directly on the frontend.
+#[derive(Clone, serde::Serialize)]
+pub struct AutoPauseOnWakeConfig {
+    pub enabled: bool,
+    pub off_minutes: u32,
+    pub remaining_minutes: u32,
+    pub pause_minutes: u32,
+}
+
+#[tauri::command]
+pub fn get_auto_pause_on_wake_config() -> AutoPauseOnWakeConfig {
+    AutoPauseOnWakeConfig {
+        enabled: crate::AUTO_PAUSE_ON_WAKE_ENABLED.load(Ordering::SeqCst),
+        off_minutes: crate::AUTO_PAUSE_ON_WAKE_OFF_MINUTES.load(Ordering::SeqCst),
+        remaining_minutes: crate::AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES.load(Ordering::SeqCst),
+        pause_minutes: crate::AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES.load(Ordering::SeqCst),
+    }
+}
+
+/// Desktop only in effect -- `run_scheduler`'s auto-pause-on-wake trigger,
+/// the sole consumer of these, is
+/// `#[cfg(not(any(target_os = "android", target_os = "ios")))]`-gated.
+/// Clamped the same way `set_overlay_auto_close_minutes` clamps its own
+/// value: an unbounded `off_minutes`/`remaining_minutes` would make the
+/// feature impossible to trigger, and an unbounded `pause_minutes` would
+/// pause Pomodoro mode for an absurd length of time from one wake event.
+#[tauri::command]
+pub fn set_auto_pause_on_wake_config(
+    enabled: bool,
+    off_minutes: u32,
+    remaining_minutes: u32,
+    pause_minutes: u32,
+) {
+    crate::AUTO_PAUSE_ON_WAKE_ENABLED.store(enabled, Ordering::SeqCst);
+    crate::AUTO_PAUSE_ON_WAKE_OFF_MINUTES.store(off_minutes.clamp(1, 180), Ordering::SeqCst);
+    crate::AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES.store(remaining_minutes.clamp(1, 60), Ordering::SeqCst);
+    crate::AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES.store(pause_minutes.clamp(5, 240), Ordering::SeqCst);
+}
+
 /// Only available when dev_mode is on -- bypasses the unlock formula entirely.
 /// A permanent, non-dev-gated safety net also exists via the global shortcut
 /// (see lib.rs) and the tray Quit item.

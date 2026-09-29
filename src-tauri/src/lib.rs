@@ -244,6 +244,49 @@ pub(crate) static NIGHT_PAUSE_ENABLED: AtomicBool = AtomicBool::new(true);
 pub(crate) static NIGHT_PAUSE_START_MINUTES: AtomicU32 = AtomicU32::new(22 * 60);
 pub(crate) static NIGHT_PAUSE_END_MINUTES: AtomicU32 = AtomicU32::new(8 * 60);
 
+/// Desktop only: whether waking from a real suspend/hibernate gap (see
+/// `SUSPEND_GAP_THRESHOLD`) close to a grid boundary auto-pauses Pomodoro
+/// mode for a short while, so reopening the laptop doesn't immediately drop
+/// the user into a break (or the next work slot) seconds after they sit
+/// down. Backed by `app_setting.auto_pause_on_wake_enabled`; same load/push
+/// pattern as `NIGHT_PAUSE_ENABLED`. Defaults to `true`.
+///
+/// Like night pause, this has **no enforcement mechanism of its own** -- it
+/// just arms the ordinary snooze (`commands::arm_snooze`) for
+/// `AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES`, so every existing snooze behavior
+/// (the dropdown, the "Resumes at" hint, the wall-clock expiry poll,
+/// "resume early is just picking Pomodoro: On") applies unchanged. See
+/// `run_scheduler`'s suspend-gap branch.
+///
+/// `#[cfg(not(any(target_os = "android", target_os = "ios")))]`-gated at the
+/// trigger site rather than relying on these atomics being false on mobile:
+/// Android has its own wake-detection story (heartbeat + `AlarmManager`) and
+/// night pause already covers its overnight case; iOS gets `RunEvent::Resumed`
+/// instead of a suspend-gap poll at all.
+pub(crate) static AUTO_PAUSE_ON_WAKE_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// How long the PC/laptop has to have been off (the suspend-gap `overslept`
+/// duration, in minutes) before `AUTO_PAUSE_ON_WAKE_ENABLED` is even
+/// considered. Backed by `app_setting.auto_pause_on_wake_off_minutes`.
+/// Defaults to 15.
+pub(crate) static AUTO_PAUSE_ON_WAKE_OFF_MINUTES: AtomicU32 = AtomicU32::new(15);
+
+/// How little time may remain in the grid slot that's live at the moment of
+/// waking (work or break) for the auto-pause to still fire -- waking up in
+/// the middle of a slot with plenty of time left shouldn't pause anything.
+/// Backed by `app_setting.auto_pause_on_wake_remaining_minutes`. Defaults to
+/// 10.
+pub(crate) static AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES: AtomicU32 = AtomicU32::new(10);
+
+/// How long the auto-pause itself lasts once triggered. Backed by
+/// `app_setting.auto_pause_on_wake_pause_minutes`. Defaults to 20. Unlike
+/// `SNOOZE_MIN_MINUTES`/`SNOOZE_MAX_MINUTES`, this isn't clamped against the
+/// dropdown's fixed options -- `arm_snooze` takes an absolute resume instant
+/// and `customPauseMinutes` on the frontend already renders whatever
+/// arbitrary duration results, the same way night pause's window-length
+/// pause does.
+pub(crate) static AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES: AtomicU32 = AtomicU32::new(20);
+
 /// Whether foreground-app focus tracking is running (see screen_time.rs).
 /// Backed by `app_setting.screen_time_tracking_enabled`; same load/push
 /// pattern as `MEDIA_PAUSE_ON_BREAK_ENABLED`. Defaults to `true` here too,
@@ -512,6 +555,12 @@ async fn run_scheduler(app: AppHandle) {
         // directly here instead of relying on that path or the
         // OVERLAY_AUTO_CLOSE_MINUTES grace timer, which wouldn't even get
         // scheduled in that case.
+        // Captured here (rather than only used inline) so the auto-pause-on-wake
+        // check below -- which needs `slot`, not computed until after this block --
+        // can still see how long the gap actually was. Desktop-only, like the
+        // check itself, so this doesn't leave an unread assignment on mobile.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let mut suspend_gap_overslept: Option<StdDuration> = None;
         if let Some(expected) = expected_wake {
             let overslept = (now - expected).to_std().unwrap_or(StdDuration::ZERO);
             if overslept > SUSPEND_GAP_THRESHOLD {
@@ -540,6 +589,10 @@ async fn run_scheduler(app: AppHandle) {
                 // live break. Reset unconditionally on any suspend-sized gap,
                 // independent of the grace-period check above.
                 last_phase = None;
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                {
+                    suspend_gap_overslept = Some(overslept);
+                }
             }
         }
 
@@ -585,6 +638,48 @@ async fn run_scheduler(app: AppHandle) {
         }
 
         let mut slot = grid::slot_for_mode(now, current_mode());
+
+        // Auto-pause on wake (desktop only -- see AUTO_PAUSE_ON_WAKE_ENABLED's
+        // doc comment). Piggybacks entirely on the suspend-gap detection
+        // above: if this iteration just noticed a real suspend/hibernate gap
+        // at least AUTO_PAUSE_ON_WAKE_OFF_MINUTES long, and the slot that's
+        // live right now has less than AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES
+        // left on the clock, arm the ordinary snooze for
+        // AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES -- so reopening the laptop right
+        // before a boundary doesn't immediately drop the user into a break
+        // (or the next work slot) they never chose to start. Fires at most
+        // once per real wake event for the same reason the suspend-gap branch
+        // above does: `expected_wake` is recomputed fresh every loop
+        // iteration, so `suspend_gap_overslept` is only `Some` right after an
+        // actual gap, never on ordinary ticks. Guarded on POMODORO_ENABLED so
+        // it can't fire over an already-off/already-snoozed state (e.g. night
+        // pause already handling this same wake on Android).
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if let Some(overslept) = suspend_gap_overslept {
+            if AUTO_PAUSE_ON_WAKE_ENABLED.load(Ordering::SeqCst)
+                && POMODORO_ENABLED.load(Ordering::SeqCst)
+                && overslept
+                    >= StdDuration::from_secs(
+                        60 * AUTO_PAUSE_ON_WAKE_OFF_MINUTES.load(Ordering::SeqCst) as u64,
+                    )
+            {
+                let remaining = slot.end - now;
+                let remaining_threshold = chrono::Duration::minutes(
+                    AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES.load(Ordering::SeqCst) as i64,
+                );
+                if remaining > chrono::Duration::zero() && remaining <= remaining_threshold {
+                    let pause_minutes = AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES.load(Ordering::SeqCst);
+                    let resume_at = now + chrono::Duration::minutes(pause_minutes as i64);
+                    log::info!(
+                        "scheduler: auto-pause on wake -- off {}s, {}min left in slot, pausing until {}",
+                        overslept.as_secs(),
+                        remaining.num_minutes(),
+                        resume_at.to_rfc3339()
+                    );
+                    commands::arm_snooze(&app, resume_at);
+                }
+            }
+        }
 
         // Testing aid only (see force_break_on_start): overrides the phase for
         // one iteration. `slot.end` is deliberately left as the real work
@@ -1108,6 +1203,8 @@ pub fn run() {
             commands::set_hide_overlay_on_call_enabled,
             commands::get_night_pause_config,
             commands::set_night_pause_config,
+            commands::get_auto_pause_on_wake_config,
+            commands::set_auto_pause_on_wake_config,
             commands::get_macos_hide_menu_bar_dock_enabled,
             commands::set_macos_hide_menu_bar_dock_enabled,
             commands::get_macos_media_key_fallback_enabled,

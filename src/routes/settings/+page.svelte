@@ -28,6 +28,8 @@
     saveHideOverlayOnCallEnabled,
     getNightPauseConfig,
     saveNightPauseConfig,
+    getAutoPauseOnWakeConfig,
+    saveAutoPauseOnWakeConfig,
     getOverlayAutoCloseMinutes,
     saveOverlayAutoCloseMinutes,
     getCheckinAutoCloseMinutes,
@@ -142,6 +144,14 @@
   let nightPauseLoaded = $state(false);
   let nightPauseBusy = $state(false);
   let nightPauseSaved = $state(false);
+
+  let autoPauseOnWakeEnabled = $state(true);
+  let autoPauseOnWakeOffMinutes = $state(15);
+  let autoPauseOnWakeRemainingMinutes = $state(10);
+  let autoPauseOnWakePauseMinutes = $state(20);
+  let autoPauseOnWakeLoaded = $state(false);
+  let autoPauseOnWakeBusy = $state(false);
+  let autoPauseOnWakeSaved = $state(false);
 
   function minutesToHhMm(minutes: number): string {
     const h = Math.floor(minutes / 60) % 24;
@@ -520,6 +530,15 @@
   });
 
   onMount(async () => {
+    const config = await getAutoPauseOnWakeConfig();
+    autoPauseOnWakeEnabled = config.enabled;
+    autoPauseOnWakeOffMinutes = config.offMinutes;
+    autoPauseOnWakeRemainingMinutes = config.remainingMinutes;
+    autoPauseOnWakePauseMinutes = config.pauseMinutes;
+    autoPauseOnWakeLoaded = true;
+  });
+
+  onMount(async () => {
     screenTimeTrackingEnabled = await getScreenTimeTrackingEnabled();
     screenTimeTrackingLoaded = true;
   });
@@ -740,6 +759,37 @@
     });
     nightPauseSaved = true;
     setTimeout(() => (nightPauseSaved = false), 2000);
+  }
+
+  async function toggleAutoPauseOnWakeEnabled() {
+    const next = !autoPauseOnWakeEnabled;
+    autoPauseOnWakeBusy = true;
+    try {
+      await saveAutoPauseOnWakeConfig({
+        enabled: next,
+        offMinutes: autoPauseOnWakeOffMinutes,
+        remainingMinutes: autoPauseOnWakeRemainingMinutes,
+        pauseMinutes: autoPauseOnWakePauseMinutes,
+      });
+      autoPauseOnWakeEnabled = next;
+    } finally {
+      autoPauseOnWakeBusy = false;
+    }
+  }
+
+  async function saveAutoPauseOnWakeThresholds(e: Event) {
+    e.preventDefault();
+    autoPauseOnWakeOffMinutes = Math.min(180, Math.max(1, autoPauseOnWakeOffMinutes));
+    autoPauseOnWakeRemainingMinutes = Math.min(60, Math.max(1, autoPauseOnWakeRemainingMinutes));
+    autoPauseOnWakePauseMinutes = Math.min(240, Math.max(5, autoPauseOnWakePauseMinutes));
+    await saveAutoPauseOnWakeConfig({
+      enabled: autoPauseOnWakeEnabled,
+      offMinutes: autoPauseOnWakeOffMinutes,
+      remainingMinutes: autoPauseOnWakeRemainingMinutes,
+      pauseMinutes: autoPauseOnWakePauseMinutes,
+    });
+    autoPauseOnWakeSaved = true;
+    setTimeout(() => (autoPauseOnWakeSaved = false), 2000);
   }
 
   async function toggleMacosHideMenuBarDock() {
@@ -977,6 +1027,53 @@
     </p>
     <p class="hint">To change the mode, use the mode selector on the Timer screen.</p>
   </section>
+
+  {#if !isMobile}
+    <section class="card">
+      <h2>Auto-pause on wake</h2>
+      {#if autoPauseOnWakeLoaded}
+        <div class="data-row">
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              checked={autoPauseOnWakeEnabled}
+              disabled={autoPauseOnWakeBusy}
+              onchange={toggleAutoPauseOnWakeEnabled}
+            />
+            Auto-pause after waking from sleep near a boundary
+          </label>
+        </div>
+        <form onsubmit={saveAutoPauseOnWakeThresholds}>
+          <label>
+            PC was off for more than
+            <input type="number" min="1" max="180" bind:value={autoPauseOnWakeOffMinutes} />
+            minutes
+          </label>
+          <label>
+            and less than
+            <input type="number" min="1" max="60" bind:value={autoPauseOnWakeRemainingMinutes} />
+            minutes remain in the current session
+          </label>
+          <label>
+            Pause for
+            <input type="number" min="5" max="240" bind:value={autoPauseOnWakePauseMinutes} />
+            minutes
+          </label>
+          <button type="submit">Save</button>
+          {#if autoPauseOnWakeSaved}
+            <span class="hint saved">Saved</span>
+          {/if}
+        </form>
+        <p class="hint">
+          If you reopen this device after it's been asleep for a while, right before a work or
+          break boundary, Pomodoro mode pauses itself for the duration above instead of dropping
+          you straight into a session you never chose to start. Resumes on its own, exactly like
+          picking a pause from the Timer tab's dropdown &mdash; to resume early, set Pomodoro back
+          to On.
+        </p>
+      {/if}
+    </section>
+  {/if}
 
   <section class="card">
     <h2>Break screen</h2>

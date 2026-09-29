@@ -1439,6 +1439,98 @@ export async function loadAndSyncNightPauseConfig(): Promise<NightPauseConfig> {
 }
 
 
+// --- Auto-pause on wake (Settings, desktop only in effect) -------------
+// Desktop only (see CLAUDE.md's "Auto-pause on wake"). On by default. If
+// waking from a real suspend/hibernate gap lands close enough to a grid
+// boundary, Pomodoro mode auto-pauses for a bit rather than immediately
+// dropping the user into a break (or the next work slot) they never chose
+// to start. Config only, same shape as night pause: the pause itself is
+// expressed through the ordinary snooze (run_scheduler arms one via
+// arm_snooze), so nothing here drives any pause-specific UI beyond the
+// three numbers below -- the main window's existing Pomodoro dropdown and
+// "Resumes at HH:MM" hint show it, and picking "Pomodoro: On" resumes.
+
+export interface AutoPauseOnWakeConfig {
+  enabled: boolean;
+  offMinutes: number;
+  remainingMinutes: number;
+  pauseMinutes: number;
+}
+
+const AUTO_PAUSE_ON_WAKE_ENABLED_KEY = "auto_pause_on_wake_enabled";
+const AUTO_PAUSE_ON_WAKE_OFF_MINUTES_KEY = "auto_pause_on_wake_off_minutes";
+const AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES_KEY = "auto_pause_on_wake_remaining_minutes";
+const AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES_KEY = "auto_pause_on_wake_pause_minutes";
+const AUTO_PAUSE_ON_WAKE_DEFAULT_OFF_MINUTES = 15;
+const AUTO_PAUSE_ON_WAKE_DEFAULT_REMAINING_MINUTES = 10;
+const AUTO_PAUSE_ON_WAKE_DEFAULT_PAUSE_MINUTES = 20;
+
+export async function getAutoPauseOnWakeConfig(): Promise<AutoPauseOnWakeConfig> {
+  const db = await getDb();
+  const rows = await db.select<{ key: string; value: string }[]>(
+    `SELECT key, value FROM app_setting WHERE key IN ($1, $2, $3, $4)`,
+    [
+      AUTO_PAUSE_ON_WAKE_ENABLED_KEY,
+      AUTO_PAUSE_ON_WAKE_OFF_MINUTES_KEY,
+      AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES_KEY,
+      AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES_KEY,
+    ],
+  );
+  const byKey = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  return {
+    enabled: (byKey[AUTO_PAUSE_ON_WAKE_ENABLED_KEY] ?? "true") === "true",
+    offMinutes: Number(byKey[AUTO_PAUSE_ON_WAKE_OFF_MINUTES_KEY] ?? AUTO_PAUSE_ON_WAKE_DEFAULT_OFF_MINUTES),
+    remainingMinutes: Number(
+      byKey[AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES_KEY] ?? AUTO_PAUSE_ON_WAKE_DEFAULT_REMAINING_MINUTES,
+    ),
+    pauseMinutes: Number(
+      byKey[AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES_KEY] ?? AUTO_PAUSE_ON_WAKE_DEFAULT_PAUSE_MINUTES,
+    ),
+  };
+}
+
+export async function saveAutoPauseOnWakeConfig(config: AutoPauseOnWakeConfig): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [AUTO_PAUSE_ON_WAKE_ENABLED_KEY, String(config.enabled)],
+  );
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [AUTO_PAUSE_ON_WAKE_OFF_MINUTES_KEY, String(config.offMinutes)],
+  );
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES_KEY, String(config.remainingMinutes)],
+  );
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES_KEY, String(config.pauseMinutes)],
+  );
+  await syncAutoPauseOnWakeConfigToBackend(config);
+}
+
+export async function syncAutoPauseOnWakeConfigToBackend(config: AutoPauseOnWakeConfig): Promise<void> {
+  await invoke("set_auto_pause_on_wake_config", {
+    enabled: config.enabled,
+    offMinutes: config.offMinutes,
+    remainingMinutes: config.remainingMinutes,
+    pauseMinutes: config.pauseMinutes,
+  });
+}
+
+/** Call once on app boot (main window) so Rust's in-memory config matches SQLite. */
+export async function loadAndSyncAutoPauseOnWakeConfig(): Promise<AutoPauseOnWakeConfig> {
+  const config = await getAutoPauseOnWakeConfig();
+  await syncAutoPauseOnWakeConfigToBackend(config);
+  return config;
+}
+
+
 // --- macOS media-toggle guard (see media.rs's macos_impl module) -------
 //
 // Windows' media pause queries actual playback state, so it never needs

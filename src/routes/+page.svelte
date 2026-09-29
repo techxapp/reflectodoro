@@ -18,6 +18,7 @@
     loadAndSyncBreakNotificationPersistentSetting,
     loadAndSyncHideOverlayOnCallSetting,
     loadAndSyncNightPauseConfig,
+    loadAndSyncAutoPauseOnWakeConfig,
     loadAndSyncMediaToggleGuard,
     loadAndSyncMacosHideMenuBarDockSetting,
     loadAndSyncMacosMediaKeyFallbackSetting,
@@ -315,6 +316,7 @@
     await loadAndSyncBreakNotificationPersistentSetting();
     await loadAndSyncHideOverlayOnCallSetting();
     await loadAndSyncNightPauseConfig();
+    await loadAndSyncAutoPauseOnWakeConfig();
     await loadAndSyncMediaToggleGuard();
     await loadAndSyncMacosHideMenuBarDockSetting();
     await loadAndSyncScreenTimeTrackingSetting();
