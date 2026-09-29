@@ -3,6 +3,7 @@ package com.reflectodoro.app
 import android.app.Activity
 import android.app.AlarmManager
 import android.app.AppOpsManager
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
@@ -127,6 +128,13 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
     private val appLabelCache = mutableMapOf<String, String>()
 
     companion object {
+        /** The same Rust channel as `overlayChannel`, reachable from code
+         * that has no plugin instance -- BreakAlarmReceiver uses it to wake
+         * run_scheduler at a grid boundary. Null until native_overlay.rs's
+         * install_channel has run in this process. */
+        @Volatile
+        var sharedChannel: Channel? = null
+
         // Trailing dot matches the format NsdManager expects (mirrors
         // p2p_sync.rs's SERVICE_TYPE constant on the Rust side -- both must
         // agree for desktop and Android instances to discover each other).
@@ -242,14 +250,20 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(ret)
     }
 
-    /** Called from every iteration of Rust's run_scheduler loop (which is
-     * capped to run at least every ANDROID_POLL_INTERVAL, 20s, regardless of
-     * phase -- see lib.rs). Lets MainActivity.isSchedulerAlive() tell "the
-     * scheduler is actually alive right now" apart from "an Activity merely
-     * existed at some point in this process incarnation". */
+    /** Called at the top of every iteration of Rust's run_scheduler loop.
+     * BreakAlarmReceiver wakes that loop at each grid boundary and then checks
+     * for a heartbeat newer than the alarm -- see its onReceive.
+     *
+     * The first heartbeat of a process also clears any "Tap to reopen" wake
+     * notification a recovery launch left behind: once the scheduler is
+     * running again, that notification has nothing left to offer. */
     @Command
     fun reportSchedulerHeartbeat(invoke: Invoke) {
+        val firstInProcess = !MainActivity.hasSchedulerReported()
         MainActivity.lastSchedulerHeartbeatAt = System.currentTimeMillis()
+        if (firstInProcess) {
+            activity.getSystemService(NotificationManager::class.java).cancel(WAKE_NOTIFICATION_ID)
+        }
         invoke.resolve(JSObject())
     }
 
@@ -571,6 +585,7 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
     fun initNativeOverlayChannel(invoke: Invoke) {
         val args = invoke.parseArgs(InitNativeOverlayChannelArgs::class.java)
         overlayChannel = args.channel
+        sharedChannel = args.channel
         invoke.resolve(JSObject())
     }
 

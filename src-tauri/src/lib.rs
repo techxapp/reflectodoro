@@ -128,6 +128,15 @@ pub(crate) static POMODORO_MODE: AtomicU8 = AtomicU8::new(0);
 /// Wakes `run_scheduler`'s sleep when the mode changes.
 pub(crate) static MODE_CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
+/// Android: woken by `BreakAlarmReceiver` (via native_overlay.rs's channel) at
+/// every grid boundary. `run_scheduler`'s `tokio::time::sleep` runs on
+/// CLOCK_MONOTONIC, which freezes in deep sleep, so after a screen-off stretch
+/// it would otherwise notice the boundary only once up to MOBILE_POLL_INTERVAL
+/// of *awake* time had passed. The receiver also uses the heartbeat this
+/// produces to decide whether the scheduler is alive at all.
+#[cfg(target_os = "android")]
+pub(crate) static SCHEDULER_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
 pub(crate) fn current_mode() -> grid::Mode {
     if POMODORO_MODE.load(Ordering::SeqCst) == 1 {
         grid::Mode::Concentration
@@ -477,6 +486,19 @@ async fn run_scheduler(app: AppHandle) {
     }
 
     loop {
+        // Refreshes MainActivity.lastSchedulerHeartbeatAt the moment the loop
+        // wakes -- at the top, not after the break-open work below -- so
+        // BreakAlarmReceiver, which wakes this loop via SCHEDULER_WAKE and then
+        // checks for a heartbeat newer than the alarm, gets its answer
+        // immediately. See BreakAlarmReceiver.onReceive.
+        #[cfg(target_os = "android")]
+        {
+            let bridge = app.state::<android_bridge::AndroidBridge<tauri::Wry>>();
+            if let Err(e) = bridge.report_scheduler_heartbeat() {
+                log::warn!("report_scheduler_heartbeat failed: {e:?}");
+            }
+        }
+
         let now = Local::now();
 
         // Wall-clock (not a separate timer) check for a pending snooze
@@ -737,18 +759,6 @@ async fn run_scheduler(app: AppHandle) {
         } else {
             sleep_dur
         };
-        // Refreshes MainActivity.lastSchedulerHeartbeatAt every iteration
-        // (at least every MOBILE_POLL_INTERVAL, thanks to the cap above) so
-        // BreakAlarmReceiver can tell a genuinely live scheduler apart from
-        // one whose task died without taking the whole process down with it
-        // -- see MainActivity.isSchedulerAlive's doc comment.
-        #[cfg(target_os = "android")]
-        {
-            let bridge = app.state::<android_bridge::AndroidBridge<tauri::Wry>>();
-            if let Err(e) = bridge.report_scheduler_heartbeat() {
-                log::warn!("report_scheduler_heartbeat failed: {e:?}");
-            }
-        }
         // `expected_wake` has to reflect *this specific sleep's* actual
         // duration, not the raw slot boundary (`slot.end`) -- on Android,
         // where `sleep_dur` gets capped to `MOBILE_POLL_INTERVAL` (20s)
@@ -770,10 +780,16 @@ async fn run_scheduler(app: AppHandle) {
         }
         // Woken early by `commands::set_pomodoro_mode` so a mode switch takes
         // effect now rather than at the old mode's next boundary.
-        #[cfg(not(target_os = "ios"))]
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
         tokio::select! {
             _ = tokio::time::sleep(sleep_dur) => {}
             _ = MODE_CHANGED.notified() => {}
+        }
+        #[cfg(target_os = "android")]
+        tokio::select! {
+            _ = tokio::time::sleep(sleep_dur) => {}
+            _ = MODE_CHANGED.notified() => {}
+            _ = SCHEDULER_WAKE.notified() => {}
         }
     }
 }

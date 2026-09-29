@@ -208,11 +208,10 @@ impl<R: Runtime> AndroidBridge<R> {
         Ok((until_ms, minutes))
     }
 
-    /// Refreshes `MainActivity.lastSchedulerHeartbeatAt` -- called from every
-    /// iteration of `run_scheduler` (capped to at least every
-    /// `MOBILE_POLL_INTERVAL`) so `BreakAlarmReceiver` can tell a genuinely
-    /// live scheduler apart from one whose task died without taking the
-    /// whole process down with it. See `MainActivity.isSchedulerAlive`.
+    /// Refreshes `MainActivity.lastSchedulerHeartbeatAt` -- called at the top
+    /// of every `run_scheduler` iteration. `BreakAlarmReceiver` wakes the loop
+    /// (`crate::SCHEDULER_WAKE`) at each grid boundary and treats a heartbeat
+    /// newer than the alarm as proof the scheduler is alive.
     pub fn report_scheduler_heartbeat(&self) -> Result<Value, PluginInvokeError> {
         self.0.run_mobile_plugin("reportSchedulerHeartbeat", ())
     }

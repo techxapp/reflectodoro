@@ -3,12 +3,26 @@ package com.reflectodoro.app
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 
 /** Fires at every grid boundary (see scheduleNextAlarm in
  * BreakScheduling.kt) as a Doze-surviving backup to the foreground service.
  * Deliberately doesn't decide phase/unlock state itself -- see
  * BreakScheduling.kt's postWakeNotification doc comment for why. */
 class BreakAlarmReceiver : BroadcastReceiver() {
+  companion object {
+    private const val TAG = "BreakAlarmReceiver"
+
+    /** How long a live scheduler gets to answer the wake with a heartbeat.
+     * It normally answers in well under a second. Kept well inside the ~10s a
+     * goAsync() receiver is allowed, since recover()'s startActivity relies on
+     * this broadcast still being in flight for its background-launch
+     * allowance. */
+    private const val WAKE_ANSWER_TIMEOUT_MS = 5_000L
+  }
+
   override fun onReceive(context: Context, intent: Intent) {
     // Covers "the service died but the process/Activity didn't" -- cheap
     // and idempotent even if it was already running.
@@ -20,59 +34,86 @@ class BreakAlarmReceiver : BroadcastReceiver() {
     // alarmManager.set(), which carries no such exemption -- so on API 31+
     // with "Alarms & reminders" not granted, startForegroundService() here
     // throws ForegroundServiceStartNotAllowedException and would otherwise
-    // crash the whole app on every single grid boundary (every 25-30
-    // minutes) for as long as that permission stays ungranted. Falling back
-    // to postWakeNotification -- the same recovery notification already
-    // used below for "the whole process was dead" -- degrades gracefully
-    // instead of crashing.
-    var serviceStartFailed = false
+    // crash the whole app on every single grid boundary. Whether the app then
+    // needs recovering is decided below, the same way either way.
     try {
       context.startForegroundService(Intent(context, BreakSchedulerService::class.java))
     } catch (e: Exception) {
-      serviceStartFailed = true
+      Log.w(TAG, "startForegroundService failed: $e")
     }
 
-    // Covers "the whole process was dead" (a plain service restart alone
-    // can't revive run_scheduler, it only starts via MainActivity's
-    // Activity-creation path) as well as "the process is alive but the
-    // scheduler task itself died without taking it down" -- see
-    // MainActivity.isSchedulerAlive's doc comment for why this checks a
-    // recent heartbeat rather than a one-time "did onCreate ever run" flag.
-    if (!MainActivity.isSchedulerAlive()) {
-      postWakeNotification(context)
+    // No scheduler has ever run in this process: it was dead (this receiver
+    // started it fresh), or only the service was restarted -- run_scheduler
+    // only starts via MainActivity's Activity-creation path.
+    if (!MainActivity.hasSchedulerReported()) {
+      Log.i(TAG, "no scheduler in this process -- recovering")
+      recover(context)
+      return
+    }
 
-      // Deliberately DOES auto-launch to the foreground here, unlike every
-      // other break trigger in this app -- confirmed explicitly with the
-      // user as a scoped exception to the "never auto-launch over active
-      // use" rule (see BreakScheduling.kt's postBreakNotification doc
-      // comment), limited to this one recovery case: the process was
-      // killed (most commonly by an OEM battery/process manager -- see
-      // CLAUDE.md) badly enough that even the foreground service didn't
-      // survive to show the real break/overlay UI, so there is no other
-      // way back in short of the user noticing and tapping the wake
-      // notification above, possibly tens of minutes later. No
-      // FLAG_SHOW_WHEN_LOCKED/FLAG_TURN_SCREEN_ON here -- if the screen is
-      // off/locked this just queues the activity to be shown on unlock
-      // rather than forcing the screen on, so the "never wake an idle/
-      // locked device" constraint from that same decision still holds. This
-      // only reliably reaches the foreground -- even over another app
-      // actively running -- because scheduleNextAlarm (BreakScheduling.kt)
-      // arms this receiver via AlarmManager.setAlarmClock, which is on
-      // Android's documented background-activity-launch exemption list.
-      // Confirmed empirically on a real device that a plain exact alarm is
-      // NOT exempt: this startActivity() only worked from an idle/Home-
-      // screen state before that switch, not over a foreground app.
-      val launchIntent = Intent(context, MainActivity::class.java).apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+    // A scheduler did run here, but it may have died since without taking the
+    // process with it. Its age alone can't tell us: it sleeps on
+    // CLOCK_MONOTONIC, which freezes in deep sleep, so after any screen-off
+    // stretch a live scheduler's last heartbeat is minutes old. Judging by
+    // age used to relaunch the app over whatever the user was doing (plus a
+    // "Tap to reopen" notification) at nearly every boundary, break end
+    // included. Instead: wake it -- which also makes it act on this boundary
+    // right away rather than up to MOBILE_POLL_INTERVAL of awake time later --
+    // and see whether it answers.
+    val receivedAt = System.currentTimeMillis()
+    val channel = NativeBridgePlugin.sharedChannel
+    if (channel == null) {
+      Log.w(TAG, "no Rust channel to wake the scheduler with -- waiting for its own poll")
+    } else {
+      try {
+        channel.sendObject(mapOf("kind" to "scheduler_wake"))
+      } catch (e: Exception) {
+        Log.w(TAG, "scheduler_wake send failed: $e")
       }
-      context.startActivity(launchIntent)
-    } else if (serviceStartFailed) {
-      // The scheduler heartbeat is recent, so run_scheduler is presumably
-      // still running in-process and should notice this boundary on its own
-      // -- the failed restart above was likely a no-op attempt on a service
-      // that didn't actually need reviving. Still worth a visible nudge in
-      // case that assumption is wrong on this particular device.
-      postWakeNotification(context)
     }
+
+    val pending = goAsync()
+    Handler(Looper.getMainLooper()).postDelayed({
+      try {
+        if (MainActivity.lastSchedulerHeartbeatAt >= receivedAt) {
+          Log.i(TAG, "scheduler answered the wake -- alive, nothing to recover")
+        } else {
+          Log.w(TAG, "scheduler didn't answer within ${WAKE_ANSWER_TIMEOUT_MS}ms -- recovering")
+          recover(context)
+        }
+      } finally {
+        pending.finish()
+      }
+    }, WAKE_ANSWER_TIMEOUT_MS)
+  }
+
+  private fun recover(context: Context) {
+    postWakeNotification(context)
+
+    // Deliberately DOES auto-launch to the foreground here, unlike every
+    // other break trigger in this app -- confirmed explicitly with the
+    // user as a scoped exception to the "never auto-launch over active
+    // use" rule (see BreakScheduling.kt's postBreakNotification doc
+    // comment), limited to this one recovery case: the process was
+    // killed (most commonly by an OEM battery/process manager -- see
+    // CLAUDE.md) badly enough that even the foreground service didn't
+    // survive to show the real break/overlay UI, so there is no other
+    // way back in short of the user noticing and tapping the wake
+    // notification above, possibly tens of minutes later. No
+    // FLAG_SHOW_WHEN_LOCKED/FLAG_TURN_SCREEN_ON here -- if the screen is
+    // off/locked this just queues the activity to be shown on unlock
+    // rather than forcing the screen on, so the "never wake an idle/
+    // locked device" constraint from that same decision still holds. This
+    // only reliably reaches the foreground -- even over another app
+    // actively running -- because scheduleNextAlarm (BreakScheduling.kt)
+    // arms this receiver via AlarmManager.setAlarmClock, which is on
+    // Android's documented background-activity-launch exemption list.
+    // Confirmed empirically on a real device that a plain exact alarm is
+    // NOT exempt: this startActivity() only worked from an idle/Home-
+    // screen state before that switch, not over a foreground app.
+    val launchIntent = Intent(context, MainActivity::class.java).apply {
+      flags = Intent.FLAG_ACTIVITY_NEW_TASK
+    }
+    context.startActivity(launchIntent)
   }
 }
