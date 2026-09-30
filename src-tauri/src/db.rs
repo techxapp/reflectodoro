@@ -293,6 +293,23 @@ const FULL_SCHEMA_SQL: &str = r#"
 pub(crate) const DEFAULT_QUOTE_API_ATTRIBUTION: &str =
     "Inspirational quotes provided by <a href=\"https://zenquotes.io/\" target=\"_blank\">ZenQuotes API</a>";
 
+/// Default system prompt for the Entries tab's "Summarize" button (see
+/// CLAUDE.md's "Daily reflection summary (local LLM)"). Single source of
+/// truth -- `commands::summarize_reflections` falls back to this whenever
+/// the user's `llm_summary_system_prompt` override is blank, and Settings'
+/// placeholder/"Reset to default" fetch it live via
+/// `commands::default_llm_summary_system_prompt` rather than keeping a
+/// hardcoded copy, the same "ask Rust, don't duplicate the literal"
+/// treatment `DEFAULT_QUOTE_API_ATTRIBUTION` gets above. Not seeded into
+/// `app_setting` -- unlike the quote attribution, there's no reason for a
+/// fresh install to carry a real row here; a blank/absent
+/// `llm_summary_system_prompt` always means "use this default." Matches the
+/// structured `HH:MM-HH:MM (duration): text` per-entry input the frontend
+/// builds (see `entries/+page.svelte`), so the prompt tells the model what
+/// shape to expect rather than leaving it to infer durations itself.
+pub(crate) const DEFAULT_LLM_SUMMARY_SYSTEM_PROMPT: &str =
+    "You are summarizing one person's day from their own reflections, each written after a period of focused work in answer to \"what did I do?\". You'll be given a list of entries for a single day, each showing the time range worked, how long, and what they wrote. Write a brief, plain-language summary of the day in bulleted format: what they spent time on and roughly how much time went to each. Cluster and Order tasks with respect to priority - no need to follow timeline. Use only the content given -- don't invent details, and don't give advice or commentary.";
+
 const SEED_SETTINGS: &[(&str, &str)] = &[
     ("breakit_length", "12"),
     ("breakit_include_special", "false"),

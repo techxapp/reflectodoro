@@ -1047,6 +1047,135 @@ pub async fn fetch_quote(url: String) -> Result<String, String> {
     Ok(truncate_chars(&text, MAX_QUOTE_CHARS))
 }
 
+/// The Entries tab's "Summarize" button's default system prompt, for
+/// Settings' "Reset to default" button and the field's placeholder -- same
+/// "single source of truth lives in db.rs" treatment as
+/// `default_quote_api_attribution` above.
+#[tauri::command]
+pub fn default_llm_summary_system_prompt() -> String {
+    crate::db::DEFAULT_LLM_SUMMARY_SYSTEM_PROMPT.to_string()
+}
+
+/// Sends `content` (a day's worth of reflections, already formatted by the
+/// caller -- see `entries/+page.svelte`) to a user-configured, local,
+/// OpenAI-compatible chat-completions endpoint (Ollama, LM Studio, ...) and
+/// returns the model's reply. Mirrors `fetch_quote` above: a plain `reqwest`
+/// client rather than `tauri-plugin-http` (arbitrary user-specified URL, no
+/// CORS assumptions to make, no per-URL capability allowlist that would fit
+/// a URL the user can set to anything), and errors are returned for the
+/// caller to show inline -- this one path from a network failure to a
+/// visible "Couldn't summarize" message. Unlike `fetch_quote`'s best-effort
+/// multi-field JSON parsing, the OpenAI chat-completions response shape
+/// (`choices[0].message.content`) is a fixed, well-known contract both
+/// Ollama's and LM Studio's OpenAI-compatible servers implement, so a
+/// mismatch is treated as a real error rather than falling back to raw text.
+/// Never logs `content` or the response body -- see CLAUDE.md's "Debugging
+/// from production logs": only the error class/status is logged on failure.
+#[tauri::command]
+pub async fn summarize_reflections(
+    content: String,
+    api_url: String,
+    model: String,
+    api_key: String,
+    timeout_secs: u32,
+    system_prompt: String,
+) -> Result<String, String> {
+    if !(api_url.starts_with("http://") || api_url.starts_with("https://")) {
+        return Err("LLM endpoint URL must be http(s)".into());
+    }
+    if content.trim().is_empty() {
+        return Err("nothing to summarize".into());
+    }
+    if model.trim().is_empty() {
+        return Err("no model name configured".into());
+    }
+
+    const MAX_BODY_BYTES: usize = 256 * 1024;
+    const MAX_SUMMARY_CHARS: usize = 4000;
+    const DEFAULT_TIMEOUT_SECS: u64 = 60;
+
+    let timeout = if (5..=300).contains(&timeout_secs) {
+        Duration::from_secs(timeout_secs as u64)
+    } else {
+        Duration::from_secs(DEFAULT_TIMEOUT_SECS)
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let system_prompt = if system_prompt.trim().is_empty() {
+        crate::db::DEFAULT_LLM_SUMMARY_SYSTEM_PROMPT
+    } else {
+        system_prompt.trim()
+    };
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            { "role": "system", "content": system_prompt },
+            { "role": "user", "content": content },
+        ],
+        "stream": false,
+    });
+
+    // reqwest is built without its `json` feature (Cargo.toml), so serialize by hand.
+    let mut req = client
+        .post(&api_url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body.to_string());
+    if !api_key.trim().is_empty() {
+        req = req.bearer_auth(api_key.trim());
+    }
+
+    let resp = req.send().await.map_err(|e| {
+        log::warn!("summarize_reflections: request to configured LLM endpoint failed: {e}");
+        "request failed".to_string()
+    })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        log::warn!("summarize_reflections: LLM endpoint returned status {status}");
+        return Err(format!("LLM endpoint returned status {status}"));
+    }
+
+    let bytes = resp.bytes().await.map_err(|e| {
+        log::warn!("summarize_reflections: failed reading LLM endpoint response body: {e}");
+        "failed reading response".to_string()
+    })?;
+    let truncated = &bytes[..bytes.len().min(MAX_BODY_BYTES)];
+    let response_text = String::from_utf8_lossy(truncated);
+
+    let summary = extract_chat_completion_text(&response_text).ok_or_else(|| {
+        log::warn!("summarize_reflections: unexpected response shape from LLM endpoint");
+        "unexpected response shape from LLM endpoint".to_string()
+    })?;
+    if summary.is_empty() {
+        return Err("LLM endpoint returned no text".into());
+    }
+
+    Ok(truncate_chars(&summary, MAX_SUMMARY_CHARS))
+}
+
+/// Pulls `choices[0].message.content` out of an OpenAI-compatible
+/// chat-completions response. Returns `None` for anything that isn't valid
+/// JSON or doesn't match that fixed shape -- the caller turns that into a
+/// real error rather than a silent fallback (see `summarize_reflections`'s
+/// doc comment for why this differs from `extract_quote_text`).
+fn extract_chat_completion_text(body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(body.trim()).ok()?;
+    let text = value
+        .get("choices")?
+        .as_array()?
+        .first()?
+        .get("message")?
+        .get("content")?
+        .as_str()?
+        .trim();
+    Some(text.to_string())
+}
+
 /// Tries to parse `body` as JSON and pull a quote (+ optional author) out of
 /// a handful of common field-name conventions used by public quote APIs.
 /// Accepts either a bare object or an array wrapping one (the latter covers
@@ -1090,5 +1219,27 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
         let mut truncated: String = s.chars().take(max_chars).collect();
         truncated.push('…');
         truncated
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_chat_completion_text;
+
+    #[test]
+    fn extracts_openai_chat_completion_content() {
+        let body = r#"{"id":"x","choices":[{"index":0,"message":{"role":"assistant","content":"  You coded.  "},"finish_reason":"stop"}]}"#;
+        assert_eq!(extract_chat_completion_text(body).as_deref(), Some("You coded."));
+    }
+
+    #[test]
+    fn rejects_bodies_not_in_chat_completion_shape() {
+        assert_eq!(extract_chat_completion_text("not json"), None);
+        assert_eq!(extract_chat_completion_text(r#"{"choices":[]}"#), None);
+        assert_eq!(extract_chat_completion_text(r#"{"message":{"content":"hi"}}"#), None);
+        assert_eq!(
+            extract_chat_completion_text(r#"{"choices":[{"message":{"content":null}}]}"#),
+            None
+        );
     }
 }

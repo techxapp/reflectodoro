@@ -2109,7 +2109,11 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
     includeSettings
       ? // encryption_key_location is where *this* device's key lives
         // (key_store.rs) -- meaningless, and harmful, on another device.
-        db.select<SettingRow[]>(`SELECT key, value FROM app_setting WHERE key <> 'encryption_key_location'`)
+        // llm_summary_api_key is a credential; the export is plaintext JSON.
+        db.select<SettingRow[]>(
+          `SELECT key, value FROM app_setting
+           WHERE key NOT IN ('encryption_key_location', 'llm_summary_api_key')`,
+        )
       : Promise.resolve([]),
     db.select<{ slot_start_at: string; relaxed_eyes: string; exercise: string; drank_water: string; washroom: string; created_at: string }[]>(
       `SELECT slot_start_at, relaxed_eyes, exercise, drank_water, washroom, created_at FROM wellness_check`,
@@ -2673,6 +2677,86 @@ export async function saveQuoteApiAttribution(html: string): Promise<void> {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [QUOTE_API_ATTRIBUTION_KEY, html],
   );
+}
+
+// --- Daily reflection summary (local LLM, Entries tab) --------------------
+//
+// Blank URL = feature off (the Entries "Summarize" bar is hidden), same as
+// the Quote API. None of these are seeded -- there's no sensible default
+// local-LLM URL the way zenquotes.io is for quotes -- so an absent row reads
+// as blank. A blank system prompt means "use db.rs's
+// DEFAULT_LLM_SUMMARY_SYSTEM_PROMPT" (substituted in Rust), a different
+// blank-semantics than the URL's. The request itself runs in Rust
+// (summarize_reflections) for the same reasons fetch_quote does.
+
+const LLM_SUMMARY_API_URL_KEY = "llm_summary_api_url";
+const LLM_SUMMARY_MODEL_KEY = "llm_summary_model";
+const LLM_SUMMARY_API_KEY_KEY = "llm_summary_api_key";
+const LLM_SUMMARY_TIMEOUT_SECS_KEY = "llm_summary_timeout_secs";
+const LLM_SUMMARY_SYSTEM_PROMPT_KEY = "llm_summary_system_prompt";
+
+export const LLM_SUMMARY_DEFAULT_TIMEOUT_SECS = 60;
+export const LLM_SUMMARY_MIN_TIMEOUT_SECS = 5;
+export const LLM_SUMMARY_MAX_TIMEOUT_SECS = 300;
+
+export interface LlmSummaryConfig {
+  apiUrl: string;
+  model: string;
+  apiKey: string;
+  timeoutSecs: number;
+  systemPrompt: string;
+}
+
+export async function getLlmSummaryConfig(): Promise<LlmSummaryConfig> {
+  const db = await getDb();
+  const rows = await db.select<{ key: string; value: string }[]>(
+    `SELECT key, value FROM app_setting WHERE key IN ($1, $2, $3, $4, $5)`,
+    [
+      LLM_SUMMARY_API_URL_KEY,
+      LLM_SUMMARY_MODEL_KEY,
+      LLM_SUMMARY_API_KEY_KEY,
+      LLM_SUMMARY_TIMEOUT_SECS_KEY,
+      LLM_SUMMARY_SYSTEM_PROMPT_KEY,
+    ],
+  );
+  const byKey = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  const timeout = Number(byKey[LLM_SUMMARY_TIMEOUT_SECS_KEY]);
+  return {
+    apiUrl: byKey[LLM_SUMMARY_API_URL_KEY] ?? "",
+    model: byKey[LLM_SUMMARY_MODEL_KEY] ?? "",
+    apiKey: byKey[LLM_SUMMARY_API_KEY_KEY] ?? "",
+    timeoutSecs:
+      Number.isFinite(timeout) &&
+      timeout >= LLM_SUMMARY_MIN_TIMEOUT_SECS &&
+      timeout <= LLM_SUMMARY_MAX_TIMEOUT_SECS
+        ? timeout
+        : LLM_SUMMARY_DEFAULT_TIMEOUT_SECS,
+    systemPrompt: byKey[LLM_SUMMARY_SYSTEM_PROMPT_KEY] ?? "",
+  };
+}
+
+async function saveAppSetting(key: string, value: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [key, value],
+  );
+}
+
+export async function saveLlmSummaryBasic(apiUrl: string, model: string): Promise<void> {
+  await saveAppSetting(LLM_SUMMARY_API_URL_KEY, apiUrl);
+  await saveAppSetting(LLM_SUMMARY_MODEL_KEY, model);
+}
+
+export async function saveLlmSummaryAdvanced(
+  apiKey: string,
+  timeoutSecs: number,
+  systemPrompt: string,
+): Promise<void> {
+  await saveAppSetting(LLM_SUMMARY_API_KEY_KEY, apiKey);
+  await saveAppSetting(LLM_SUMMARY_TIMEOUT_SECS_KEY, String(timeoutSecs));
+  await saveAppSetting(LLM_SUMMARY_SYSTEM_PROMPT_KEY, systemPrompt);
 }
 
 // --- Theme (Settings -> Appearance) --------------------------------------

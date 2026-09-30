@@ -49,6 +49,11 @@
     saveQuoteApiUrl,
     getQuoteApiAttribution,
     saveQuoteApiAttribution,
+    getLlmSummaryConfig,
+    saveLlmSummaryBasic,
+    saveLlmSummaryAdvanced,
+    LLM_SUMMARY_MIN_TIMEOUT_SECS,
+    LLM_SUMMARY_MAX_TIMEOUT_SECS,
     getThemePreference,
     saveThemePreference,
     type ThemePreference,
@@ -204,6 +209,18 @@
   // DEFAULT_QUOTE_API_ATTRIBUTION const), not hardcoded here -- see
   // resetQuoteApiAttributionToDefault below.
   let defaultQuoteApiAttribution = $state("");
+
+  let llmSummaryLoaded = $state(false);
+  let llmSummaryApiUrl = $state("");
+  let llmSummaryModel = $state("");
+  let llmSummaryBasicSaved = $state(false);
+  let llmSummaryApiKey = $state("");
+  let llmSummaryTimeoutSecs = $state(60);
+  let llmSummarySystemPrompt = $state("");
+  let llmSummaryAdvancedSaved = $state(false);
+  // Fetched from Rust (db.rs's DEFAULT_LLM_SUMMARY_SYSTEM_PROMPT), same
+  // single-source-of-truth pattern as defaultQuoteApiAttribution above.
+  let defaultLlmSummarySystemPrompt = $state("");
 
   let overlayGranted = $state(false);
   let overlayChecked = $state(false);
@@ -568,6 +585,19 @@
   });
 
   onMount(async () => {
+    const cfg = await getLlmSummaryConfig();
+    llmSummaryApiUrl = cfg.apiUrl;
+    llmSummaryModel = cfg.model;
+    llmSummaryApiKey = cfg.apiKey;
+    llmSummaryTimeoutSecs = cfg.timeoutSecs;
+    // Pre-populate the editor with the built-in default when there's no
+    // override, so the user sees (and can edit) the real prompt.
+    defaultLlmSummarySystemPrompt = await invoke<string>("default_llm_summary_system_prompt");
+    llmSummarySystemPrompt = cfg.systemPrompt.trim() || defaultLlmSummarySystemPrompt;
+    llmSummaryLoaded = true;
+  });
+
+  onMount(async () => {
     themePreference = await getThemePreference();
     themeLoaded = true;
   });
@@ -859,6 +889,39 @@
 
   function resetQuoteApiAttributionToDefault() {
     quoteApiAttribution = defaultQuoteApiAttribution;
+  }
+
+  async function saveLlmSummaryBasicSetting(e: Event) {
+    e.preventDefault();
+    llmSummaryApiUrl = llmSummaryApiUrl.trim();
+    llmSummaryModel = llmSummaryModel.trim();
+    await saveLlmSummaryBasic(llmSummaryApiUrl, llmSummaryModel);
+    llmSummaryBasicSaved = true;
+    setTimeout(() => (llmSummaryBasicSaved = false), 2000);
+  }
+
+  async function saveLlmSummaryAdvancedSetting(e: Event) {
+    e.preventDefault();
+    const timeout = Math.round(Number(llmSummaryTimeoutSecs));
+    llmSummaryTimeoutSecs = Math.min(
+      LLM_SUMMARY_MAX_TIMEOUT_SECS,
+      Math.max(LLM_SUMMARY_MIN_TIMEOUT_SECS, Number.isFinite(timeout) ? timeout : 60),
+    );
+    llmSummaryApiKey = llmSummaryApiKey.trim();
+    llmSummarySystemPrompt = llmSummarySystemPrompt.trim() || defaultLlmSummarySystemPrompt;
+    // An unedited default is stored as blank (an override of "none"), so a
+    // future change to the built-in default still reaches this user.
+    const promptOverride =
+      llmSummarySystemPrompt === defaultLlmSummarySystemPrompt.trim() ? "" : llmSummarySystemPrompt;
+    await saveLlmSummaryAdvanced(llmSummaryApiKey, llmSummaryTimeoutSecs, promptOverride);
+    llmSummaryAdvancedSaved = true;
+    setTimeout(() => (llmSummaryAdvancedSaved = false), 2000);
+  }
+
+  function resetLlmSummarySystemPromptToDefault() {
+    // Shows the default in the editor; saving it stores a blank override
+    // (see saveLlmSummaryAdvancedSetting), so future default changes still apply.
+    llmSummarySystemPrompt = defaultLlmSummarySystemPrompt;
   }
 
   async function saveWellnessExclusions(e: Event) {
@@ -1356,6 +1419,43 @@
     {/if}
   </section>
 
+  <section class="card">
+    <h2>Daily summary (local AI)</h2>
+    <p class="hint">
+      Adds a <strong>Summarize</strong> button to the Entries tab that sends that day's reflections
+      to an AI model you run yourself &mdash; e.g. Ollama or LM Studio &mdash; through its
+      OpenAI-compatible chat endpoint. Nothing is sent until you click it, and the summary isn't
+      saved.
+    </p>
+
+    {#if llmSummaryLoaded}
+      <form onsubmit={saveLlmSummaryBasicSetting}>
+        <label class="grow">
+          Endpoint URL
+          <input
+            type="text"
+            bind:value={llmSummaryApiUrl}
+            placeholder="http://localhost:11434/v1/chat/completions"
+          />
+        </label>
+        <label>
+          Model
+          <input type="text" bind:value={llmSummaryModel} placeholder="llama3.1" />
+        </label>
+        <button type="submit">Save</button>
+        {#if llmSummaryBasicSaved}
+          <span class="hint saved">Saved</span>
+        {/if}
+      </form>
+      <p class="hint">
+        Leave the URL blank to turn this off. Ollama:
+        <code>http://localhost:11434/v1/chat/completions</code>. LM Studio:
+        <code>http://localhost:1234/v1/chat/completions</code>. The model name must match one
+        installed on that server. An API key, timeout and custom prompt are under Advanced settings.
+      </p>
+    {/if}
+  </section>
+
 
 
   <section class="card">
@@ -1732,6 +1832,57 @@
     <div id="advanced-settings" class="advanced">
       {#if !isAndroid}
         <EncryptionKeyCard />
+      {/if}
+
+      {#if llmSummaryLoaded}
+        <section class="card">
+          <h2>Daily summary: advanced</h2>
+          <form onsubmit={saveLlmSummaryAdvancedSetting}>
+            <label class="grow">
+              API key (optional)
+              <input
+                type="password"
+                autocomplete="off"
+                bind:value={llmSummaryApiKey}
+                placeholder="Leave blank for Ollama / LM Studio"
+              />
+            </label>
+            <label>
+              Timeout (seconds)
+              <input
+                type="number"
+                min={LLM_SUMMARY_MIN_TIMEOUT_SECS}
+                max={LLM_SUMMARY_MAX_TIMEOUT_SECS}
+                bind:value={llmSummaryTimeoutSecs}
+              />
+            </label>
+            <label class="grow">
+              System prompt
+              <textarea
+                rows="5"
+                bind:value={llmSummarySystemPrompt}
+                placeholder={defaultLlmSummarySystemPrompt}
+              ></textarea>
+            </label>
+            <div class="data-row">
+              <button type="submit">Save</button>
+              <button type="button" onclick={resetLlmSummarySystemPromptToDefault}>
+                Reset prompt to default
+              </button>
+              {#if llmSummaryAdvancedSaved}
+                <span class="hint saved">Saved</span>
+              {/if}
+            </div>
+          </form>
+          <p class="hint">
+            The API key is sent as a Bearer token, only if set, and is stored unencrypted on this
+            device like other settings. Local models can be slow on long days &mdash; raise the
+            timeout ({LLM_SUMMARY_MIN_TIMEOUT_SECS}&ndash;{LLM_SUMMARY_MAX_TIMEOUT_SECS}s) if
+            summaries time out. Leave the prompt blank to use the built-in one shown as the
+            placeholder. Each entry is sent as
+            <code>HH:MM&ndash;HH:MM (duration): what you wrote</code>.
+          </p>
+        </section>
       {/if}
 
       <section class="card">

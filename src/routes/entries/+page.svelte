@@ -29,6 +29,8 @@
     getDeviceName,
     deleteDayEntries,
     deleteDayScreenTime,
+    getLlmSummaryConfig,
+    type LlmSummaryConfig,
     type ReflectionDisplayRow,
     type ScreenTimeEntry,
     type WellnessSummary,
@@ -199,6 +201,9 @@
     // it. taskList/notToDo themselves get replaced by the fetch below.
     taskSaveError = null;
     notToDoSaveError = null;
+    // Ephemeral by design: a summary describes the day it was generated
+    // for, so it must not survive a switch to another day.
+    resetSummary();
     const stamp = selectedStamp;
     const generation = ++loadGeneration;
     try {
@@ -267,6 +272,88 @@
 
   function formatTime(iso: string): string {
     return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  }
+
+  // --- Daily summary (local LLM) ---
+  const SLOT_MINUTES = 30;
+  let llmSummaryConfig = $state<LlmSummaryConfig | null>(null);
+  let summarizing = $state(false);
+  let summaryText = $state("");
+  let summaryError = $state<string | null>(null);
+  let summaryNotice = $state<string | null>(null);
+  // Same last-started-wins guard as loadGeneration: a slow local model can
+  // still be answering for day A after the user has moved on to day B.
+  let summaryGeneration = 0;
+
+  function resetSummary() {
+    summaryGeneration++;
+    summarizing = false;
+    summaryText = "";
+    summaryError = null;
+    summaryNotice = null;
+  }
+
+  /** One line per run of consecutive slots sharing identical text, with the
+   * time range and duration computed here rather than left for the model to
+   * infer from raw per-slot timestamps. */
+  function buildSummaryInput(): string | null {
+    const lines = clusters
+      .filter((c) => {
+        const text = c.rows[0].text.trim();
+        return text !== "" && text.toLowerCase() !== "skip";
+      })
+      .map((c) => {
+        const first = c.rows[0].slot_start_at;
+        const last = c.rows[c.rows.length - 1].slot_start_at;
+        const end = new Date(new Date(last).getTime() + SLOT_MINUTES * 60_000).toISOString();
+        const duration = formatDuration(c.rows.length * SLOT_MINUTES * 60_000);
+        return `${formatTime(first)}–${formatTime(end)} (${duration}): ${c.rows[0].text.trim()}`;
+      });
+    if (lines.length === 0) return null;
+    const dayLabel = selected.toLocaleDateString(undefined, {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    return `Reflections for ${dayLabel}:\n${lines.join("\n")}`;
+  }
+
+  async function summarizeDay() {
+    const cfg = llmSummaryConfig;
+    if (!cfg || !cfg.apiUrl.trim()) return;
+    resetSummary();
+    const content = buildSummaryInput();
+    if (content === null) {
+      summaryNotice = "No reflections to summarize for this day.";
+      return;
+    }
+    if (!cfg.model.trim()) {
+      summaryError = "Set a model name in Settings → Daily summary first.";
+      return;
+    }
+    const generation = summaryGeneration;
+    summarizing = true;
+    try {
+      const text = await invoke<string>("summarize_reflections", {
+        content,
+        apiUrl: cfg.apiUrl.trim(),
+        model: cfg.model.trim(),
+        apiKey: cfg.apiKey,
+        timeoutSecs: cfg.timeoutSecs,
+        systemPrompt: cfg.systemPrompt,
+      });
+      if (generation !== summaryGeneration) return;
+      summaryText = text;
+    } catch (e) {
+      if (generation !== summaryGeneration) return;
+      const message = e instanceof Error ? e.message : String(e);
+      // Error text only -- never the reflections or the model's reply.
+      void logError(`entries: summarize failed: ${message}`);
+      summaryError = message;
+    } finally {
+      if (generation === summaryGeneration) summarizing = false;
+    }
   }
 
   /** Captures the date and content at call time (not read fresh when the
@@ -655,6 +742,14 @@
     await refreshUsageAccess();
   });
 
+  onMount(async () => {
+    try {
+      llmSummaryConfig = await getLlmSummaryConfig();
+    } catch (e) {
+      void logError(`entries: loading summary settings failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
   onDestroy(() => {
     window.removeEventListener("focus", onWindowFocus);
     document.removeEventListener("visibilitychange", onEntriesVisibilityChange);
@@ -775,6 +870,41 @@
     {/if}
   </section>
   </div>
+
+  <div class="right-col">
+  {#if llmSummaryConfig?.apiUrl.trim()}
+    <section class="card summary" aria-live="polite">
+      <div class="summary-header">
+        <h3>Daily summary</h3>
+        <button
+          class="summarize-btn"
+          onclick={() => void summarizeDay()}
+          disabled={summarizing || loading || loadError !== null}
+        >
+          {#if summarizing}
+            Summarizing&hellip;
+          {:else if summaryText}
+            Summarize again
+          {:else}
+            Summarize
+          {/if}
+        </button>
+      </div>
+      {#if summaryText}
+        <p class="summary-text">{summaryText}</p>
+        <p class="hint">
+          Generated by {llmSummaryConfig.model.trim()} &mdash; not saved.
+          <button class="link-btn" onclick={resetSummary}>Dismiss</button>
+        </p>
+      {:else if summaryError}
+        <p class="hint error" role="alert">Couldn't summarize: {summaryError}</p>
+      {:else if summaryNotice}
+        <p class="hint">{summaryNotice}</p>
+      {:else if !summarizing}
+        <p class="hint">Summarize this day's reflections with your local AI model.</p>
+      {/if}
+    </section>
+  {/if}
 
   <section class="card entries">
     <div class="day-nav">
@@ -1130,6 +1260,7 @@
       {/if}
     {/if}
   </section>
+  </div>
 </div>
 
 <style>
@@ -1157,10 +1288,14 @@
      each card is only ever as tall as its own content -- no row-spanning
      grid track to inflate them (that used to leave a large gap between the
      calendar and screen-time cards whenever the reflections list was long). */
-  .left-col {
+  .left-col,
+  .right-col {
     display: flex;
     flex-direction: column;
     gap: 20px;
+    /* Grid items default to min-width: auto, which would let a long
+       unbroken summary line widen the column past the page. */
+    min-width: 0;
   }
 
   @media (max-width: 600px) {
@@ -1170,9 +1305,39 @@
       gap: 16px;
     }
 
-    .left-col {
+    .left-col,
+    .right-col {
       gap: 16px;
     }
+  }
+
+  .summary-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  .summary-header h3 {
+    margin: 0;
+  }
+
+  .summary-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+    margin: 0 0 8px;
+  }
+
+  .link-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    color: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+    font: inherit;
   }
 
   .card {
