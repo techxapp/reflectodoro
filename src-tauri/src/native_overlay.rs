@@ -673,6 +673,10 @@ enum NativeOverlayEvent {
     SaveTaskList { content: String },
     SaveNotToDoList { content: String },
     DevForceClose,
+    /// From BreakAlarmReceiver at a grid boundary, not from the overlay's
+    /// WebView -- it reuses this channel as the one Kotlin->Rust path that
+    /// exists. See `crate::SCHEDULER_WAKE`.
+    SchedulerWake,
 }
 
 /// Guards `SubmitReflection` against two channel events being handled
@@ -769,6 +773,10 @@ fn handle_channel_event(app: &AppHandle, value: Value) {
         NativeOverlayEvent::DevForceClose => {
             let state = app.state::<AppState>();
             let _ = commands::dev_force_close(app.clone(), state);
+        }
+        NativeOverlayEvent::SchedulerWake => {
+            log::info!("native_overlay: scheduler_wake from BreakAlarmReceiver");
+            crate::SCHEDULER_WAKE.notify_one();
         }
     }
 }

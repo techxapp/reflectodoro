@@ -3,6 +3,7 @@ package com.reflectodoro.app
 import android.app.Activity
 import android.app.AlarmManager
 import android.app.AppOpsManager
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
@@ -127,6 +128,13 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
     private val appLabelCache = mutableMapOf<String, String>()
 
     companion object {
+        /** The same Rust channel as `overlayChannel`, reachable from code
+         * that has no plugin instance -- BreakAlarmReceiver uses it to wake
+         * run_scheduler at a grid boundary. Null until native_overlay.rs's
+         * install_channel has run in this process. */
+        @Volatile
+        var sharedChannel: Channel? = null
+
         // Trailing dot matches the format NsdManager expects (mirrors
         // p2p_sync.rs's SERVICE_TYPE constant on the Rust side -- both must
         // agree for desktop and Android instances to discover each other).
@@ -242,14 +250,20 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(ret)
     }
 
-    /** Called from every iteration of Rust's run_scheduler loop (which is
-     * capped to run at least every ANDROID_POLL_INTERVAL, 20s, regardless of
-     * phase -- see lib.rs). Lets MainActivity.isSchedulerAlive() tell "the
-     * scheduler is actually alive right now" apart from "an Activity merely
-     * existed at some point in this process incarnation". */
+    /** Called at the top of every iteration of Rust's run_scheduler loop.
+     * BreakAlarmReceiver wakes that loop at each grid boundary and then checks
+     * for a heartbeat newer than the alarm -- see its onReceive.
+     *
+     * The first heartbeat of a process also clears any "Tap to reopen" wake
+     * notification a recovery launch left behind: once the scheduler is
+     * running again, that notification has nothing left to offer. */
     @Command
     fun reportSchedulerHeartbeat(invoke: Invoke) {
+        val firstInProcess = !MainActivity.hasSchedulerReported()
         MainActivity.lastSchedulerHeartbeatAt = System.currentTimeMillis()
+        if (firstInProcess) {
+            activity.getSystemService(NotificationManager::class.java).cancel(WAKE_NOTIFICATION_ID)
+        }
         invoke.resolve(JSObject())
     }
 
@@ -525,8 +539,14 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun triggerBreakScreen(invoke: Invoke) {
         val args = invoke.parseArgs(TriggerBreakScreenArgs::class.java)
-        postBreakNotification(activity, args.persistent)
-        if (canDrawOverlaysGranted()) {
+        val canDrawOverlay = canDrawOverlaysGranted()
+        // The non-dismissible notification is only the enforcement mechanism
+        // when there's no native overlay: with the grant, the overlay already
+        // covers everything, so a sticky notification would be redundant. A
+        // plain dismissible one is still posted as the fallback if the
+        // overlay fails to draw.
+        postBreakNotification(activity, args.persistent && !canDrawOverlay)
+        if (canDrawOverlay) {
             NativeOverlayManager.show(activity, args.state, overlayChannel, args.hideOnCall)
         }
         invoke.resolve(JSObject())
@@ -544,14 +564,26 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         // just triggered (checkin://slot, routed by +layout.svelte) would be
         // rendered on a webview nobody is looking at. Captured before hide()
         // since isShowing() always reads false afterward.
+        //
+        // The activity is started BEFORE hide(): while the overlay window is
+        // still attached the app counts as having a visible window, which is
+        // what exempts this launch from Android 10+'s background-activity-start
+        // block. Hiding first left no such window, so on OEMs that enforce it
+        // strictly (seen on Honor/MagicOS) the launch was silently dropped and
+        // the wellness check-in never came forward.
         val wasShowingNativeOverlay = NativeOverlayManager.isShowing()
-        NativeOverlayManager.hide()
         if (wasShowingNativeOverlay) {
             val intent = Intent(activity, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             }
-            activity.startActivity(intent)
+            try {
+                activity.startActivity(intent)
+                Log.i("Reflectodoro/Overlay", "cancelBreakNotification: started MainActivity before hiding native overlay")
+            } catch (e: Exception) {
+                Log.w("Reflectodoro/Overlay", "cancelBreakNotification: startActivity failed", e)
+            }
         }
+        NativeOverlayManager.hide()
         invoke.resolve(JSObject())
     }
 
@@ -571,6 +603,7 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
     fun initNativeOverlayChannel(invoke: Invoke) {
         val args = invoke.parseArgs(InitNativeOverlayChannelArgs::class.java)
         overlayChannel = args.channel
+        sharedChannel = args.channel
         invoke.resolve(JSObject())
     }
 

@@ -244,9 +244,11 @@ object NativeOverlayManager {
       try {
         wm.addView(wv, params)
       } catch (e: Exception) {
+        Log.w(TAG, "addView failed, break overlay not shown: $e")
         wv.destroy()
         return@post
       }
+      Log.i(TAG, "break overlay shown")
       webView = wv
       windowManager = wm
       // Off by the Settings toggle: no listener/poll registered at all.

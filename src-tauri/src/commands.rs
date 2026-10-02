@@ -418,6 +418,22 @@ pub fn get_snooze_until() -> Option<SnoozeInfo> {
     })
 }
 
+/// Mobile only (`+layout.svelte`): returns the slot of a check-in that was
+/// requested but not yet routed to, and clears the pending flag so only one
+/// caller (the `checkin://slot` listener or a resume/focus re-check) navigates.
+/// Desktop never calls this -- its check-in is a separate window Rust shows.
+#[tauri::command]
+pub fn take_pending_checkin(state: State<AppState>) -> Option<String> {
+    let mut pending = state.checkin_pending.lock().unwrap();
+    if !*pending {
+        return None;
+    }
+    *pending = false;
+    let slot = state.checkin_slot.lock().unwrap().clone();
+    log::info!("take_pending_checkin -> {slot:?}");
+    slot
+}
+
 /// Read by the check-in window on mount to learn which slot triggered it.
 #[tauri::command]
 pub fn get_checkin_slot(state: State<AppState>) -> Option<String> {
