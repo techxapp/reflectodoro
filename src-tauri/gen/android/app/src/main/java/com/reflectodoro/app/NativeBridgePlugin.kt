@@ -539,8 +539,14 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun triggerBreakScreen(invoke: Invoke) {
         val args = invoke.parseArgs(TriggerBreakScreenArgs::class.java)
-        postBreakNotification(activity, args.persistent)
-        if (canDrawOverlaysGranted()) {
+        val canDrawOverlay = canDrawOverlaysGranted()
+        // The non-dismissible notification is only the enforcement mechanism
+        // when there's no native overlay: with the grant, the overlay already
+        // covers everything, so a sticky notification would be redundant. A
+        // plain dismissible one is still posted as the fallback if the
+        // overlay fails to draw.
+        postBreakNotification(activity, args.persistent && !canDrawOverlay)
+        if (canDrawOverlay) {
             NativeOverlayManager.show(activity, args.state, overlayChannel, args.hideOnCall)
         }
         invoke.resolve(JSObject())
@@ -558,14 +564,26 @@ class NativeBridgePlugin(private val activity: Activity) : Plugin(activity) {
         // just triggered (checkin://slot, routed by +layout.svelte) would be
         // rendered on a webview nobody is looking at. Captured before hide()
         // since isShowing() always reads false afterward.
+        //
+        // The activity is started BEFORE hide(): while the overlay window is
+        // still attached the app counts as having a visible window, which is
+        // what exempts this launch from Android 10+'s background-activity-start
+        // block. Hiding first left no such window, so on OEMs that enforce it
+        // strictly (seen on Honor/MagicOS) the launch was silently dropped and
+        // the wellness check-in never came forward.
         val wasShowingNativeOverlay = NativeOverlayManager.isShowing()
-        NativeOverlayManager.hide()
         if (wasShowingNativeOverlay) {
             val intent = Intent(activity, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             }
-            activity.startActivity(intent)
+            try {
+                activity.startActivity(intent)
+                Log.i("Reflectodoro/Overlay", "cancelBreakNotification: started MainActivity before hiding native overlay")
+            } catch (e: Exception) {
+                Log.w("Reflectodoro/Overlay", "cancelBreakNotification: startActivity failed", e)
+            }
         }
+        NativeOverlayManager.hide()
         invoke.resolve(JSObject())
     }
 

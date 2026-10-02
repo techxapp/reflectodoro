@@ -105,6 +105,13 @@ pub struct AppState {
     /// window -- set by `open_checkin_for_slot` right before spawning it, read
     /// back by the window's own `get_checkin_slot` call on mount. See overlay.rs.
     pub checkin_slot: Mutex<Option<String>>,
+    /// Mobile only: a check-in has been requested but the single window hasn't
+    /// been routed to `/checkin` yet. Set by `open_checkin_for_slot`, cleared
+    /// by `take_pending_checkin`. Exists because `checkin://slot` is a
+    /// one-shot event: if the webview is backgrounded or frozen when it fires
+    /// (the normal case after submitting through the Android native overlay
+    /// while in another app), nothing else would ever route to the check-in.
+    pub checkin_pending: Mutex<bool>,
     /// When the app process started. A newly created WebviewWindow on this
     /// machine renders permanently blank if shown within ~a couple seconds
     /// of process start (some WebView2/wry initialization race) -- both the
@@ -184,6 +191,7 @@ impl AppState {
             overlay: Mutex::new(OverlayState::closed()),
             breakit_config: Mutex::new(BreakitConfig::default()),
             checkin_slot: Mutex::new(None),
+            checkin_pending: Mutex::new(false),
             started_at: std::time::Instant::now(),
             dev_mode,
             task_list: Mutex::new(String::new()),

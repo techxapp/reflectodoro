@@ -1105,6 +1105,7 @@ pub fn run() {
             commands::snooze_pomodoro,
             commands::get_snooze_until,
             commands::get_checkin_slot,
+            commands::take_pending_checkin,
             commands::read_text_file,
             commands::write_text_file,
             commands::get_autostart_enabled,

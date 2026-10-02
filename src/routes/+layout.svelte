@@ -182,10 +182,34 @@
   /* iOS works the same way: its only window is the app's own, shown only while
    * the app is in the foreground, so the break screen is this route. */
   let mobileOverlayOpen = false;
+  let mobileOs = "";
+  /* Bumped on every state event so a slow can_draw_overlays round trip for an
+   * older event can't route after a newer one (e.g. open -> close) landed. */
+  let mobileOverlayGeneration = 0;
 
-  function applyMobileOverlayState(open: boolean) {
-    mobileOverlayOpen = open;
-    if (open) {
+  /* On Android, when "Display over other apps" is granted the native
+   * WindowManager overlay (NativeOverlayManager.kt) is the break screen and
+   * already covers this app too -- routing to /overlay as well would stack a
+   * second, redundant break UI underneath it. The in-app route is used only
+   * as the fallback when the grant is missing (alongside the notification).
+   * iOS has no native overlay, so it always uses the route. Checked per state
+   * event rather than cached, since the grant can change while the app runs. */
+  async function nativeOverlayHandlesBreaks(): Promise<boolean> {
+    if (mobileOs !== "android") return false;
+    try {
+      return await invoke<boolean>("can_draw_overlays");
+    } catch (e) {
+      console.error("can_draw_overlays check failed", e);
+      return false;
+    }
+  }
+
+  async function applyMobileOverlayState(open: boolean) {
+    const generation = ++mobileOverlayGeneration;
+    const useInAppOverlay = open && !(await nativeOverlayHandlesBreaks());
+    if (generation !== mobileOverlayGeneration) return;
+    mobileOverlayOpen = useInAppOverlay;
+    if (useInAppOverlay) {
       if ($page.url.pathname !== "/overlay") void goto("/overlay");
     } else if ($page.url.pathname === "/overlay") {
       void goto("/");
@@ -201,6 +225,7 @@
   onMount(async () => {
     const os = await invoke<string>("current_os");
     if (os !== "android" && os !== "ios") return;
+    mobileOs = os;
 
     // First-launch-only: routes to the permissions onboarding screen before
     // the user sees anything else. Checked once here rather than in
@@ -221,9 +246,26 @@
     } catch (e) {
       console.error("initial overlay state read failed", e);
     }
-    await listen("checkin://slot", () => {
-      if ($page.url.pathname !== "/checkin") void goto("/checkin");
+    // `checkin://slot` is a one-shot: after submitting through the Android
+    // native overlay the app is usually in the background (webview frozen or
+    // not yet resumed), so the event can be missed entirely and nothing would
+    // route to /checkin. Rust keeps a "pending" flag until something takes it,
+    // so the event, and a re-check whenever the app becomes visible again,
+    // both go through the same atomic take -- whichever runs first navigates.
+    async function routeToPendingCheckin() {
+      if (mobileOverlayOpen) return; // a break is open; it can't be left, retry later
+      try {
+        const slot = await invoke<string | null>("take_pending_checkin");
+        if (slot && $page.url.pathname !== "/checkin") void goto("/checkin");
+      } catch (e) {
+        console.error("take_pending_checkin failed", e);
+      }
+    }
+    await listen("checkin://slot", () => void routeToPendingCheckin());
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") void routeToPendingCheckin();
     });
+    void routeToPendingCheckin();
 
     (window as unknown as Record<string, unknown>).__setKeyboardInset = (px: number) => {
       nativeKeyboardInset = px || 0;

@@ -1148,8 +1148,10 @@
         </label>
       </div>
       <p class="hint">
-        Only affects a break that starts while you're using another app &mdash; it can't wake or
-        take over a locked screen.
+        Only used when "Display over other apps" isn't granted &mdash; with it, the break screen
+        itself covers everything and the notification is a plain, dismissible one. Only affects a
+        break that starts while you're using another app &mdash; it can't wake or take over a
+        locked screen.
       </p>
     {/if}
 

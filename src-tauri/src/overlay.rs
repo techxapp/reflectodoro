@@ -562,6 +562,7 @@ pub fn open_checkin_for_slot(app: &AppHandle, slot_start_iso: String) {
         let state = app.state::<AppState>();
         let mut slot = state.checkin_slot.lock().unwrap();
         *slot = Some(slot_start_iso.clone());
+        *state.checkin_pending.lock().unwrap() = true;
     }
     // Same startup blank-page race documented on WEBVIEW_WARMUP -- the break
     // overlay already guards its first show with this, but a break ending
