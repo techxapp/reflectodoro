@@ -1602,68 +1602,50 @@
           <div class="timeline">
             <p class="timeline-tier reveal">Last 7 days</p>
             <div class="timeline-entry reveal">
-              <p class="timeline-date">Friday, Sep 25, 2026</p>
+              <p class="timeline-date">Friday, Oct 2, 2026</p>
+              <ul class="timeline-items">
+                <li>Android now shows only the native break screen when &ldquo;Display over other apps&rdquo; is granted, instead of stacking a second, redundant break screen underneath it, and the break notification becomes an ordinary dismissible one rather than a sticky one</li>
+                <li>Fixed the wellness check-in sometimes not appearing on Android after you submitted your reflection from the break screen over another app &mdash; it now shows up the next time you open the app even if the signal was missed</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Wednesday, Sep 30, 2026</p>
+              <ul class="timeline-items">
+                <li>Added an optional daily summary: point Settings at an AI running on your own machine (Ollama, LM Studio, or any OpenAI-compatible server) and a Summarize button on the Entries tab turns the selected day's reflections into a short recap. It's off by default, sends nothing until you click, never saves the summary anywhere, and the instructions sent to the model are editable in Advanced settings</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Tuesday, Sep 29, 2026</p>
+              <ul class="timeline-items">
+                <li>Added auto-pause on wake for desktop: if your computer wakes after being off for a while and a session is about to end, Pomodoro mode pauses itself for a set time, so reopening your laptop moments before a boundary doesn't drop you straight into a break you never chose. On by default, with all three thresholds adjustable in Settings</li>
+                <li>Reworked how Android checks the app is still running at a break boundary, so a healthy app is no longer relaunched over whatever you were doing after the screen had been off for a while, and the break screen appears promptly</li>
+              </ul>
+            </div>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Sunday, Sep 27, 2026</p>
               <ul class="timeline-items">
                 <li>Added a &ldquo;Delete data&rdquo; card to Settings &rarr; Advanced settings: delete every entry older than a number of days you choose, or wipe all your data outright. Both ask for confirmation first, keep your settings, paired devices and encryption key, and only affect the device you're on</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">
-              <p class="timeline-date">Thursday, Sep 24, 2026</p>
+              <p class="timeline-date">Saturday, Sep 26, 2026</p>
               <ul class="timeline-items">
-                <li>Android can now pause breaks overnight on its own. Set a window in Settings &mdash; 10pm to 8am by default, on unless you turn it off &mdash; and Pomodoro mode pauses itself when it starts and resumes when it ends, so the schedule no longer interrupts your sleep. To get breaks back early, just set Pomodoro to On; it stays on for the rest of that night</li>
-                <li>Fixed Android playing two notification sounds for a single break. If the system had killed the app in the background, its &ldquo;tap to reopen&rdquo; notification sounded moments before the real break notification &mdash; worst overnight, where an aggressive battery manager could repeat it every 25-30 minutes all night. The recovery notification is now silent, and still there to tap</li>
-              </ul>
-            </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Wednesday, Sep 23, 2026</p>
-              <ul class="timeline-items">
-                <li>Fixed Most Important Tasks and the Not To Do list going missing on the break screen: a failed save could vanish silently while the text box still showed what you'd typed, and the break screen didn't always pick up the latest content if it missed a live update. Saves now show an inline error when something goes wrong, and the break screen re-reads the latest lists every time a new break opens</li>
-                <li>Added media pause-on-break to iOS, and fixed the Timer page overflowing the screen on some iPhones</li>
-                <li>Fixed iOS break notifications and the Lock Screen countdown to follow Concentration mode's shorter break timing instead of always assuming a 5-minute break</li>
-                <li>Concentration mode's 1-minute break now skips the quote panel entirely -- too short to read one, so the break screen no longer shows it and no call is made to your quote API for it</li>
-                <li>iPhone can now sync directly with your other devices over wifi, the same way your laptop and Android phone already do &mdash; pair once with a PIN, then sync with a tap from either side, with no account, no cloud and nothing passing through anyone else's server. Syncing on iPhone is manual and works while the app is open, since iOS suspends apps in the background</li>
-                <li>New app icons for iPhone and iPad</li>
-              </ul>
-            </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Tuesday, Sep 22, 2026</p>
-              <ul class="timeline-items">
-                <li>Shipped iOS Phase 1: Reflectodoro now runs on iPhone and iPad &mdash; wall-clock break scheduling, break notifications, a Live Activity countdown on the Lock Screen, the full break screen with the emergency-exit challenge, and Keychain-backed encryption. Not yet distributed through the App Store; for now it's installed from Xcode</li>
-                <li>Added a Theme setting (Auto/Light/Dark) to Settings, applied instantly across every open window</li>
-                <li>Lengthened Concentration mode's short break from 30 seconds to a full minute, and gave the app a redesigned hourglass icon across desktop, Android, and iOS</li>
-                <li>Minor layout polish to the home screen and Settings pages</li>
-              </ul>
-            </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Monday, Sep 21, 2026</p>
-              <ul class="timeline-items">
-                <li>Added a Concentration schedule alongside the normal one &mdash; a short break at :25 and a longer 10-minute break at :50 &mdash; picked from a new dropdown on the Timer tab. Your reflection is still required after both breaks. The home-screen controls are also now sized to fit their text</li>
-                <li>Android break screen improvements: the end-of-break quote panel now works there too (fetched in the background so it never delays your break, with the Quote API URL configurable in Settings), and the break screen now steps aside when a phone or VoIP call rings or is active, then returns when the call ends</li>
-                <li>You can now protect your encryption key with a password instead of the system password vault, and move it back and forth from a new Advanced settings section. If the vault refuses access, the app asks for a password rather than falling back to an unprotected key file &mdash; and on macOS it stops asking for Keychain access again on every launch once you've said no. If a break arrives before you've unlocked, you can skip that break from the password prompt</li>
-                <li>Added a way to show and copy your encryption key for safekeeping in a password manager, and to restore it later &mdash; checked against your existing entries first, so a mistyped key can never lock you out. The app also no longer creates a brand-new key when it can't reach the one your entries were saved with, which could quietly make every past entry unreadable; it now tells you and lets you try again or restore your backup</li>
-                <li>A day on the Entries page that can't be read now offers a button to delete just that day's data, and pages now use more of a large window, with text scaled up to match</li>
-              </ul>
-            </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Sunday, Sep 20, 2026</p>
-              <ul class="timeline-items">
-                <li>Screen time now tracks which app you're using on macOS too, so the Entries tab shows where your day went on a Mac as well &mdash; with friendly app names, and without asking for any permission. Only the app's name is ever recorded, never window titles or what's in them</li>
-                <li>macOS now pauses your media during a break without asking for any permission at all. Until now this needed Accessibility access, which quietly stopped working after most updates and had to be re-granted by hand &mdash; and because it worked by sending a Play/Pause key, it could just as easily un-pause something you had paused yourself. The new method pauses rather than toggles, so it can't do that. The old method is still there as a switch in Settings if you ever need it</li>
-                <li>Added Pause and Resume buttons to the break screen on macOS, so you can silence music or bring it back without hunting for the app behind the break screen</li>
-                <li>Fixed the macOS break screen still not interrupting full-screen apps &mdash; the one remaining case where a break could pass you by entirely while you watched a video. The break screen is now prepared in a way that lets macOS place it over a full-screen app at all, which no amount of adjusting it afterwards could achieve</li>
-                <li>Fixed the macOS break screen covering only the top portion of the display, leaving the bottom of your desktop visible and clickable during a break, and kept the menu bar and Dock reachable during a break unless you've chosen to hide them</li>
-                <li>The Entries page now shows an error with a Retry button when a day can't be loaded, instead of spinning forever</li>
-              </ul>
-            </div>
-            <div class="timeline-entry reveal">
-              <p class="timeline-date">Saturday, Sep 19, 2026</p>
-              <ul class="timeline-items">
-                <li>Fixed the macOS break screen still failing to appear over full-screen apps on some breaks. It is now placed onto the Space you are actually looking at before it is shown, rather than after, with an automatic second attempt if it still lands on the wrong one</li>
-                <li>Fixed the macOS media pause silently doing nothing when the Accessibility permission gets stuck after an update. The app now explains how to clear the stale permission entry instead of offering a button that cannot work</li>
-                <li>Stopped the break screen itself from writing the emergency-exit challenge to the log file, finishing the change made earlier in the week so logs are safe to share when reporting a bug</li>
+                <li>Fixed the Pomodoro snooze dropdown quietly shortening a &ldquo;Pause for 6 hr&rdquo; or &ldquo;Pause for 12 hr&rdquo; pick down to 2 hours</li>
               </ul>
             </div>
             <p class="timeline-tier reveal">Previous 3 weeks</p>
+            <div class="timeline-entry reveal">
+              <p class="timeline-date">Week of Sep 21 &ndash; 27, 2026</p>
+              <ul class="timeline-items">
+                <li>Brought Reflectodoro to iPhone and iPad: wall-clock break scheduling, break notifications, a Live Activity countdown on the Lock Screen, the full break screen with the emergency-exit challenge, Keychain-backed encryption, media pause-on-break, and new app icons. iPhone can also sync directly with your other devices over wifi, with no account or cloud involved. Not yet distributed through the App Store; for now it's installed from Xcode, and syncing is manual and works while the app is open</li>
+                <li>Added a Concentration schedule alongside the normal one &mdash; a 1-minute break at :25 and a longer 10-minute break at :50 &mdash; picked from a new dropdown on the Timer tab, with your reflection still required after both. That short break skips the quote panel, since it's too brief to read one, and iOS break notifications follow the schedule you pick</li>
+                <li>You can now protect your encryption key with a password instead of the system password vault, switch between the two from a new Advanced settings section, and show, copy and restore it for safekeeping. The app no longer quietly creates a brand-new key when it can't reach the one your entries were saved with, and if a break arrives before you've unlocked, you can skip it from the password prompt</li>
+                <li>Android break screen improvements: the end-of-break quote panel now works there too, the break screen steps aside while a phone or VoIP call rings or is active, and Pomodoro mode can pause itself overnight (10pm to 8am by default, adjustable or switchable off in Settings)</li>
+                <li>Added a Theme setting (Auto/Light/Dark) applied instantly across every window, a redesigned hourglass app icon on every platform, and wider pages with text scaled up to match on large windows</li>
+                <li>Added a configurable credit line under the break screen's quote, so whichever quote service you point it at can be attributed properly</li>
+                <li>Fixed Most Important Tasks and the Not To Do list going missing on the break screen, a failed save that could vanish silently, Android playing two notification sounds for a single break, the Timer page overflowing on some iPhones, and Entries days that can't be read now showing an error with a Retry button and a way to delete just that day's data</li>
+              </ul>
+            </div>
             <div class="timeline-entry reveal">
               <p class="timeline-date">Week of Sep 14 &ndash; 20, 2026</p>
               <ul class="timeline-items">
@@ -1672,8 +1654,9 @@
                 <li>Rebuilt how device sync works out what changed, fixing three ways entries could silently never reach a paired device: after a system clock change, when passing between three or more paired devices, and when restoring an older backup onto an already-paired device</li>
                 <li>Added an &ldquo;Export system info&rdquo; button to the About page so a bug report can include your OS, display and device details, and simplified how the app sets up its local database on first launch (existing reflections, settings and pairings are untouched)</li>
                 <li>Added per-device auto-sync for paired devices, plus a home-screen widget to sync and manage pairings without opening Settings</li>
-                <li>Fixed the macOS break screen getting hidden behind fullscreen apps and related media-pause bugs, the main window and overlay clocks freezing or showing stale time, and the reflection field pre-filling from the wrong slot instead of your last entry</li>
-                <li>Added the Google Play Store listing identifier, kept Android debug symbols for crash reports, improved macOS startup diagnostics, refreshed the snooze duration options, and stopped writing the emergency-exit challenge value to the log file</li>
+                <li>macOS now pauses your media during a break without asking for any permission &mdash; it pauses rather than toggles, so it can't un-pause something you'd paused yourself &mdash; with Pause and Resume buttons on the break screen, and screen time now tracks which app you're using on a Mac too, with friendly app names and no permission prompt</li>
+                <li>Fixed the macOS break screen failing to appear over full-screen apps or covering only the top of the display, the main window and overlay clocks freezing or showing stale time, and the reflection field pre-filling from the wrong slot instead of your last entry</li>
+                <li>Added the Google Play Store listing identifier, kept Android debug symbols for crash reports, improved macOS startup diagnostics, refreshed the snooze duration options, stopped writing the emergency-exit challenge value to the log file, and made the Entries page show an error with a Retry button instead of spinning forever when a day can't be loaded</li>
               </ul>
             </div>
             <div class="timeline-entry reveal">
@@ -1691,10 +1674,11 @@
                 <li>Refactored the Settings page UI, and improved the landing page: an FAQ entry on why Reflectodoro is free, an &ldquo;all releases&rdquo; link on the download page, and better visibility to AI crawlers</li>
               </ul>
             </div>
+            <p class="timeline-tier reveal">Earlier</p>
             <div class="timeline-entry reveal">
-              <p class="timeline-date">Week of Aug 31 &ndash; Sep 6, 2026</p>
+              <p class="timeline-date">September 2026</p>
               <ul class="timeline-items">
-                <li>Signed Android release builds, fixed the Android CI build pipeline, and shrank the release APK size</li>
+                <li>Signed Android release builds and fixed the Android CI build pipeline</li>
                 <li>Completed a full-codebase audit &mdash; fixed a DST-transition crash, reflections/wellness data misdated across the UTC/local day boundary, a data-import bug that could wipe history, and ways the break screen could strand users with no way out; hardened Android further (crash-guarded overlay calls, disabled cloud auto-backup, an independent overlay watchdog) and hardened the release CI pipeline</li>
                 <li>Fixed several Linux packaging issues (including AppImage builds silently dropping Wayland libraries), a white-screen overlay after Windows monitor sleep/wake, a blank check-in window, an unreliable Android wake alarm, and other break-screen edge cases</li>
                 <li>Added a &ldquo;Not to do&rdquo; list alongside Most Important Tasks, and made both Most Important Tasks and past reflection entries editable</li>
@@ -1703,7 +1687,6 @@
                 <li>Added a &ldquo;Why it helps&rdquo; benefits section and a Discord community link to the landing page, and renamed &ldquo;break overlay&rdquo; to &ldquo;break screen&rdquo; throughout the Settings UI</li>
               </ul>
             </div>
-            <p class="timeline-tier reveal">Earlier</p>
             <div class="timeline-entry reveal">
               <p class="timeline-date">August 2026</p>
               <ul class="timeline-items">
@@ -1712,7 +1695,7 @@
                 <li>Added macOS (Apple Silicon and Intel) and Linux (including ARM) builds</li>
                 <li>Added the wellness check-in after breaks, pausing media when a break starts, and an About page with a check-for-updates button</li>
                 <li>Fixed the app not coming back to the foreground after the Android break screen closed, a hibernation edge case, and the on-screen keyboard covering the task list on Android</li>
-                <li>Housekeeping: a Noncommercial license and Contributor License Agreement, structured logging, optional settings in data export/import, and a Windows installer-only bundle</li>
+                <li>Housekeeping: a Noncommercial license and Contributor License Agreement, structured logging, optional settings in data export/import, a Windows installer-only bundle, and a smaller Android release binary</li>
               </ul>
             </div>
           </div>
