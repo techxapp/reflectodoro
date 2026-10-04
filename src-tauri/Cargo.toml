@@ -153,6 +153,17 @@ windows = { version = "0.61", features = [
     "Win32_UI_Accessibility",
     "Win32_System_Threading",
     "Win32_Storage_FileSystem",
+    # presence.rs's lock/display-off watcher: WTSRegisterSessionNotification
+    # (RemoteDesktop), RegisterPowerSettingNotification plus reading the power
+    # plan's display timeout (Power, Registry, SystemServices for the GUIDs),
+    # GetTickCount to pair with GetLastInputInfo (SystemInformation), and
+    # GetModuleHandleW for its hidden window's class (LibraryLoader).
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Power",
+    "Win32_System_Registry",
+    "Win32_System_SystemServices",
+    "Win32_System_SystemInformation",
+    "Win32_System_LibraryLoader",
     "Media_Control",
 ] }
 # crypto.rs's at-rest key store. keyring 3 has NO default features -- the

@@ -84,7 +84,7 @@
 //! (see `listenForScreenTimeSessionBatches` in db.ts), the same
 //! Rust-emits/frontend-writes split `"media-toggle://recorded"` already uses.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -208,7 +208,42 @@ fn queue(session: Option<ScreenTimeSession>) {
 /// through `record_focus_change_at` directly (see the module doc).
 #[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn record_focus_change(new_app: Option<FocusedApp>) {
+    // Nobody is looking at the screen (see presence.rs): whatever takes focus
+    // now -- the lock screen's own LockApp.exe, a window popping up behind a
+    // dark display -- isn't time the user spent in it. `user_returned`
+    // resyncs once they're back.
+    if AWAY.load(Ordering::SeqCst) {
+        return;
+    }
     record_focus_change_at(new_app, Utc::now());
+}
+
+/// Set while presence.rs reports the session locked or the display off.
+#[cfg_attr(target_os = "android", allow(dead_code))]
+static AWAY: AtomicBool = AtomicBool::new(false);
+
+/// The user stopped being able to see the screen, effective `at` (presence.rs
+/// backdates it to their last input, capped at the display-off timeout).
+/// Closes the in-progress session there and blocks live focus changes until
+/// `user_returned`.
+///
+/// Edge case, accepted: if `CHECKPOINT_INTERVAL` split the session after
+/// `at`, the half before the split is already queued with an end past `at`,
+/// and the reopened half closes with a negative length and is dropped. That
+/// over-counts by at most the idle stretch before the display turned off.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn user_left(at: DateTime<Utc>) {
+    AWAY.store(true, Ordering::SeqCst);
+    record_focus_change_at(None, at.min(Utc::now()));
+}
+
+/// The user is back: re-attribute from whatever has focus now rather than
+/// waiting for their next window switch.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn user_returned() {
+    AWAY.store(false, Ordering::SeqCst);
+    #[cfg(windows)]
+    platform_impl::resync_now();
 }
 
 /// The timestamped core `record_focus_change` delegates to. Exists
@@ -587,6 +622,11 @@ mod platform_impl {
     /// Cheap enough to call on demand (one `GetForegroundWindow` plus one
     /// process-name lookup) -- no need to cache anything for it.
     pub fn resync_current_focus(_app: &tauri::AppHandle) {
+        resync_now();
+    }
+
+    /// `resync_current_focus` without the handle, for presence.rs.
+    pub fn resync_now() {
         unsafe { handle_foreground(GetForegroundWindow()) };
     }
 

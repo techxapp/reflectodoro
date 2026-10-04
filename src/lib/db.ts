@@ -1661,12 +1661,15 @@ export interface AutoPauseOnWakeConfig {
   offMinutes: number;
   remainingMinutes: number;
   pauseMinutes: number;
+  /** Also count a locked / display-off stretch (PC still awake) as "off". Windows only so far. */
+  includeScreenOff: boolean;
 }
 
 const AUTO_PAUSE_ON_WAKE_ENABLED_KEY = "auto_pause_on_wake_enabled";
 const AUTO_PAUSE_ON_WAKE_OFF_MINUTES_KEY = "auto_pause_on_wake_off_minutes";
 const AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES_KEY = "auto_pause_on_wake_remaining_minutes";
 const AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES_KEY = "auto_pause_on_wake_pause_minutes";
+const AUTO_PAUSE_ON_WAKE_INCLUDE_SCREEN_OFF_KEY = "auto_pause_on_wake_include_screen_off";
 const AUTO_PAUSE_ON_WAKE_DEFAULT_OFF_MINUTES = 15;
 const AUTO_PAUSE_ON_WAKE_DEFAULT_REMAINING_MINUTES = 10;
 const AUTO_PAUSE_ON_WAKE_DEFAULT_PAUSE_MINUTES = 20;
@@ -1674,12 +1677,13 @@ const AUTO_PAUSE_ON_WAKE_DEFAULT_PAUSE_MINUTES = 20;
 export async function getAutoPauseOnWakeConfig(): Promise<AutoPauseOnWakeConfig> {
   const db = await getDb();
   const rows = await db.select<{ key: string; value: string }[]>(
-    `SELECT key, value FROM app_setting WHERE key IN ($1, $2, $3, $4)`,
+    `SELECT key, value FROM app_setting WHERE key IN ($1, $2, $3, $4, $5)`,
     [
       AUTO_PAUSE_ON_WAKE_ENABLED_KEY,
       AUTO_PAUSE_ON_WAKE_OFF_MINUTES_KEY,
       AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES_KEY,
       AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES_KEY,
+      AUTO_PAUSE_ON_WAKE_INCLUDE_SCREEN_OFF_KEY,
     ],
   );
   const byKey = Object.fromEntries(rows.map((r) => [r.key, r.value]));
@@ -1692,6 +1696,8 @@ export async function getAutoPauseOnWakeConfig(): Promise<AutoPauseOnWakeConfig>
     pauseMinutes: Number(
       byKey[AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES_KEY] ?? AUTO_PAUSE_ON_WAKE_DEFAULT_PAUSE_MINUTES,
     ),
+    // Absent on installs older than this setting: default on.
+    includeScreenOff: (byKey[AUTO_PAUSE_ON_WAKE_INCLUDE_SCREEN_OFF_KEY] ?? "true") === "true",
   };
 }
 
@@ -1717,6 +1723,11 @@ export async function saveAutoPauseOnWakeConfig(config: AutoPauseOnWakeConfig): 
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES_KEY, String(config.pauseMinutes)],
   );
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [AUTO_PAUSE_ON_WAKE_INCLUDE_SCREEN_OFF_KEY, String(config.includeScreenOff)],
+  );
   await syncAutoPauseOnWakeConfigToBackend(config);
 }
 
@@ -1726,6 +1737,7 @@ export async function syncAutoPauseOnWakeConfigToBackend(config: AutoPauseOnWake
     offMinutes: config.offMinutes,
     remainingMinutes: config.remainingMinutes,
     pauseMinutes: config.pauseMinutes,
+    includeScreenOff: config.includeScreenOff,
   });
 }
 

@@ -154,6 +154,7 @@
   let autoPauseOnWakeOffMinutes = $state(15);
   let autoPauseOnWakeRemainingMinutes = $state(10);
   let autoPauseOnWakePauseMinutes = $state(20);
+  let autoPauseOnWakeIncludeScreenOff = $state(true);
   let autoPauseOnWakeLoaded = $state(false);
   let autoPauseOnWakeBusy = $state(false);
   let autoPauseOnWakeSaved = $state(false);
@@ -554,6 +555,7 @@
     autoPauseOnWakeOffMinutes = config.offMinutes;
     autoPauseOnWakeRemainingMinutes = config.remainingMinutes;
     autoPauseOnWakePauseMinutes = config.pauseMinutes;
+    autoPauseOnWakeIncludeScreenOff = config.includeScreenOff;
     autoPauseOnWakeLoaded = true;
   });
 
@@ -802,8 +804,26 @@
         offMinutes: autoPauseOnWakeOffMinutes,
         remainingMinutes: autoPauseOnWakeRemainingMinutes,
         pauseMinutes: autoPauseOnWakePauseMinutes,
+        includeScreenOff: autoPauseOnWakeIncludeScreenOff,
       });
       autoPauseOnWakeEnabled = next;
+    } finally {
+      autoPauseOnWakeBusy = false;
+    }
+  }
+
+  async function toggleAutoPauseOnWakeIncludeScreenOff() {
+    const next = !autoPauseOnWakeIncludeScreenOff;
+    autoPauseOnWakeBusy = true;
+    try {
+      await saveAutoPauseOnWakeConfig({
+        enabled: autoPauseOnWakeEnabled,
+        offMinutes: autoPauseOnWakeOffMinutes,
+        remainingMinutes: autoPauseOnWakeRemainingMinutes,
+        pauseMinutes: autoPauseOnWakePauseMinutes,
+        includeScreenOff: next,
+      });
+      autoPauseOnWakeIncludeScreenOff = next;
     } finally {
       autoPauseOnWakeBusy = false;
     }
@@ -819,6 +839,7 @@
       offMinutes: autoPauseOnWakeOffMinutes,
       remainingMinutes: autoPauseOnWakeRemainingMinutes,
       pauseMinutes: autoPauseOnWakePauseMinutes,
+      includeScreenOff: autoPauseOnWakeIncludeScreenOff,
     });
     autoPauseOnWakeSaved = true;
     setTimeout(() => (autoPauseOnWakeSaved = false), 2000);
@@ -1108,6 +1129,19 @@
             Auto-pause after waking from sleep near a boundary
           </label>
         </div>
+        {#if isWindows}
+          <div class="data-row">
+            <label class="checkbox">
+              <input
+                type="checkbox"
+                checked={autoPauseOnWakeIncludeScreenOff}
+                disabled={autoPauseOnWakeBusy || !autoPauseOnWakeEnabled}
+                onchange={toggleAutoPauseOnWakeIncludeScreenOff}
+              />
+              Also count time with the screen locked or turned off
+            </label>
+          </div>
+        {/if}
         <form onsubmit={saveAutoPauseOnWakeThresholds}>
           <label>
             PC was off for more than
@@ -1130,8 +1164,10 @@
           {/if}
         </form>
         <p class="hint">
-          If you reopen this device after it's been asleep for a while, right before a work or
-          break boundary, Pomodoro mode pauses itself for the duration above instead of dropping
+          If you reopen this device after it's been asleep for a while{isWindows &&
+          autoPauseOnWakeIncludeScreenOff
+            ? " (or locked, or with its screen off)"
+            : ""}, right before a work or break boundary, Pomodoro mode pauses itself for the duration above instead of dropping
           you straight into a session you never chose to start. Resumes on its own, exactly like
           picking a pause from the Timer tab's dropdown &mdash; to resume early, set Pomodoro back
           to On.
@@ -1553,6 +1589,12 @@
       actually went. Everything stays on this device &mdash; nothing is uploaded, and only the app's
       name is recorded, never window titles or anything you type.
     </p>
+    {#if isWindows}
+      <p class="hint">
+        Time with the screen locked or turned off isn't counted. When the screen turns off on its own,
+        the idle minutes before it (up to your power plan's screen timeout) are left out too.
+      </p>
+    {/if}
 
     {#if screenTimeTrackingLoaded}
       <div class="data-row">

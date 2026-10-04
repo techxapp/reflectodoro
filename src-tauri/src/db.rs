@@ -402,6 +402,7 @@ const SEED_SETTINGS: &[(&str, &str)] = &[
     ("auto_pause_on_wake_off_minutes", "15"),
     ("auto_pause_on_wake_remaining_minutes", "10"),
     ("auto_pause_on_wake_pause_minutes", "20"),
+    ("auto_pause_on_wake_include_screen_off", "true"),
     ("macos_hide_menu_bar_dock_enabled", "false"),
     ("macos_media_key_fallback_enabled", "false"),
     ("screen_time_tracking_enabled", "true"),

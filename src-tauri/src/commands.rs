@@ -957,6 +957,7 @@ pub struct AutoPauseOnWakeConfig {
     pub off_minutes: u32,
     pub remaining_minutes: u32,
     pub pause_minutes: u32,
+    pub include_screen_off: bool,
 }
 
 #[tauri::command]
@@ -966,6 +967,7 @@ pub fn get_auto_pause_on_wake_config() -> AutoPauseOnWakeConfig {
         off_minutes: crate::AUTO_PAUSE_ON_WAKE_OFF_MINUTES.load(Ordering::SeqCst),
         remaining_minutes: crate::AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES.load(Ordering::SeqCst),
         pause_minutes: crate::AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES.load(Ordering::SeqCst),
+        include_screen_off: crate::AUTO_PAUSE_ON_WAKE_INCLUDE_SCREEN_OFF.load(Ordering::SeqCst),
     }
 }
 
@@ -982,8 +984,10 @@ pub fn set_auto_pause_on_wake_config(
     off_minutes: u32,
     remaining_minutes: u32,
     pause_minutes: u32,
+    include_screen_off: bool,
 ) {
     crate::AUTO_PAUSE_ON_WAKE_ENABLED.store(enabled, Ordering::SeqCst);
+    crate::AUTO_PAUSE_ON_WAKE_INCLUDE_SCREEN_OFF.store(include_screen_off, Ordering::SeqCst);
     crate::AUTO_PAUSE_ON_WAKE_OFF_MINUTES.store(off_minutes.clamp(1, 180), Ordering::SeqCst);
     crate::AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES.store(remaining_minutes.clamp(1, 60), Ordering::SeqCst);
     crate::AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES.store(pause_minutes.clamp(5, 240), Ordering::SeqCst);

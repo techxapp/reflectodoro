@@ -20,6 +20,7 @@ mod media;
 mod native_overlay;
 mod overlay;
 mod p2p_sync;
+mod presence;
 mod screen_time;
 mod state;
 mod system_info;
@@ -295,6 +296,12 @@ pub(crate) static AUTO_PAUSE_ON_WAKE_REMAINING_MINUTES: AtomicU32 = AtomicU32::n
 /// arbitrary duration results, the same way night pause's window-length
 /// pause does.
 pub(crate) static AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES: AtomicU32 = AtomicU32::new(20);
+
+/// Whether a stretch with the screen locked or the display off (with the PC
+/// still awake, so no suspend gap) also counts as "the PC was off" for auto-
+/// pause on wake. See presence.rs; only Windows reports these yet. Backed by
+/// `app_setting.auto_pause_on_wake_include_screen_off`. Defaults to `true`.
+pub(crate) static AUTO_PAUSE_ON_WAKE_INCLUDE_SCREEN_OFF: AtomicBool = AtomicBool::new(true);
 
 /// Whether foreground-app focus tracking is running (see screen_time.rs).
 /// Backed by `app_setting.screen_time_tracking_enabled`; same load/push
@@ -676,8 +683,19 @@ async fn run_scheduler(app: AppHandle) {
         // actual gap, never on ordinary ticks. Guarded on POMODORO_ENABLED so
         // it can't fire over an already-off/already-snoozed state (e.g. night
         // pause already handling this same wake on Android).
+        //
+        // A return from a locked/display-off stretch (presence.rs, which wakes
+        // this loop via presence::RETURNED) counts the same way when
+        // AUTO_PAUSE_ON_WAKE_INCLUDE_SCREEN_OFF is on: the PC stayed awake, so
+        // there's no suspend gap, but nobody was at it. Always taken, so an
+        // unused value can't fire later. When both apply (the display went
+        // off, then the PC slept), the longer one wins; the away time already
+        // spans the sleep, since it's measured on the wall clock.
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        if let Some(overslept) = suspend_gap_overslept {
+        let screen_off_away = presence::take_pending_return()
+            .filter(|_| AUTO_PAUSE_ON_WAKE_INCLUDE_SCREEN_OFF.load(Ordering::SeqCst));
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if let Some(overslept) = suspend_gap_overslept.into_iter().chain(screen_off_away).max() {
             if AUTO_PAUSE_ON_WAKE_ENABLED.load(Ordering::SeqCst)
                 && POMODORO_ENABLED.load(Ordering::SeqCst)
                 && overslept
@@ -693,7 +711,8 @@ async fn run_scheduler(app: AppHandle) {
                     let pause_minutes = AUTO_PAUSE_ON_WAKE_PAUSE_MINUTES.load(Ordering::SeqCst);
                     let resume_at = now + chrono::Duration::minutes(pause_minutes as i64);
                     log::info!(
-                        "scheduler: auto-pause on wake -- off {}s, {}min left in slot, pausing until {}",
+                        "scheduler: auto-pause on wake ({}) -- off {}s, {}min left in slot, pausing until {}",
+                        if Some(overslept) == screen_off_away { "screen off/locked" } else { "suspend" },
                         overslept.as_secs(),
                         remaining.num_minutes(),
                         resume_at.to_rfc3339()
@@ -874,11 +893,14 @@ async fn run_scheduler(app: AppHandle) {
             ios_schedule::sleep_or_wake(sleep_dur).await;
         }
         // Woken early by `commands::set_pomodoro_mode` so a mode switch takes
-        // effect now rather than at the old mode's next boundary.
+        // effect now rather than at the old mode's next boundary, and by
+        // presence.rs when the user comes back to a locked/dark screen, so
+        // auto-pause on wake is decided the moment they return.
         #[cfg(not(any(target_os = "ios", target_os = "android")))]
         tokio::select! {
             _ = tokio::time::sleep(sleep_dur) => {}
             _ = MODE_CHANGED.notified() => {}
+            _ = presence::RETURNED.notified() => {}
         }
         #[cfg(target_os = "android")]
         tokio::select! {
@@ -1463,6 +1485,9 @@ pub fn run() {
             // whatever real focus switches accumulated into one event per
             // minute -- it never invents rows on its own.
             screen_time::start_tracking(&handle);
+            // Lock/display-off detection (Windows only so far; a no-op
+            // elsewhere). Feeds screen time and auto-pause on wake.
+            presence::install();
             let screen_time_handle = handle.clone();
             tauri::async_runtime::spawn(screen_time::run_flush_loop(screen_time_handle));
 
