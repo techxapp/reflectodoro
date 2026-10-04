@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter};
 use crate::crypto::FieldCipher;
 use crate::db;
 
-// Serialize (as well as Deserialize) on the six row types below: p2p_sync.rs
+// Serialize (as well as Deserialize) on the synced row types below: p2p_sync.rs
 // reuses these exact shapes to build its own delta payload (never including
 // ImportSettingRow/app_setting -- P2P sync deliberately never touches
 // settings, see CLAUDE.md's P2P LAN sync section), so both the file-based
@@ -94,6 +94,51 @@ pub struct ImportBulkEditPresetRow {
     pub updated_at: String,
 }
 
+/// A Habits-tab habit definition (CLAUDE.md's "Habit tracker"). Plaintext
+/// on the wire and in export files; `import_habit_data` encrypts on the way
+/// in. A `deleted` row is a tombstone: its content fields arrive blank, and
+/// it always wins a merge so a delete can't be undone by a peer that still
+/// holds the old row.
+#[derive(Deserialize, Serialize, Clone)]
+pub struct ImportHabitRow {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub emoji: String,
+    #[serde(default)]
+    pub color: String,
+    /// '' = no target, else a positive integer as text.
+    #[serde(default)]
+    pub target_days: String,
+    #[serde(default)]
+    pub sort_order: i64,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub deleted: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// One logged occurrence of a habit. `log_date` is the local wall-clock
+/// date ('YYYY-MM-DD') and `log_time` 'HH:MM' or '' -- deliberately not a UTC
+/// instant, so a log doesn't move to another day on a device in another
+/// timezone.
+#[derive(Deserialize, Serialize, Clone)]
+pub struct ImportHabitLogRow {
+    pub id: String,
+    pub habit_id: String,
+    pub log_date: String,
+    #[serde(default)]
+    pub log_time: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default)]
+    pub deleted: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Deserialize)]
 pub struct ImportData {
     pub reflection: Vec<ImportReflectionRow>,
@@ -103,6 +148,12 @@ pub struct ImportData {
     pub wellness_check: Vec<ImportWellnessCheckRow>,
     pub screen_time_session: Vec<ImportScreenTimeSessionRow>,
     pub bulk_edit_preset: Vec<ImportBulkEditPresetRow>,
+    /// Default-empty: export files written before the Habits tab existed
+    /// have no such array.
+    #[serde(default)]
+    pub habit: Vec<ImportHabitRow>,
+    #[serde(default)]
+    pub habit_log: Vec<ImportHabitLogRow>,
 }
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +193,8 @@ pub struct ImportResult {
     /// (last-write-wins) -- see `import_bulk_edit_presets`. Always zero in
     /// "replace" mode.
     pub bulk_edit_preset_stale_count: usize,
+    pub habit_count: usize,
+    pub habit_log_count: usize,
 }
 
 // --- Pure line-merge algorithm (no DB access -- see #[cfg(test)] below) ---
@@ -769,6 +822,312 @@ pub(crate) async fn import_bulk_edit_presets(
     Ok(stale_count)
 }
 
+// --- Habits: tombstone-aware last-write-wins ------------------------------
+
+/// What merging one incoming habit/habit_log row against the stored row
+/// (if any) should do. Pure, so the rule is unit tested on its own.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum LwwDecision {
+    Insert,
+    Overwrite,
+    Skip,
+}
+
+/// The merge rule for the habit tables:
+/// - nothing stored -> insert (a tombstone too, so the delete keeps travelling);
+/// - stored row is a tombstone -> skip (deletes are final);
+/// - incoming is a tombstone -> overwrite (deletes beat any edit);
+/// - otherwise last-write-wins on `updated_at`, ties keeping what's stored.
+///
+/// A delete winning regardless of timestamps is deliberate: the alternative
+/// lets a device that edited a habit before learning it was deleted bring it
+/// back, which for sensitive data (a deleted "Periods" log) is the worse
+/// failure.
+pub(crate) fn lww_decision(
+    existing: Option<(bool, &str)>,
+    incoming_deleted: bool,
+    incoming_updated_at: &str,
+) -> LwwDecision {
+    match existing {
+        None => LwwDecision::Insert,
+        Some((true, _)) => LwwDecision::Skip,
+        Some(_) if incoming_deleted => LwwDecision::Overwrite,
+        Some((false, existing_updated_at)) => {
+            if timestamp_is_newer(incoming_updated_at, existing_updated_at) {
+                LwwDecision::Overwrite
+            } else {
+                LwwDecision::Skip
+            }
+        }
+    }
+}
+
+/// RFC3339 comparison, falling back to string order only for a value that
+/// doesn't parse (both sides normally come from JS `toISOString()`, where the
+/// two agree anyway).
+fn timestamp_is_newer(candidate: &str, current: &str) -> bool {
+    match (
+        chrono::DateTime::parse_from_rfc3339(candidate),
+        chrono::DateTime::parse_from_rfc3339(current),
+    ) {
+        (Ok(a), Ok(b)) => a > b,
+        _ => candidate > current,
+    }
+}
+
+fn now_iso_millis() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+enum PlainValue {
+    Text(String),
+    Int(i64),
+}
+
+/// One row headed for `habit` or `habit_log`, flattened so both tables share
+/// `import_lww_rows`.
+struct LwwRow {
+    id: String,
+    deleted: bool,
+    created_at: String,
+    updated_at: String,
+    /// Content columns, in the caller's `encrypted_cols` order. Stored
+    /// blank (plain '', never ciphertext) on a tombstone.
+    encrypted: Vec<String>,
+    /// Structural columns, in the caller's `plain_cols` order.
+    plain: Vec<PlainValue>,
+}
+
+/// Merges `rows` into `table` by id. Returns how many were skipped (stale, or
+/// hitting an existing tombstone).
+///
+/// Unlike `import_bulk_edit_presets`, `updated_at` is ciphertext here, so the
+/// LWW comparison can't run in SQL: the stored rows' timestamps are fetched
+/// and decrypted in one batch, compared in Rust, and the incoming side is
+/// encrypted in one batch. Duplicate ids within `rows` are folded first with
+/// the same rule, so a batch can't trip the primary key.
+async fn import_lww_rows(
+    tx: &mut Transaction<'_, Sqlite>,
+    cipher: &FieldCipher,
+    table: &str,
+    encrypted_cols: &[&str],
+    plain_cols: &[&str],
+    rows: Vec<LwwRow>,
+    mode: ImportMode,
+) -> Result<usize, String> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+
+    // Fold duplicate ids among the incoming rows, keeping first-seen order.
+    let mut order: Vec<String> = Vec::new();
+    let mut by_id: HashMap<String, LwwRow> = HashMap::new();
+    let mut stale = 0usize;
+    for row in rows {
+        let decision = by_id
+            .get(&row.id)
+            .map(|kept| lww_decision(Some((kept.deleted, &kept.updated_at)), row.deleted, &row.updated_at));
+        match decision {
+            None => {
+                order.push(row.id.clone());
+                by_id.insert(row.id.clone(), row);
+            }
+            Some(decision) => {
+                if decision == LwwDecision::Overwrite {
+                    by_id.insert(row.id.clone(), row);
+                }
+                stale += 1;
+            }
+        }
+    }
+
+    // What's already stored, decrypted in one batch. Replace mode just wiped
+    // the table, so there's nothing to look up.
+    let mut existing: HashMap<String, (bool, String)> = HashMap::new();
+    if mode == ImportMode::Merge {
+        let mut found: Vec<(String, bool, String)> = Vec::new();
+        for id in &order {
+            let row: Option<(i64, String)> =
+                sqlx::query_as(&format!("SELECT deleted, updated_at FROM {table} WHERE id = ?"))
+                    .bind(id)
+                    .fetch_optional(&mut **tx)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            if let Some((deleted, updated_at)) = row {
+                found.push((id.clone(), deleted != 0, updated_at));
+            }
+        }
+        let decrypted =
+            cipher.decrypt_many(&found.iter().map(|(_, _, u)| u.clone()).collect::<Vec<_>>()).await?;
+        for ((id, deleted, _), updated_at) in found.into_iter().zip(decrypted) {
+            existing.insert(id, (deleted, updated_at));
+        }
+    }
+
+    let mut writes: Vec<(LwwDecision, LwwRow)> = Vec::new();
+    for id in order {
+        let row = by_id.remove(&id).expect("every ordered id was inserted");
+        let decision = lww_decision(
+            existing.get(&id).map(|(d, u)| (*d, u.as_str())),
+            row.deleted,
+            &row.updated_at,
+        );
+        if decision == LwwDecision::Skip {
+            stale += 1;
+        } else {
+            writes.push((decision, row));
+        }
+    }
+    if writes.is_empty() {
+        return Ok(stale);
+    }
+
+    // One encrypt batch: every content column plus both timestamps, per row.
+    let per_row = encrypted_cols.len() + 2;
+    let flat: Vec<String> = writes
+        .iter()
+        .flat_map(|(_, r)| {
+            r.encrypted.iter().cloned().chain([r.created_at.clone(), r.updated_at.clone()])
+        })
+        .collect();
+    let encrypted = cipher.encrypt_many(&flat).await?;
+
+    let insert_cols: Vec<&str> = std::iter::once("id")
+        .chain(encrypted_cols.iter().copied())
+        .chain(plain_cols.iter().copied())
+        .chain(["deleted", "created_at", "updated_at"])
+        .collect();
+    let insert_sql = format!(
+        "INSERT INTO {table} ({}) VALUES ({})",
+        insert_cols.join(", "),
+        vec!["?"; insert_cols.len()].join(", ")
+    );
+    let update_sql = format!(
+        "UPDATE {table} SET {} WHERE id = ?",
+        insert_cols[1..].iter().map(|c| format!("{c} = ?")).collect::<Vec<_>>().join(", ")
+    );
+
+    for (i, (decision, row)) in writes.into_iter().enumerate() {
+        let enc = &encrypted[i * per_row..(i + 1) * per_row];
+        let content_cols = encrypted_cols.len();
+        let sql = if decision == LwwDecision::Insert { &insert_sql } else { &update_sql };
+        let mut query = sqlx::query(sql);
+        if decision == LwwDecision::Insert {
+            query = query.bind(row.id.clone());
+        }
+        for value in &enc[..content_cols] {
+            // A tombstone's content is stored as plain '' -- there's nothing
+            // left to protect, and readers never decrypt deleted rows.
+            query = query.bind(if row.deleted { String::new() } else { value.clone() });
+        }
+        for value in row.plain {
+            query = match value {
+                PlainValue::Text(t) => query.bind(t),
+                PlainValue::Int(n) => query.bind(n),
+            };
+        }
+        query = query
+            .bind(row.deleted as i64)
+            .bind(enc[content_cols].clone())
+            .bind(enc[content_cols + 1].clone());
+        if decision == LwwDecision::Overwrite {
+            query = query.bind(row.id.clone());
+        }
+        query.execute(&mut **tx).await.map_err(|e| e.to_string())?;
+    }
+    Ok(stale)
+}
+
+/// Tombstones every live log whose habit is deleted. Covers a log the
+/// sending device never had (logged here before the delete arrived), which
+/// the sender's own cascade couldn't reach. The rewrite advances `rev`, so
+/// these tombstones forward on to other peers too.
+async fn cascade_habit_tombstones(tx: &mut Transaction<'_, Sqlite>, cipher: &FieldCipher) -> Result<(), String> {
+    let orphaned: Vec<String> = sqlx::query_scalar(
+        "SELECT l.id FROM habit_log l JOIN habit h ON h.id = l.habit_id
+         WHERE h.deleted = 1 AND l.deleted = 0",
+    )
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    if orphaned.is_empty() {
+        return Ok(());
+    }
+    let stamps = cipher.encrypt_many(&vec![now_iso_millis(); orphaned.len()]).await?;
+    for (id, updated_at) in orphaned.iter().zip(stamps) {
+        sqlx::query(
+            "UPDATE habit_log SET deleted = 1, log_date = '', log_time = '', note = '', updated_at = ? WHERE id = ?",
+        )
+        .bind(updated_at)
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Imports both habit tables (habits first, so the cascade sees them) and
+/// then applies the delete cascade. Shared by the file import and P2P sync's
+/// `apply_payload`. Returns the number of rows skipped as stale.
+pub(crate) async fn import_habit_data(
+    tx: &mut Transaction<'_, Sqlite>,
+    cipher: &FieldCipher,
+    habits: &[ImportHabitRow],
+    logs: &[ImportHabitLogRow],
+    mode: ImportMode,
+) -> Result<usize, String> {
+    if habits.is_empty() && logs.is_empty() {
+        return Ok(0);
+    }
+    let habit_rows = habits
+        .iter()
+        .map(|h| LwwRow {
+            id: h.id.clone(),
+            deleted: h.deleted,
+            created_at: h.created_at.clone(),
+            updated_at: h.updated_at.clone(),
+            encrypted: vec![h.name.clone(), h.emoji.clone(), h.color.clone(), h.target_days.clone()],
+            plain: vec![PlainValue::Int(h.sort_order), PlainValue::Int(h.archived as i64)],
+        })
+        .collect();
+    let mut stale = import_lww_rows(
+        tx,
+        cipher,
+        "habit",
+        &["name", "emoji", "color", "target_days"],
+        &["sort_order", "archived"],
+        habit_rows,
+        mode,
+    )
+    .await?;
+
+    let log_rows = logs
+        .iter()
+        .map(|l| LwwRow {
+            id: l.id.clone(),
+            deleted: l.deleted,
+            created_at: l.created_at.clone(),
+            updated_at: l.updated_at.clone(),
+            encrypted: vec![l.log_date.clone(), l.log_time.clone(), l.note.clone()],
+            plain: vec![PlainValue::Text(l.habit_id.clone())],
+        })
+        .collect();
+    stale += import_lww_rows(
+        tx,
+        cipher,
+        "habit_log",
+        &["log_date", "log_time", "note"],
+        &["habit_id"],
+        log_rows,
+        mode,
+    )
+    .await?;
+
+    cascade_habit_tombstones(tx, cipher).await?;
+    Ok(stale)
+}
+
 #[tauri::command]
 pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, include_settings: bool) -> Result<ImportResult, String> {
     let pool = db::open_direct_pool(&app).await?;
@@ -789,6 +1148,8 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
         sqlx::query("DELETE FROM not_to_do_list").execute(&mut *tx).await.map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM screen_time_session").execute(&mut *tx).await.map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM bulk_edit_preset").execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM habit_log").execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM habit").execute(&mut *tx).await.map_err(|e| e.to_string())?;
         if include_settings {
             sqlx::query("DELETE FROM app_setting").execute(&mut *tx).await.map_err(|e| e.to_string())?;
         }
@@ -814,6 +1175,7 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
     let screen_time_duplicate_count = import_screen_time_sessions(&mut tx, &cipher, &data.screen_time_session).await?;
     let bulk_edit_preset_stale_count =
         import_bulk_edit_presets(&mut tx, &cipher, &data.bulk_edit_preset, mode).await?;
+    import_habit_data(&mut tx, &cipher, &data.habit, &data.habit_log, mode).await?;
 
     if include_settings {
         // Where this device's encryption key lives is never another
@@ -907,6 +1269,8 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
         wellness_check_duplicate_count,
         bulk_edit_preset_count: data.bulk_edit_preset.len(),
         bulk_edit_preset_stale_count,
+        habit_count: data.habit.len(),
+        habit_log_count: data.habit_log.len(),
     })
 }
 
@@ -1089,6 +1453,38 @@ mod tests {
                 start_time TEXT NOT NULL,
                 end_time TEXT NOT NULL,
                 text TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE habit (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                emoji TEXT NOT NULL DEFAULT '',
+                color TEXT NOT NULL DEFAULT '',
+                target_days TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE habit_log (
+                id TEXT PRIMARY KEY,
+                habit_id TEXT NOT NULL,
+                log_date TEXT NOT NULL,
+                log_time TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                deleted INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )",
@@ -1864,6 +2260,175 @@ mod tests {
 
         assert_eq!(stale, 0);
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bulk_edit_preset").fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    // --- Habits ------------------------------------------------------------
+
+    #[test]
+    fn lww_decision_rules() {
+        let old = "2026-01-01T00:00:00.000Z";
+        let new = "2026-01-02T00:00:00.000Z";
+        assert_eq!(lww_decision(None, false, old), LwwDecision::Insert);
+        assert_eq!(lww_decision(None, true, old), LwwDecision::Insert, "tombstones keep travelling");
+        assert_eq!(lww_decision(Some((false, old)), false, new), LwwDecision::Overwrite);
+        assert_eq!(lww_decision(Some((false, new)), false, old), LwwDecision::Skip);
+        assert_eq!(lww_decision(Some((false, old)), false, old), LwwDecision::Skip, "ties keep the stored row");
+        assert_eq!(lww_decision(Some((false, new)), true, old), LwwDecision::Overwrite, "a delete beats a newer edit");
+        assert_eq!(lww_decision(Some((true, old)), false, new), LwwDecision::Skip, "deletes are final");
+        // Same instants written with different offsets compare as instants, not text.
+        assert_eq!(
+            lww_decision(Some((false, "2026-01-01T10:25:00Z")), false, "2026-01-01T12:26:00+02:00"),
+            LwwDecision::Overwrite
+        );
+    }
+
+    fn habit_row(id: &str, name: &str, updated_at: &str, deleted: bool) -> ImportHabitRow {
+        ImportHabitRow {
+            id: id.into(),
+            name: if deleted { String::new() } else { name.into() },
+            emoji: String::new(),
+            color: "rose".into(),
+            target_days: "28".into(),
+            sort_order: 0,
+            archived: false,
+            deleted,
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            updated_at: updated_at.into(),
+        }
+    }
+
+    fn log_row(id: &str, habit_id: &str, date: &str, updated_at: &str) -> ImportHabitLogRow {
+        ImportHabitLogRow {
+            id: id.into(),
+            habit_id: habit_id.into(),
+            log_date: date.into(),
+            log_time: "08:00".into(),
+            note: "note".into(),
+            deleted: false,
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            updated_at: updated_at.into(),
+        }
+    }
+
+    async fn run_habit_import(
+        pool: &sqlx::SqlitePool,
+        habits: &[ImportHabitRow],
+        logs: &[ImportHabitLogRow],
+        mode: ImportMode,
+    ) -> usize {
+        let mut tx = pool.begin().await.unwrap();
+        let stale = import_habit_data(&mut tx, &cipher(), habits, logs, mode).await.unwrap();
+        tx.commit().await.unwrap();
+        stale
+    }
+
+    async fn habit_name(pool: &sqlx::SqlitePool, id: &str) -> (String, i64) {
+        let (name, deleted): (String, i64) = sqlx::query_as("SELECT name, deleted FROM habit WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        (cipher().decrypt(&name).await.unwrap(), deleted)
+    }
+
+    #[tokio::test]
+    async fn habit_import_encrypts_and_merges_last_write_wins() {
+        let pool = test_pool().await;
+        run_habit_import(&pool, &[habit_row("h1", "Periods", "2026-01-02T00:00:00.000Z", false)], &[], ImportMode::Merge)
+            .await;
+
+        let raw: (String, String, String) =
+            sqlx::query_as("SELECT name, target_days, updated_at FROM habit WHERE id = 'h1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(raw.0.starts_with("enc1:") && raw.1.starts_with("enc1:") && raw.2.starts_with("enc1:"));
+
+        let stale = run_habit_import(
+            &pool,
+            &[habit_row("h1", "Older name", "2026-01-01T00:00:00.000Z", false)],
+            &[],
+            ImportMode::Merge,
+        )
+        .await;
+        assert_eq!(stale, 1);
+        assert_eq!(habit_name(&pool, "h1").await, ("Periods".to_string(), 0));
+
+        run_habit_import(&pool, &[habit_row("h1", "Cycle", "2026-01-03T00:00:00.000Z", false)], &[], ImportMode::Merge)
+            .await;
+        assert_eq!(habit_name(&pool, "h1").await, ("Cycle".to_string(), 0));
+    }
+
+    #[tokio::test]
+    async fn habit_tombstone_wins_and_cascades_to_logs() {
+        let pool = test_pool().await;
+        run_habit_import(
+            &pool,
+            &[habit_row("h1", "Periods", "2026-01-05T00:00:00.000Z", false)],
+            &[log_row("l1", "h1", "2026-01-04", "2026-01-05T00:00:00.000Z")],
+            ImportMode::Merge,
+        )
+        .await;
+
+        // An older-stamped tombstone still wins over the newer live row.
+        run_habit_import(&pool, &[habit_row("h1", "", "2026-01-01T00:00:00.000Z", true)], &[], ImportMode::Merge).await;
+        assert_eq!(habit_name(&pool, "h1").await, (String::new(), 1));
+
+        let (deleted, date, note): (i64, String, String) =
+            sqlx::query_as("SELECT deleted, log_date, note FROM habit_log WHERE id = 'l1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            (deleted, date.as_str(), note.as_str()),
+            (1, "", ""),
+            "a deleted habit's logs are tombstoned with their content gone"
+        );
+
+        // A later live copy can't resurrect either of them.
+        let stale = run_habit_import(
+            &pool,
+            &[habit_row("h1", "Periods", "2027-01-01T00:00:00.000Z", false)],
+            &[log_row("l1", "h1", "2026-01-04", "2027-01-01T00:00:00.000Z")],
+            ImportMode::Merge,
+        )
+        .await;
+        assert_eq!(stale, 2);
+        assert_eq!(habit_name(&pool, "h1").await, (String::new(), 1));
+    }
+
+    #[tokio::test]
+    async fn habit_import_is_idempotent_and_folds_duplicate_ids() {
+        let pool = test_pool().await;
+        let logs = vec![
+            log_row("l1", "h1", "2026-01-04", "2026-01-05T00:00:00.000Z"),
+            log_row("l1", "h1", "2026-01-06", "2026-01-07T00:00:00.000Z"),
+        ];
+        let habits = vec![habit_row("h1", "Hair wash", "2026-01-05T00:00:00.000Z", false)];
+        run_habit_import(&pool, &habits, &logs, ImportMode::Merge).await;
+        run_habit_import(&pool, &habits, &logs, ImportMode::Merge).await;
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM habit_log").fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+        let date: String =
+            sqlx::query_scalar("SELECT log_date FROM habit_log WHERE id = 'l1'").fetch_one(&pool).await.unwrap();
+        assert_eq!(cipher().decrypt(&date).await.unwrap(), "2026-01-06", "the newer duplicate wins");
+    }
+
+    #[tokio::test]
+    async fn habit_replace_mode_inserts_fresh() {
+        let pool = test_pool().await;
+        let stale = run_habit_import(
+            &pool,
+            &[habit_row("h1", "Meds", "2026-01-05T00:00:00.000Z", false)],
+            &[log_row("l1", "h1", "2026-01-04", "2026-01-05T00:00:00.000Z")],
+            ImportMode::Replace,
+        )
+        .await;
+        assert_eq!(stale, 0);
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM habit_log WHERE deleted = 0").fetch_one(&pool).await.unwrap();
         assert_eq!(count, 1);
     }
 }

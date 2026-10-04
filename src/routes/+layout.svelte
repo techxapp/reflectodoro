@@ -114,6 +114,7 @@
   const links = [
     { href: "/", label: "Timer" },
     { href: "/entries", label: "Entries" },
+    { href: "/habits", label: "Habits" },
     { href: "/settings", label: "Settings" },
     { href: "/about", label: "About" },
   ];

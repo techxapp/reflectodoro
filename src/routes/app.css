@@ -14,6 +14,17 @@
   --accent: #5865f2;
   --accent-soft: rgba(88, 101, 242, 0.12);
   --danger: #c4372f;
+  /* Habits tab palette (src/lib/habits.ts's HABIT_COLORS). A habit stores the
+     key, so these can differ per theme; the dark values are lighter so a
+     coloured dot or calendar day keeps its contrast on --surface. */
+  --habit-rose: #e0457b;
+  --habit-amber: #d98a00;
+  --habit-lime: #5f9e14;
+  --habit-teal: #0e9488;
+  --habit-sky: #1d8fd8;
+  --habit-indigo: #5865f2;
+  --habit-violet: #9149e0;
+  --habit-slate: #64748b;
   /* Android status bar / gesture nav / notch insets (0 on desktop, where
      there's nothing to inset around -- env() itself already resolves to 0
      there, the fallback is only for browsers too old to know env() at all).
@@ -43,6 +54,14 @@
     --accent: #7c87ff;
     --accent-soft: rgba(124, 135, 255, 0.16);
     --danger: #ff6b62;
+    --habit-rose: #ff7aa8;
+    --habit-amber: #f5b53d;
+    --habit-lime: #98d453;
+    --habit-teal: #3cc9bb;
+    --habit-sky: #5ab8f5;
+    --habit-indigo: #8f99ff;
+    --habit-violet: #bd8cff;
+    --habit-slate: #a3b0c2;
   }
 }
 
@@ -57,6 +76,14 @@
   --accent: #7c87ff;
   --accent-soft: rgba(124, 135, 255, 0.16);
   --danger: #ff6b62;
+  --habit-rose: #ff7aa8;
+  --habit-amber: #f5b53d;
+  --habit-lime: #98d453;
+  --habit-teal: #3cc9bb;
+  --habit-sky: #5ab8f5;
+  --habit-indigo: #8f99ff;
+  --habit-violet: #bd8cff;
+  --habit-slate: #a3b0c2;
 }
 
 :root[data-theme="light"] {

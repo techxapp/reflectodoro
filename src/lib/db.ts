@@ -3,6 +3,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { error as logError } from "@tauri-apps/plugin-log";
+import {
+  normalizeHabitInput,
+  normalizeLogInput,
+  parseTargetDays,
+  sortLogsNewestFirst,
+  toHabitColor,
+  type Habit,
+  type HabitInput,
+  type HabitLog,
+} from "./habits";
 
 let dbPromise: ReturnType<typeof Database.load> | null = null;
 
@@ -863,6 +873,198 @@ export async function deleteBulkEditPreset(id: string): Promise<void> {
   await db.execute(`DELETE FROM bulk_edit_preset WHERE id = $1`, [id]);
 }
 
+// --- Habit tracker (Habits tab) -----------------------------------------
+//
+// See CLAUDE.md's "Habit tracker". Every user-chosen value -- names, emoji,
+// colours, targets, log dates/times/notes and both timestamps -- is encrypted
+// at rest; only structural columns (ids, sort_order, archived, deleted, rev)
+// are plaintext. Because log dates are ciphertext, nothing here filters by
+// date in SQL: the page loads every live log once (one batched decrypt) and
+// derives its calendar/timeline/stats client-side via habits.ts.
+//
+// Deletes are tombstones (deleted = 1, content blanked to plain '') rather
+// than DELETEs, so a delete syncs to paired devices instead of being sent
+// back by them -- import.rs's lww_decision makes a tombstone always win.
+
+/** Encrypted `updated_at` for a write. One fresh ciphertext per call. */
+async function encryptedNow(): Promise<string> {
+  return encryptField(new Date().toISOString());
+}
+
+export async function getHabits(): Promise<Habit[]> {
+  const db = await getDb();
+  const rows = await db.select<
+    { id: string; name: string; emoji: string; color: string; target_days: string; sort_order: number; archived: number }[]
+  >(
+    `SELECT id, name, emoji, color, target_days, sort_order, archived
+     FROM habit WHERE deleted = 0 ORDER BY sort_order, rowid`,
+  );
+  const values = await decryptFields(rows.flatMap((r) => [r.name, r.emoji, r.color, r.target_days]));
+  return rows.map((row, i) => ({
+    id: row.id,
+    name: values[i * 4],
+    emoji: values[i * 4 + 1],
+    color: toHabitColor(values[i * 4 + 2]),
+    targetDays: parseTargetDays(values[i * 4 + 3]),
+    sortOrder: row.sort_order,
+    archived: row.archived !== 0,
+  }));
+}
+
+/** Every live log of every live habit, newest first. The JOIN also hides a
+ * log whose habit was deleted on another device before this one's own
+ * cascade ran (import.rs's cascade_habit_tombstones normally covers it). */
+export async function getHabitLogs(): Promise<HabitLog[]> {
+  const db = await getDb();
+  const rows = await db.select<{ id: string; habit_id: string; log_date: string; log_time: string; note: string }[]>(
+    `SELECT l.id, l.habit_id, l.log_date, l.log_time, l.note
+     FROM habit_log l JOIN habit h ON h.id = l.habit_id
+     WHERE l.deleted = 0 AND h.deleted = 0`,
+  );
+  const values = await decryptFields(rows.flatMap((r) => [r.log_date, r.log_time, r.note]));
+  return sortLogsNewestFirst(
+    rows.map((row, i) => ({
+      id: row.id,
+      habitId: row.habit_id,
+      date: values[i * 3],
+      time: values[i * 3 + 1],
+      note: values[i * 3 + 2],
+    })),
+  );
+}
+
+export async function createHabit(input: HabitInput): Promise<void> {
+  const habit = normalizeHabitInput(input);
+  const db = await getDb();
+  const max = await db.select<{ n: number }[]>(`SELECT COALESCE(MAX(sort_order), -1) AS n FROM habit WHERE deleted = 0`);
+  const now = new Date().toISOString();
+  const [name, emoji, color, target, createdAt, updatedAt] = await encryptFields([
+    habit.name,
+    habit.emoji,
+    habit.color,
+    habit.targetDays === null ? "" : String(habit.targetDays),
+    now,
+    now,
+  ]);
+  await db.execute(
+    `INSERT INTO habit (id, name, emoji, color, target_days, sort_order, archived, deleted, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $7, $8)`,
+    [crypto.randomUUID(), name, emoji, color, target, (max[0]?.n ?? -1) + 1, createdAt, updatedAt],
+  );
+}
+
+export async function updateHabit(id: string, input: HabitInput): Promise<void> {
+  const habit = normalizeHabitInput(input);
+  const db = await getDb();
+  const [name, emoji, color, target, updatedAt] = await encryptFields([
+    habit.name,
+    habit.emoji,
+    habit.color,
+    habit.targetDays === null ? "" : String(habit.targetDays),
+    new Date().toISOString(),
+  ]);
+  await db.execute(
+    `UPDATE habit SET name = $1, emoji = $2, color = $3, target_days = $4, updated_at = $5
+     WHERE id = $6 AND deleted = 0`,
+    [name, emoji, color, target, updatedAt, id],
+  );
+}
+
+/** Hide/show. A hidden habit keeps its history and stays out of the list
+ * unless "Show hidden" is on. */
+export async function setHabitArchived(id: string, archived: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(`UPDATE habit SET archived = $1, updated_at = $2 WHERE id = $3 AND deleted = 0`, [
+    archived ? 1 : 0,
+    await encryptedNow(),
+    id,
+  ]);
+}
+
+/**
+ * Saves `next` (the full live list in its new display order, hidden habits
+ * included) as sort_order 0..n-1. Renumbers the whole list rather than
+ * swapping two values, because two devices can each create a habit at the
+ * same sort_order and sync them together -- swapping two equal values would
+ * change nothing. Only rows whose position actually changed are written.
+ */
+export async function saveHabitOrder(next: Habit[]): Promise<void> {
+  const db = await getDb();
+  for (let i = 0; i < next.length; i++) {
+    if (next[i].sortOrder === i) continue;
+    await db.execute(`UPDATE habit SET sort_order = $1, updated_at = $2 WHERE id = $3`, [
+      i,
+      await encryptedNow(),
+      next[i].id,
+    ]);
+  }
+}
+
+/**
+ * Deletes a habit and every one of its logs, as tombstones (see the section
+ * comment). Logs first: if the habit's own update then fails, it's still
+ * visible and the user can simply retry, rather than left as a hidden habit
+ * whose logs nothing can reach anymore.
+ */
+export async function deleteHabit(id: string): Promise<void> {
+  const db = await getDb();
+  // One ciphertext shared by every tombstoned log is fine: it's one nonce
+  // over one identical plaintext, the same reasoning saveReflection's
+  // shared-text multi-slot write relies on.
+  const updatedAt = await encryptedNow();
+  await db.execute(
+    `UPDATE habit_log SET deleted = 1, log_date = '', log_time = '', note = '', updated_at = $1
+     WHERE habit_id = $2 AND deleted = 0`,
+    [updatedAt, id],
+  );
+  await db.execute(
+    `UPDATE habit SET deleted = 1, name = '', emoji = '', color = '', target_days = '', archived = 0, updated_at = $1
+     WHERE id = $2`,
+    [updatedAt, id],
+  );
+}
+
+export async function addHabitLog(habitId: string, date: string, time: string, note: string): Promise<void> {
+  const entry = normalizeLogInput(date, time, note, localDateStamp());
+  const db = await getDb();
+  const now = new Date().toISOString();
+  const [encDate, encTime, encNote, createdAt, updatedAt] = await encryptFields([
+    entry.date,
+    entry.time,
+    entry.note,
+    now,
+    now,
+  ]);
+  await db.execute(
+    `INSERT INTO habit_log (id, habit_id, log_date, log_time, note, deleted, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, 0, $6, $7)`,
+    [crypto.randomUUID(), habitId, encDate, encTime, encNote, createdAt, updatedAt],
+  );
+}
+
+export async function updateHabitLog(id: string, date: string, time: string, note: string): Promise<void> {
+  const entry = normalizeLogInput(date, time, note, localDateStamp());
+  const db = await getDb();
+  const [encDate, encTime, encNote, updatedAt] = await encryptFields([
+    entry.date,
+    entry.time,
+    entry.note,
+    new Date().toISOString(),
+  ]);
+  await db.execute(
+    `UPDATE habit_log SET log_date = $1, log_time = $2, note = $3, updated_at = $4 WHERE id = $5 AND deleted = 0`,
+    [encDate, encTime, encNote, updatedAt, id],
+  );
+}
+
+export async function deleteHabitLog(id: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE habit_log SET deleted = 1, log_date = '', log_time = '', note = '', updated_at = $1 WHERE id = $2`,
+    [await encryptedNow(), id],
+  );
+}
+
 /**
  * Recovery path for a day the Entries page can't load (e.g. rows encrypted
  * under a key that's no longer available make the whole day's decrypt fail).
@@ -922,7 +1124,9 @@ export async function countEntriesOlderThan(days: number): Promise<number> {
  * Deletes reflections, check-ins, both task lists and screen time from local
  * days strictly before today minus `days`. Same sequential-idempotent-delete
  * and local-only (sync is additive) caveats as deleteDayEntries. Bulk-edit
- * presets aren't date-based and are kept.
+ * presets aren't date-based and are kept. Habit logs are kept too: their
+ * dates are ciphertext (no SQL date filter is possible), and pruning old
+ * logs would also skew a habit's average-gap stats.
  */
 export async function deleteEntriesOlderThan(days: number): Promise<void> {
   const db = await getDb();
@@ -942,6 +1146,8 @@ export async function deleteAllData(): Promise<void> {
     await db.execute(`DELETE FROM ${table}`);
   }
   await db.execute(`DELETE FROM bulk_edit_preset`);
+  await db.execute(`DELETE FROM habit_log`);
+  await db.execute(`DELETE FROM habit`);
 }
 
 export async function getTaskList(dateStamp: string): Promise<string> {
@@ -2077,6 +2283,33 @@ export interface BulkEditPresetRow {
   updated_at: string;
 }
 
+/** Export/wire shape of a habit (import.rs's ImportHabitRow). Tombstones
+ * (`deleted: true`, blank content) are exported too, so re-importing the file
+ * elsewhere carries the delete with it. */
+export interface HabitRow {
+  id: string;
+  name: string;
+  emoji: string;
+  color: string;
+  target_days: string;
+  sort_order: number;
+  archived: boolean;
+  deleted: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HabitLogRow {
+  id: string;
+  habit_id: string;
+  log_date: string;
+  log_time: string;
+  note: string;
+  deleted: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ExportPayload {
   app: "reflectodoro";
   export_format_version: number;
@@ -2089,6 +2322,8 @@ export interface ExportPayload {
     wellness_check: WellnessCheckRow[];
     screen_time_session: ScreenTimeSessionRow[];
     bulk_edit_preset: BulkEditPresetRow[];
+    habit: HabitRow[];
+    habit_log: HabitLogRow[];
   };
 }
 
@@ -2102,6 +2337,8 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
     wellness_check,
     screen_time_session,
     bulk_edit_preset,
+    habitRaw,
+    habitLogRaw,
   ] = await Promise.all([
     db.select<ReflectionRow[]>(`SELECT id, created_at, slot_start_at, text FROM reflection`),
     db.select<TaskListRow[]>(`SELECT date, content, updated_at FROM daily_task_list`),
@@ -2124,6 +2361,12 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
     db.select<BulkEditPresetRow[]>(
       `SELECT id, name, start_time, end_time, text, created_at, updated_at FROM bulk_edit_preset`,
     ),
+    db.select<(Omit<HabitRow, "archived" | "deleted"> & { archived: number; deleted: number })[]>(
+      `SELECT id, name, emoji, color, target_days, sort_order, archived, deleted, created_at, updated_at FROM habit`,
+    ),
+    db.select<(Omit<HabitLogRow, "deleted"> & { deleted: number })[]>(
+      `SELECT id, habit_id, log_date, log_time, note, deleted, created_at, updated_at FROM habit_log`,
+    ),
   ]);
   // The export file is deliberately plaintext (a deliberate, documented
   // decision -- see CLAUDE.md's "Encryption at rest"): it's a portability
@@ -2140,6 +2383,8 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
     screenTimeAppIds,
     screenTimeDisplayNames,
     bulkEditPresetValues,
+    habitValues,
+    habitLogValues,
   ] = await Promise.all([
     decryptFields(reflection.map((r) => r.text)),
     // created_at is ciphertext at rest now, and the export file is
@@ -2154,6 +2399,12 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
     decryptFields(screen_time_session.map((r) => r.app_id)),
     decryptFields(screen_time_session.map((r) => r.display_name)),
     decryptFields(bulk_edit_preset.flatMap((r) => [r.start_time, r.end_time, r.text])),
+    decryptFields(
+      habitRaw.flatMap((r) => [r.name, r.emoji, r.color, r.target_days, r.created_at, r.updated_at]),
+    ),
+    decryptFields(
+      habitLogRaw.flatMap((r) => [r.log_date, r.log_time, r.note, r.created_at, r.updated_at]),
+    ),
   ]);
   return {
     app: "reflectodoro",
@@ -2190,6 +2441,28 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
         start_time: bulkEditPresetValues[i * 3],
         end_time: bulkEditPresetValues[i * 3 + 1],
         text: bulkEditPresetValues[i * 3 + 2],
+      })),
+      habit: habitRaw.map((row, i) => ({
+        id: row.id,
+        name: habitValues[i * 6],
+        emoji: habitValues[i * 6 + 1],
+        color: habitValues[i * 6 + 2],
+        target_days: habitValues[i * 6 + 3],
+        sort_order: row.sort_order,
+        archived: row.archived !== 0,
+        deleted: row.deleted !== 0,
+        created_at: habitValues[i * 6 + 4],
+        updated_at: habitValues[i * 6 + 5],
+      })),
+      habit_log: habitLogRaw.map((row, i) => ({
+        id: row.id,
+        habit_id: row.habit_id,
+        log_date: habitLogValues[i * 5],
+        log_time: habitLogValues[i * 5 + 1],
+        note: habitLogValues[i * 5 + 2],
+        deleted: row.deleted !== 0,
+        created_at: habitLogValues[i * 5 + 3],
+        updated_at: habitLogValues[i * 5 + 4],
       })),
     },
   };
@@ -2404,6 +2677,52 @@ export function parseAndValidateExport(raw: string): ExportPayload {
   });
   assertNoDuplicates(bulk_edit_preset.map((r) => r.id), "bulk_edit_preset", "id");
 
+  // Same "tolerant of absence" reasoning again -- the habit tables arrived
+  // after the export format did, so older files simply have no habits.
+  const habitRaw = data.habit ?? [];
+  if (!Array.isArray(habitRaw)) throw new Error("data.habit is not an array");
+  const habit: HabitRow[] = habitRaw.map((row, i) => {
+    if (typeof row !== "object" || row === null) throw new Error(`habit[${i}] is not an object`);
+    const r = row as Record<string, unknown>;
+    return {
+      id: assertString(r.id, `habit[${i}].id`),
+      name: assertString(r.name, `habit[${i}].name`),
+      emoji: typeof r.emoji === "string" ? r.emoji : "",
+      color: typeof r.color === "string" ? r.color : "",
+      target_days: typeof r.target_days === "string" ? r.target_days : "",
+      sort_order: assertNumber(r.sort_order, `habit[${i}].sort_order`),
+      archived: r.archived === true,
+      deleted: r.deleted === true,
+      created_at: assertString(r.created_at, `habit[${i}].created_at`),
+      updated_at: assertString(r.updated_at, `habit[${i}].updated_at`),
+    };
+  });
+  assertNoDuplicates(habit.map((r) => r.id), "habit", "id");
+
+  const habitLogRaw = data.habit_log ?? [];
+  if (!Array.isArray(habitLogRaw)) throw new Error("data.habit_log is not an array");
+  const habit_log: HabitLogRow[] = habitLogRaw.map((row, i) => {
+    if (typeof row !== "object" || row === null) throw new Error(`habit_log[${i}] is not an object`);
+    const r = row as Record<string, unknown>;
+    const deleted = r.deleted === true;
+    const log_date = assertString(r.log_date, `habit_log[${i}].log_date`);
+    // A tombstone's date is blank by design; a live log needs a real one.
+    if (!deleted && !/^\d{4}-\d{2}-\d{2}$/.test(log_date)) {
+      throw new Error(`habit_log[${i}].log_date must be YYYY-MM-DD`);
+    }
+    return {
+      id: assertString(r.id, `habit_log[${i}].id`),
+      habit_id: assertString(r.habit_id, `habit_log[${i}].habit_id`),
+      log_date,
+      log_time: typeof r.log_time === "string" ? r.log_time : "",
+      note: typeof r.note === "string" ? r.note : "",
+      deleted,
+      created_at: assertString(r.created_at, `habit_log[${i}].created_at`),
+      updated_at: assertString(r.updated_at, `habit_log[${i}].updated_at`),
+    };
+  });
+  assertNoDuplicates(habit_log.map((r) => r.id), "habit_log", "id");
+
   return {
     app: "reflectodoro",
     export_format_version: obj.export_format_version,
@@ -2416,6 +2735,8 @@ export function parseAndValidateExport(raw: string): ExportPayload {
       wellness_check,
       screen_time_session,
       bulk_edit_preset,
+      habit,
+      habit_log,
     },
   };
 }
@@ -2448,6 +2769,8 @@ export interface ImportResult {
    * (last-write-wins) -- see import.rs's import_bulk_edit_presets. Always 0
    * in "replace" mode. */
   bulkEditPresetStaleCount: number;
+  habitCount: number;
+  habitLogCount: number;
 }
 
 /**
@@ -2532,7 +2855,7 @@ export interface PairedDeviceInfo {
 }
 
 export interface SyncResult {
-  /** Rows this device sent to the peer -- a single total across all six
+  /** Rows this device sent to the peer -- a single total across all eight
    * synced tables, not broken down. The fields below are the other
    * direction (received from the peer and applied here); without this, a
    * sync that only moved data outward reported "0 rows" even though it
@@ -2547,6 +2870,8 @@ export interface SyncResult {
   screenTimeDuplicateCount: number;
   wellnessCheckDuplicateCount: number;
   bulkEditPresetCount: number;
+  habitCount: number;
+  habitLogCount: number;
 }
 
 /** Opens a ~60s pairing window on this device and returns the PIN to show

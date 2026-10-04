@@ -98,7 +98,8 @@ impl std::fmt::Display for SchemaError {
 /// database never re-runs it, so anything added here must also be added to
 /// the `EXPECTED_*` lists below AND reach existing databases some other way
 /// -- which, with no migration runner left, means a new one-shot pass.
-/// Adding a column here alone would make every existing install fail
+/// (A brand-new *table* goes in `ADDITIVE_SCHEMA_SQL` instead, which already
+/// is that pass.) Adding a column here alone would make every existing install fail
 /// `verify_final_shape` and refuse to start.
 const FULL_SCHEMA_SQL: &str = r#"
     CREATE TABLE reflection (
@@ -269,6 +270,79 @@ const FULL_SCHEMA_SQL: &str = r#"
                 END;
 "#;
 
+/// Tables added after the migration squash, applied to EVERY database --
+/// fresh (inside `create_schema`'s transaction) and existing (by
+/// `ensure_additive_tables`, before `verify_final_shape`). Every statement is
+/// `IF NOT EXISTS`, so running it on each launch is a no-op once applied, and
+/// a downgrade to an older build still works (it never looks at these tables).
+///
+/// This is the way to add a table now that there's no migration runner:
+/// append it here, add it to the `EXPECTED_*` lists, done. It only covers
+/// *new* tables -- changing an existing one (a new column, a type change)
+/// still needs its own one-shot pass, since `CREATE TABLE IF NOT EXISTS`
+/// skips a table that already exists in any shape.
+///
+/// `habit`/`habit_log` back the Habits tab (CLAUDE.md's "Habit tracker").
+/// Every user-chosen value is ciphertext at rest (crypto.rs), including the
+/// dates: a plaintext `log_date` on a "Periods" habit would reconstruct a
+/// cycle from a stolen file. Only structural columns stay plaintext
+/// (`habit_id`, `sort_order`, `archived`, `deleted`, `rev`). `deleted` is a
+/// tombstone so a delete syncs instead of being resurrected by a peer --
+/// see `import::import_habits`.
+const ADDITIVE_SCHEMA_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS habit (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL DEFAULT '',
+        color TEXT NOT NULL DEFAULT '',
+        target_days TEXT NOT NULL DEFAULT '',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        archived INTEGER NOT NULL DEFAULT 0,
+        deleted INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        rev INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_habit_rev ON habit(rev);
+
+    CREATE TABLE IF NOT EXISTS habit_log (
+        id TEXT PRIMARY KEY,
+        habit_id TEXT NOT NULL,
+        log_date TEXT NOT NULL,
+        log_time TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        deleted INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        rev INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_habit_log_habit ON habit_log(habit_id);
+    CREATE INDEX IF NOT EXISTS idx_habit_log_rev ON habit_log(rev);
+
+    CREATE TRIGGER IF NOT EXISTS trg_habit_rev_insert AFTER INSERT ON habit
+                BEGIN
+                    UPDATE habit SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM habit)
+                    WHERE rowid = NEW.rowid;
+                END;
+    CREATE TRIGGER IF NOT EXISTS trg_habit_rev_update AFTER UPDATE ON habit
+                FOR EACH ROW WHEN NEW.rev = OLD.rev
+                BEGIN
+                    UPDATE habit SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM habit)
+                    WHERE rowid = NEW.rowid;
+                END;
+    CREATE TRIGGER IF NOT EXISTS trg_habit_log_rev_insert AFTER INSERT ON habit_log
+                BEGIN
+                    UPDATE habit_log SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM habit_log)
+                    WHERE rowid = NEW.rowid;
+                END;
+    CREATE TRIGGER IF NOT EXISTS trg_habit_log_rev_update AFTER UPDATE ON habit_log
+                FOR EACH ROW WHEN NEW.rev = OLD.rev
+                BEGIN
+                    UPDATE habit_log SET rev = (SELECT COALESCE(MAX(rev), 0) + 1 FROM habit_log)
+                    WHERE rowid = NEW.rowid;
+                END;
+"#;
+
 /// Settings rows a brand-new database starts with -- the *final* values the
 /// old migration chain arrived at, not the historical sequence it took to get
 /// there (`checkin_auto_close_minutes`, for one, was seeded 5, then bumped to
@@ -395,6 +469,26 @@ const EXPECTED_TABLES: &[(&str, &[&str])] = &[
     ),
     ("sync_cursor", &["device_id", "table_name", "last_rev"]),
     ("breakit_daily_use", &["date", "count"]),
+    (
+        "habit",
+        &[
+            "id",
+            "name",
+            "emoji",
+            "color",
+            "target_days",
+            "sort_order",
+            "archived",
+            "deleted",
+            "created_at",
+            "updated_at",
+            "rev",
+        ],
+    ),
+    (
+        "habit_log",
+        &["id", "habit_id", "log_date", "log_time", "note", "deleted", "created_at", "updated_at", "rev"],
+    ),
 ];
 
 /// Columns whose declared TYPE matters, not just their presence.
@@ -427,6 +521,9 @@ const EXPECTED_INDEXES: &[&str] = &[
     "idx_screen_time_session_dedupe",
     "idx_screen_time_session_rev",
     "idx_bulk_edit_preset_rev",
+    "idx_habit_rev",
+    "idx_habit_log_habit",
+    "idx_habit_log_rev",
 ];
 
 /// The `rev` maintenance triggers. A missing one would silently stop that
@@ -445,6 +542,10 @@ const EXPECTED_TRIGGERS: &[&str] = &[
     "trg_screen_time_session_rev_update",
     "trg_bulk_edit_preset_rev_insert",
     "trg_bulk_edit_preset_rev_update",
+    "trg_habit_rev_insert",
+    "trg_habit_rev_update",
+    "trg_habit_log_rev_insert",
+    "trg_habit_log_rev_update",
 ];
 
 /// The one-time encryption back-fill flags `crypto.rs` used to own. All four
@@ -501,10 +602,31 @@ async fn ensure_schema_on_pool(pool: &SqlitePool) -> Result<(), SchemaError> {
         return Ok(());
     }
 
+    // Before the verify, not after: the additive tables are in EXPECTED_*,
+    // so an install that predates them would otherwise fail verification
+    // before this could ever create them.
+    ensure_additive_tables(pool).await?;
     verify_final_shape(pool).await?;
     backfill_quote_api_attribution(pool).await?;
     log::info!("existing database schema verified as current");
     Ok(())
+}
+
+/// Applies `ADDITIVE_SCHEMA_SQL` to an existing database, in one transaction
+/// so a failure can't leave a table without its rev triggers (which would
+/// silently stop it syncing). A no-op once applied.
+async fn ensure_additive_tables(pool: &SqlitePool) -> Result<(), SchemaError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| SchemaError::Unavailable(format!("couldn't begin additive-schema transaction: {e}")))?;
+    sqlx::raw_sql(ADDITIVE_SCHEMA_SQL)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| SchemaError::Unavailable(format!("couldn't create additive tables: {e}")))?;
+    tx.commit()
+        .await
+        .map_err(|e| SchemaError::Unavailable(format!("couldn't commit additive-schema transaction: {e}")))
 }
 
 /// One-shot backfill for `quote_api_attribution` on databases created before
@@ -537,6 +659,10 @@ async fn create_schema(pool: &SqlitePool) -> Result<(), SchemaError> {
         .execute(&mut *tx)
         .await
         .map_err(|e| SchemaError::Unavailable(format!("couldn't create schema: {e}")))?;
+    sqlx::raw_sql(ADDITIVE_SCHEMA_SQL)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| SchemaError::Unavailable(format!("couldn't create additive tables: {e}")))?;
 
     for (key, value) in SEED_SETTINGS {
         sqlx::query("INSERT INTO app_setting (key, value) VALUES (?, ?)")
@@ -760,7 +886,11 @@ mod tests {
     /// no longer matches what this build expects.
     #[tokio::test]
     async fn full_schema_matches_the_legacy_migration_chain() {
+        // The additive pass is exactly what an upgraded install runs on its
+        // first launch of this build, so comparing after it tests the real
+        // upgrade path rather than a database no install would ever have.
         let legacy = legacy_pool(i64::MAX).await;
+        ensure_additive_tables(&legacy).await.unwrap();
         let fresh = fresh_pool().await;
 
         assert_eq!(
@@ -794,7 +924,24 @@ mod tests {
         let pool = legacy_pool(i64::MAX).await;
         mark_backfills_complete(&pool).await;
 
-        verify_final_shape(&pool).await.expect("a fully migrated v0.13.10 database must verify");
+        ensure_schema_on_pool(&pool).await.expect("a fully migrated v0.13.10 database must verify");
+    }
+
+    /// Without the additive pass running first, a v0.13.10 database has no
+    /// habit tables and must fail -- this pins down that the pass, not luck,
+    /// is what gets existing installs through verification.
+    #[tokio::test]
+    async fn verify_needs_the_additive_pass_on_a_legacy_database() {
+        let pool = legacy_pool(i64::MAX).await;
+        mark_backfills_complete(&pool).await;
+
+        match verify_final_shape(&pool).await {
+            Err(SchemaError::Incompatible(msg)) => assert!(msg.contains("habit"), "{msg}"),
+            other => panic!("expected the habit tables to be missing, got {other:?}"),
+        }
+        ensure_additive_tables(&pool).await.unwrap();
+        ensure_additive_tables(&pool).await.expect("the additive pass must be idempotent");
+        verify_final_shape(&pool).await.expect("verifies once the additive tables exist");
     }
 
     #[tokio::test]
@@ -946,6 +1093,8 @@ mod tests {
             "wellness_check",
             "screen_time_session",
             "bulk_edit_preset",
+            "habit",
+            "habit_log",
         ] {
             let columns = sqlx::query(&format!("PRAGMA table_info({table})")).fetch_all(&pool).await.unwrap();
             assert!(

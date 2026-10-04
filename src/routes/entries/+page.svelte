@@ -806,7 +806,7 @@
   </section>
 
   <section class="card screen-time">
-    <h2>Screen time</h2>
+    <h2>Screen time (Beta)</h2>
 
     <!-- Rows first, whatever the current settings say: a day can hold data
          recorded before tracking was switched off, or imported from a

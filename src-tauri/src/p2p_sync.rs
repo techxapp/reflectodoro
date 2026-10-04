@@ -166,6 +166,19 @@ struct SyncPayload {
     wellness_check: Vec<import::ImportWellnessCheckRow>,
     screen_time_session: Vec<import::ImportScreenTimeSessionRow>,
     bulk_edit_preset: Vec<import::ImportBulkEditPresetRow>,
+    // Everything below is newer than the original six tables, so each is
+    // `#[serde(default)]`: a payload from a peer on an older build lacks them
+    // and must still deserialize.
+    #[serde(default)]
+    habit: Vec<import::ImportHabitRow>,
+    #[serde(default)]
+    habit_log: Vec<import::ImportHabitLogRow>,
+    /// The tables this sender knows how to apply. The receiver only advances
+    /// its cursors for tables listed here (see `cursors_for_peer`), so rows
+    /// sent to an older peer that silently ignored them get sent again once
+    /// it upgrades. Absent (an older peer) = `LEGACY_SYNCED_TABLES`.
+    #[serde(default)]
+    supported_tables: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -189,6 +202,8 @@ pub struct SyncResult {
     pub screen_time_duplicate_count: usize,
     pub wellness_check_duplicate_count: usize,
     pub bulk_edit_preset_count: usize,
+    pub habit_count: usize,
+    pub habit_log_count: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -642,8 +657,38 @@ async fn load_paired_device_secret(app: &AppHandle, peer_device_id: &str) -> Res
 /// cursor bookkeeping below can't quietly fall out of step with the queries in
 /// `build_delta_payload` -- a table present in one and missing from the other
 /// would either never sync or re-send its whole history every time.
-const SYNCED_TABLES: [&str; 6] =
+const SYNCED_TABLES: [&str; 8] = [
+    "reflection",
+    "daily_task_list",
+    "not_to_do_list",
+    "wellness_check",
+    "screen_time_session",
+    "bulk_edit_preset",
+    "habit",
+    "habit_log",
+];
+
+/// What a peer that sends no `supported_tables` (any build from before that
+/// field existed) can apply.
+const LEGACY_SYNCED_TABLES: [&str; 6] =
     ["reflection", "daily_task_list", "not_to_do_list", "wellness_check", "screen_time_session", "bulk_edit_preset"];
+
+/// Narrows the cursors to save down to the tables the peer said it applies.
+/// Without this, an older peer would silently drop the habit tables while
+/// this side still advanced their cursors, so those rows would never be sent
+/// again after the peer upgraded.
+fn cursors_for_peer(new_cursors: SyncCursors, peer_supported: &[String]) -> SyncCursors {
+    new_cursors
+        .into_iter()
+        .filter(|(table, _)| {
+            if peer_supported.is_empty() {
+                LEGACY_SYNCED_TABLES.contains(&table.as_str())
+            } else {
+                peer_supported.iter().any(|t| t == table)
+            }
+        })
+        .collect()
+}
 
 /// Per-table `rev` high-water marks for one peer. A table with no entry has
 /// never been synced with that peer, which reads as `0` -- and since migration
@@ -929,6 +974,75 @@ async fn build_delta_payload(app: &AppHandle, cursors: &SyncCursors) -> Result<(
         })
         .collect();
 
+    // Habits: every content column and both timestamps are ciphertext at
+    // rest. Tombstones go out too (their content is already plain '', which
+    // decrypt passes through) -- that's how a delete reaches the peer.
+    let (from, to) = bounds("habit");
+    let habit_rows = sqlx::query_as::<_, (String, String, String, String, String, i64, i64, i64, String, String)>(
+        "SELECT id, name, emoji, color, target_days, sort_order, archived, deleted, created_at, updated_at
+         FROM habit WHERE rev > ? AND rev <= ?",
+    )
+    .bind(from)
+    .bind(to)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let habit_values: Vec<String> = habit_rows
+        .iter()
+        .flat_map(|(_, name, emoji, color, target, _, _, _, created_at, updated_at)| {
+            [name.clone(), emoji.clone(), color.clone(), target.clone(), created_at.clone(), updated_at.clone()]
+        })
+        .collect();
+    let habit_values = cipher.decrypt_many(&habit_values).await?;
+    let habit = habit_rows
+        .into_iter()
+        .zip(habit_values.chunks_exact(6))
+        .map(|((id, _, _, _, _, sort_order, archived, deleted, _, _), v)| import::ImportHabitRow {
+            id,
+            name: v[0].clone(),
+            emoji: v[1].clone(),
+            color: v[2].clone(),
+            target_days: v[3].clone(),
+            sort_order,
+            archived: archived != 0,
+            deleted: deleted != 0,
+            created_at: v[4].clone(),
+            updated_at: v[5].clone(),
+        })
+        .collect();
+
+    let (from, to) = bounds("habit_log");
+    let log_rows = sqlx::query_as::<_, (String, String, String, String, String, i64, String, String)>(
+        "SELECT id, habit_id, log_date, log_time, note, deleted, created_at, updated_at
+         FROM habit_log WHERE rev > ? AND rev <= ?",
+    )
+    .bind(from)
+    .bind(to)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let log_values: Vec<String> = log_rows
+        .iter()
+        .flat_map(|(_, _, date, time, note, _, created_at, updated_at)| {
+            [date.clone(), time.clone(), note.clone(), created_at.clone(), updated_at.clone()]
+        })
+        .collect();
+    let log_values = cipher.decrypt_many(&log_values).await?;
+    let habit_log = log_rows
+        .into_iter()
+        .zip(log_values.chunks_exact(5))
+        .map(|((id, habit_id, _, _, _, deleted, _, _), v)| import::ImportHabitLogRow {
+            id,
+            habit_id,
+            log_date: v[0].clone(),
+            log_time: v[1].clone(),
+            note: v[2].clone(),
+            deleted: deleted != 0,
+            created_at: v[3].clone(),
+            updated_at: v[4].clone(),
+        })
+        .collect();
+
     Ok((
         SyncPayload {
             reflection,
@@ -937,6 +1051,9 @@ async fn build_delta_payload(app: &AppHandle, cursors: &SyncCursors) -> Result<(
             wellness_check,
             screen_time_session,
             bulk_edit_preset,
+            habit,
+            habit_log,
+            supported_tables: SYNCED_TABLES.iter().map(|t| t.to_string()).collect(),
         },
         upper,
     ))
@@ -968,6 +1085,7 @@ async fn apply_payload(app: &AppHandle, payload: &SyncPayload) -> Result<SyncRes
     let screen_time_duplicate_count =
         import::import_screen_time_sessions(&mut tx, &cipher, &payload.screen_time_session).await?;
     import::import_bulk_edit_presets(&mut tx, &cipher, &payload.bulk_edit_preset, import::ImportMode::Merge).await?;
+    import::import_habit_data(&mut tx, &cipher, &payload.habit, &payload.habit_log, import::ImportMode::Merge).await?;
 
     // Every other write path to these two tables (saveTaskList/saveNotToDoList
     // in db.ts) broadcasts `tasklist://updated`/`nottodolist://updated` after
@@ -1043,6 +1161,8 @@ async fn apply_payload(app: &AppHandle, payload: &SyncPayload) -> Result<SyncRes
         screen_time_duplicate_count,
         wellness_check_duplicate_count,
         bulk_edit_preset_count: payload.bulk_edit_preset.len(),
+        habit_count: payload.habit.len(),
+        habit_log_count: payload.habit_log.len(),
     })
 }
 
@@ -1233,7 +1353,7 @@ async fn handle_sync_responder(app: AppHandle, mut stream: TcpStream, peer_addr:
 
     let received_count = sync_payload_row_count(&incoming);
     apply_payload(&app, &incoming).await?;
-    save_sync_cursors(&app, &dialer_id, &new_cursors).await?;
+    save_sync_cursors(&app, &dialer_id, &cursors_for_peer(new_cursors, &incoming.supported_tables)).await?;
     update_last_sync_at(&app, &dialer_id, &sync_started_at).await?;
 
     log::info!("p2p_sync: completed inbound sync with {dialer_id} (sent={sent_count}, received={received_count})");
@@ -1514,7 +1634,7 @@ async fn sync_with_device_inner(app: &AppHandle, device_id: &str) -> Result<Sync
     let incoming: SyncPayload = recv_encrypted_json(&mut stream, &mut transport).await?;
 
     let result = apply_payload(&app, &incoming).await?;
-    save_sync_cursors(&app, device_id, &new_cursors).await?;
+    save_sync_cursors(&app, device_id, &cursors_for_peer(new_cursors, &incoming.supported_tables)).await?;
     update_last_sync_at(&app, &device_id, &sync_started_at).await?;
 
     Ok(SyncResult { sent_count, ..result })
@@ -1527,6 +1647,8 @@ fn sync_payload_row_count(payload: &SyncPayload) -> usize {
         + payload.wellness_check.len()
         + payload.screen_time_session.len()
         + payload.bulk_edit_preset.len()
+        + payload.habit.len()
+        + payload.habit_log.len()
 }
 
 /// Minimum time between automatic syncs with the same device. Guards
@@ -1606,6 +1728,25 @@ pub async fn attempt_auto_sync(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursors_are_only_saved_for_tables_the_peer_applies() {
+        let all: SyncCursors = SYNCED_TABLES.iter().map(|t| (t.to_string(), 5)).collect();
+
+        let legacy = cursors_for_peer(all.clone(), &[]);
+        assert_eq!(legacy.len(), LEGACY_SYNCED_TABLES.len());
+        assert!(!legacy.contains_key("habit") && !legacy.contains_key("habit_log"));
+
+        let current: Vec<String> = SYNCED_TABLES.iter().map(|t| t.to_string()).collect();
+        assert_eq!(cursors_for_peer(all, &current).len(), SYNCED_TABLES.len());
+    }
+
+    #[test]
+    fn a_payload_from_an_older_peer_still_deserializes() {
+        let old = r#"{"reflection":[],"daily_task_list":[],"not_to_do_list":[],"wellness_check":[],"screen_time_session":[],"bulk_edit_preset":[]}"#;
+        let payload: SyncPayload = serde_json::from_str(old).unwrap();
+        assert!(payload.habit.is_empty() && payload.supported_tables.is_empty());
+    }
 
     #[test]
     fn hex_round_trips() {

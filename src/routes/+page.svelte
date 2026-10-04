@@ -260,7 +260,9 @@
         result.notToDoListCount +
         result.wellnessCheckCount +
         result.screenTimeSessionCount +
-        result.bulkEditPresetCount;
+        result.bulkEditPresetCount +
+        result.habitCount +
+        result.habitLogCount;
       const mergedClause =
         result.mergedSlotCount > 0
           ? ` ${result.mergedSlotCount} reflection slot${result.mergedSlotCount === 1 ? "" : "s"} merged with existing entries.`
