@@ -263,13 +263,17 @@ fn overlay_state_json_for_android(app: &AppHandle) -> serde_json::Value {
     let mut json = serde_json::to_value(&snapshot).unwrap_or_default();
     if let serde_json::Value::Object(map) = &mut json {
         map.insert("dev_mode".into(), serde_json::json!(state.dev_mode));
+        // App lock on: this overlay can't ask for the PIN, so it shows nothing
+        // written earlier (see native_overlay.html's render()).
+        let private_hidden = crate::app_lock::is_enabled();
+        map.insert("app_lock_enabled".into(), serde_json::json!(private_hidden));
         map.insert(
             "task_list_content".into(),
-            serde_json::json!(state.task_list.lock().unwrap().clone()),
+            serde_json::json!(if private_hidden { String::new() } else { state.task_list.lock().unwrap().clone() }),
         );
         map.insert(
             "not_to_do_content".into(),
-            serde_json::json!(state.not_to_do_list.lock().unwrap().clone()),
+            serde_json::json!(if private_hidden { String::new() } else { state.not_to_do_list.lock().unwrap().clone() }),
         );
         map.insert(
             "missed_slot_count".into(),
@@ -277,7 +281,7 @@ fn overlay_state_json_for_android(app: &AppHandle) -> serde_json::Value {
         );
         map.insert(
             "coming_next_text".into(),
-            serde_json::json!(state.coming_next_text.lock().unwrap().clone()),
+            serde_json::json!(if private_hidden { String::new() } else { state.coming_next_text.lock().unwrap().clone() }),
         );
         map.insert(
             "quote_text".into(),

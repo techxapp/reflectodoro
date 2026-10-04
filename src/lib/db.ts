@@ -2359,9 +2359,11 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
       ? // encryption_key_location is where *this* device's key lives
         // (key_store.rs) -- meaningless, and harmful, on another device.
         // llm_summary_api_key is a credential; the export is plaintext JSON.
+        // app_lock_* is this device's PIN hash and attempt counter (app_lock.rs).
         db.select<SettingRow[]>(
           `SELECT key, value FROM app_setting
-           WHERE key NOT IN ('encryption_key_location', 'llm_summary_api_key')`,
+           WHERE key NOT IN ('encryption_key_location', 'llm_summary_api_key')
+             AND key NOT IN ('app_lock_pin_hash', 'app_lock_attempts_left', 'app_lock_window_start_ms')`,
         )
       : Promise.resolve([]),
     db.select<{ slot_start_at: string; relaxed_eyes: string; exercise: string; drank_water: string; washroom: string; created_at: string }[]>(
@@ -3204,4 +3206,53 @@ export function restoreEncryptionKey(key: string, target: KeyLocation, password?
 /** A brand-new key: everything encrypted under the old one becomes unreadable. */
 export function resetEncryptionKey(target: KeyLocation, password?: string): Promise<void> {
   return invoke("reset_encryption_key", { target, password: password ?? null });
+}
+
+// --- App lock (PIN) --------------------------------------------------------
+// See app_lock.rs. The PIN is checked (and attempts counted) in Rust only.
+
+export type AppLockStatus = {
+  enabled: boolean;
+  locked: boolean;
+  attemptsLeft: number;
+  /** Unix ms until which PIN entry is refused, when attempts are used up. */
+  lockedOutUntilMs: number | null;
+  minPinDigits: number;
+  maxPinDigits: number;
+};
+
+/** Emitted by Rust whenever the app locks/unlocks or the PIN changes. */
+export const APP_LOCK_STATE_EVENT = "applock://state";
+/** Emitted after "Forgot PIN" erased everything; every window reloads. */
+export const APP_LOCK_ERASED_EVENT = "applock://erased";
+
+export function getAppLockStatus(): Promise<AppLockStatus> {
+  return invoke<AppLockStatus>("app_lock_status");
+}
+
+/** Locks now (no-op without a PIN). */
+export function engageAppLock(): Promise<void> {
+  return invoke("app_lock_engage");
+}
+
+/** A wrong PIN resolves too -- with `locked` still true. */
+export function unlockAppLock(pin: string): Promise<AppLockStatus> {
+  return invoke<AppLockStatus>("app_lock_unlock", { pin });
+}
+
+export function setAppLockPin(newPin: string, currentPin?: string): Promise<AppLockStatus> {
+  return invoke<AppLockStatus>("app_lock_set_pin", { currentPin: currentPin ?? null, newPin });
+}
+
+export function disableAppLock(currentPin: string): Promise<AppLockStatus> {
+  return invoke<AppLockStatus>("app_lock_disable", { currentPin });
+}
+
+export function forgotAppLockPinErase(): Promise<AppLockStatus> {
+  return invoke<AppLockStatus>("app_lock_forgot_pin_erase");
+}
+
+/** Keeps only digits, capped at `max` -- for PIN inputs' oninput. */
+export function sanitizePinInput(value: string, max: number): string {
+  return value.replace(/\D/g, "").slice(0, max);
 }

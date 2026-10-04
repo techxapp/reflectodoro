@@ -752,12 +752,24 @@ fn handle_channel_event(app: &AppHandle, value: Value) {
             });
         }
         NativeOverlayEvent::SaveTaskList { content } => {
+            // The overlay hides these lists while app lock is on (it can't
+            // ask for the PIN), so a save from it would overwrite them blind.
+            if crate::app_lock::is_enabled() {
+                log::warn!("native overlay: ignoring a task-list save while app lock is on");
+                return;
+            }
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 handle_save_task_list(app, content).await;
             });
         }
         NativeOverlayEvent::SaveNotToDoList { content } => {
+            // The overlay hides these lists while app lock is on (it can't
+            // ask for the PIN), so a save from it would overwrite them blind.
+            if crate::app_lock::is_enabled() {
+                log::warn!("native overlay: ignoring a task-list save while app lock is on");
+                return;
+            }
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 handle_save_not_to_do_list(app, content).await;
