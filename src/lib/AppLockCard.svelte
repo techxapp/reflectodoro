@@ -1,24 +1,30 @@
 <script lang="ts">
   /**
    * Settings -> App lock (every platform; see app_lock.rs). Sets, changes or
-   * removes the PIN. Asking for it is AppLockModal's job.
+   * removes the PIN and issues its recovery code. Asking for the PIN (or the
+   * code) is AppLockModal's job.
    */
   import { onMount, onDestroy } from "svelte";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import RecoveryCodeDisplay from "$lib/RecoveryCodeDisplay.svelte";
   import {
     getAppLockStatus,
     setAppLockPin,
+    regenerateAppLockRecoveryCode,
     disableAppLock,
     engageAppLock,
     sanitizePinInput,
     APP_LOCK_STATE_EVENT,
     type AppLockStatus,
+    type AppLockCodeResult,
   } from "$lib/db";
 
   let { isAndroid = false }: { isAndroid?: boolean } = $props();
 
   let status = $state<AppLockStatus | null>(null);
-  let panel = $state<null | "set" | "change" | "disable">(null);
+  let panel = $state<null | "set" | "change" | "disable" | "recovery">(null);
+  /** A just-issued recovery code, held until the user confirms they saved it. */
+  let pendingCode = $state<string | null>(null);
   let currentPin = $state("");
   let newPin = $state("");
   let confirmPin = $state("");
@@ -67,12 +73,17 @@
     return "";
   }
 
+  function isCodeResult(r: unknown): r is AppLockCodeResult {
+    return typeof r === "object" && r !== null && "recoveryCode" in r;
+  }
+
   async function run(action: () => Promise<unknown>, done: string) {
     busy = true;
     error = "";
     notice = "";
     try {
-      await action();
+      const result = await action();
+      if (isCodeResult(result)) pendingCode = result.recoveryCode;
       panel = null;
       currentPin = "";
       newPin = "";
@@ -101,6 +112,15 @@
     );
   }
 
+  function submitRecovery(e: Event) {
+    e.preventDefault();
+    const hadCode = status?.hasRecoveryCode;
+    void run(
+      () => regenerateAppLockRecoveryCode(currentPin),
+      hadCode ? "New recovery code issued. The old one no longer works." : "Recovery code issued.",
+    );
+  }
+
   function submitDisable(e: Event) {
     e.preventDefault();
     void run(() => disableAppLock(currentPin), "App lock is off.");
@@ -116,8 +136,9 @@
   </p>
   <p class="hint">
     After 5 wrong PINs within 15 minutes, PIN entry is blocked until those 15 minutes are up.
-    <strong>A forgotten PIN can't be recovered</strong> &mdash; the only way back in is to erase all entries on this
-    device. The PIN stays on this device: it isn't exported or synced.
+    If you forget your PIN, your <strong>recovery code</strong> lets you set a new one without losing anything.
+    <strong>Without it, the only way back in is to erase all entries on this device.</strong> The PIN and recovery
+    code stay on this device: they aren't exported or synced.
   </p>
   {#if isAndroid}
     <p class="hint">
@@ -126,11 +147,32 @@
     </p>
   {/if}
 
-  {#if status}
+  {#if status && pendingCode}
+    <div class="code-block">
+      <RecoveryCodeDisplay
+        code={pendingCode}
+        onDone={() => {
+          pendingCode = null;
+          void refresh();
+        }}
+      />
+    </div>
+  {:else if status}
     <p class="state">Status: <strong>{status.enabled ? "On" : "Off"}</strong></p>
+    {#if status.enabled}
+      <p class="state">
+        Recovery code: <strong>{status.hasRecoveryCode ? "Set" : "Not set"}</strong>
+        {#if !status.hasRecoveryCode}
+          &mdash; you'd have to erase your entries if you forgot the PIN
+        {/if}
+      </p>
+    {/if}
     <div class="actions">
       {#if status.enabled}
         <button type="button" class="secondary" disabled={busy} onclick={() => open("change")}>Change PIN&hellip;</button>
+        <button type="button" class="secondary" disabled={busy} onclick={() => open("recovery")}>
+          {status.hasRecoveryCode ? "New recovery code…" : "Generate recovery code…"}
+        </button>
         <button type="button" class="secondary" disabled={busy} onclick={() => open("disable")}>Turn off&hellip;</button>
         <button type="button" class="secondary" disabled={busy} onclick={() => void engageAppLock()}>Lock now</button>
       {:else}
@@ -147,6 +189,17 @@
         {@render pinField("Confirm new PIN", confirmPin, (v) => (confirmPin = v))}
         <button type="submit" disabled={busy || (panel === "change" && currentPin.length < minDigits)}>
           {panel === "change" ? "Change PIN" : "Turn on app lock"}
+        </button>
+      </form>
+    {:else if panel === "recovery"}
+      <form onsubmit={submitRecovery}>
+        <p class="hint">
+          Enter your current PIN to {status.hasRecoveryCode ? "replace your recovery code" : "get a recovery code"}.
+          {#if status.hasRecoveryCode}The old code stops working.{/if}
+        </p>
+        {@render pinField("Current PIN", currentPin, (v) => (currentPin = v))}
+        <button type="submit" disabled={busy || currentPin.length < minDigits}>
+          {status.hasRecoveryCode ? "Issue new code" : "Generate code"}
         </button>
       </form>
     {:else if panel === "disable"}
@@ -211,6 +264,10 @@
   .state {
     font-size: 14px;
     margin: 14px 0 0;
+  }
+
+  .code-block {
+    margin-top: 14px;
   }
 
   .actions {

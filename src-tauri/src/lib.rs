@@ -1271,6 +1271,8 @@ pub fn run() {
             app_lock::app_lock_engage,
             app_lock::app_lock_unlock,
             app_lock::app_lock_set_pin,
+            app_lock::app_lock_regenerate_recovery_code,
+            app_lock::app_lock_recover,
             app_lock::app_lock_disable,
             app_lock::app_lock_forgot_pin_erase,
             key_store::get_key_storage_status,

@@ -35,6 +35,13 @@
 //! decrements it; at 0, PIN entry is refused until the window (counted from
 //! that first failure) runs out. A success clears both. Kept in the database,
 //! not memory, so restarting the app doesn't hand out fresh attempts.
+//!
+//! **Recovery code**: setting or changing the PIN also issues a random
+//! `RECOVERY_CODE_LEN`-character code, shown once and stored only as a hash.
+//! Entering it on the lock screen (`app_lock_recover`) sets a new PIN without
+//! erasing anything, consumes the code and issues a fresh one. It has its own
+//! attempt window (`RECOVERY_LIMITER`), so a user who burned the PIN's
+//! attempts can still use it.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use hmac::{Hmac, Mac};
@@ -58,13 +65,54 @@ pub const ATTEMPT_WINDOW_MS: i64 = 15 * 60 * 1000;
 const PBKDF2_ITERATIONS: u32 = 100_000;
 const HASH_SCHEME: &str = "pbkdf2-sha256";
 
+/// 16 symbols from a 32-symbol alphabet = 80 bits. No 0/O/1/I, which are easy
+/// to misread when copying a code off a screen or paper.
+const RECOVERY_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+pub const RECOVERY_CODE_LEN: usize = 16;
+/// Characters per dash-separated group when a code is displayed.
+const RECOVERY_GROUP: usize = 4;
+
 pub const PIN_HASH_SETTING: &str = "app_lock_pin_hash";
 pub const ATTEMPTS_LEFT_SETTING: &str = "app_lock_attempts_left";
 pub const WINDOW_START_SETTING: &str = "app_lock_window_start_ms";
+pub const RECOVERY_HASH_SETTING: &str = "app_lock_recovery_hash";
+pub const RECOVERY_ATTEMPTS_LEFT_SETTING: &str = "app_lock_recovery_attempts_left";
+pub const RECOVERY_WINDOW_START_SETTING: &str = "app_lock_recovery_window_start_ms";
 /// Device-local: never exported, never imported, never wiped by a
 /// replace-mode import (a PIN set on another device, or a stale attempt
-/// counter, has no business arriving here).
-pub const DEVICE_LOCAL_SETTINGS: [&str; 3] = [PIN_HASH_SETTING, ATTEMPTS_LEFT_SETTING, WINDOW_START_SETTING];
+/// counter, has no business arriving here). Keep `exportAllData`'s
+/// `APP_LOCK_DEVICE_LOCAL_KEYS` (db.ts) in step with this list.
+pub const DEVICE_LOCAL_SETTINGS: [&str; 6] = [
+    PIN_HASH_SETTING,
+    ATTEMPTS_LEFT_SETTING,
+    WINDOW_START_SETTING,
+    RECOVERY_HASH_SETTING,
+    RECOVERY_ATTEMPTS_LEFT_SETTING,
+    RECOVERY_WINDOW_START_SETTING,
+];
+
+/// Which secret a failed-attempt window guards: where its hash lives, where
+/// its counter lives, and what to call it in messages.
+struct Limiter {
+    hash_key: &'static str,
+    left_key: &'static str,
+    start_key: &'static str,
+    what: &'static str,
+}
+
+const PIN_LIMITER: Limiter = Limiter {
+    hash_key: PIN_HASH_SETTING,
+    left_key: ATTEMPTS_LEFT_SETTING,
+    start_key: WINDOW_START_SETTING,
+    what: "PIN",
+};
+
+const RECOVERY_LIMITER: Limiter = Limiter {
+    hash_key: RECOVERY_HASH_SETTING,
+    left_key: RECOVERY_ATTEMPTS_LEFT_SETTING,
+    start_key: RECOVERY_WINDOW_START_SETTING,
+    what: "recovery code",
+};
 
 pub const STATE_EVENT: &str = "applock://state";
 /// Emitted after "Forgot PIN" erased everything, so every window reloads
@@ -92,6 +140,16 @@ pub struct AppLockStatus {
     pub locked_out_until_ms: Option<i64>,
     pub min_pin_digits: usize,
     pub max_pin_digits: usize,
+    pub has_recovery_code: bool,
+}
+
+/// Returned by every command that issues a recovery code. The code is shown
+/// to the user once and exists nowhere else in plaintext.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppLockCodeResult {
+    pub status: AppLockStatus,
+    pub recovery_code: String,
 }
 
 // --- Failed-attempt window (pure, unit tested) ------------------------------
@@ -155,21 +213,21 @@ fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; 32] {
     out
 }
 
-fn hash_pin_with(pin: &str, salt: &[u8], iterations: u32) -> String {
-    let hash = pbkdf2_sha256(pin.as_bytes(), salt, iterations);
+fn hash_secret_with(secret: &str, salt: &[u8], iterations: u32) -> String {
+    let hash = pbkdf2_sha256(secret.as_bytes(), salt, iterations);
     format!("{HASH_SCHEME}${iterations}${}${}", B64.encode(salt), B64.encode(hash))
 }
 
-fn hash_pin(pin: &str) -> String {
+fn hash_secret(secret: &str) -> String {
     use rand::RngCore;
     let mut salt = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut salt);
-    hash_pin_with(pin, &salt, PBKDF2_ITERATIONS)
+    hash_secret_with(secret, &salt, PBKDF2_ITERATIONS)
 }
 
-/// `false` for a wrong PIN *and* for a malformed stored hash -- an unreadable
-/// hash must never read as "matches".
-fn pin_matches(pin: &str, stored: &str) -> bool {
+/// `false` for a wrong secret *and* for a malformed stored hash -- an
+/// unreadable hash must never read as "matches".
+fn secret_matches(pin: &str, stored: &str) -> bool {
     let parts: Vec<&str> = stored.split('$').collect();
     let [scheme, iterations, salt, hash] = parts[..] else { return false };
     if scheme != HASH_SCHEME {
@@ -194,6 +252,38 @@ fn validate_new_pin(pin: &str) -> Result<(), String> {
         return Err(format!("Use {MIN_PIN_DIGITS} to {MAX_PIN_DIGITS} digits."));
     }
     Ok(())
+}
+
+// --- Recovery code ------------------------------------------------------------
+
+/// A fresh code, unformatted (`RECOVERY_CODE_LEN` characters of
+/// `RECOVERY_ALPHABET`).
+fn generate_recovery_code() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..RECOVERY_CODE_LEN)
+        .map(|_| RECOVERY_ALPHABET[rng.gen_range(0..RECOVERY_ALPHABET.len())] as char)
+        .collect()
+}
+
+/// What the hash is taken over, and what a typed code is reduced to first:
+/// upper case, letters and digits only, so dashes, spaces and case don't
+/// matter.
+fn normalize_recovery_code(input: &str) -> String {
+    input
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
+}
+
+/// `ABCD-EFGH-...`, for display.
+fn format_recovery_code(raw: &str) -> String {
+    raw.as_bytes()
+        .chunks(RECOVERY_GROUP)
+        .map(|c| std::str::from_utf8(c).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 // --- Storage ----------------------------------------------------------------
@@ -231,22 +321,26 @@ async fn read_pin_hash(pool: &SqlitePool) -> Result<Option<String>, String> {
     Ok(read_setting(pool, PIN_HASH_SETTING).await?.filter(|h| !h.is_empty()))
 }
 
-async fn read_attempts(pool: &SqlitePool) -> Result<Attempts, String> {
-    let start = read_setting(pool, WINDOW_START_SETTING).await?.and_then(|v| v.parse::<i64>().ok());
-    let left = read_setting(pool, ATTEMPTS_LEFT_SETTING).await?.and_then(|v| v.parse::<u32>().ok());
+async fn has_recovery_code(pool: &SqlitePool) -> Result<bool, String> {
+    Ok(read_setting(pool, RECOVERY_HASH_SETTING).await?.is_some_and(|h| !h.is_empty()))
+}
+
+async fn read_attempts(pool: &SqlitePool, limiter: &Limiter) -> Result<Attempts, String> {
+    let start = read_setting(pool, limiter.start_key).await?.and_then(|v| v.parse::<i64>().ok());
+    let left = read_setting(pool, limiter.left_key).await?.and_then(|v| v.parse::<u32>().ok());
     Ok(match (start, left) {
         (Some(start), Some(left)) => Attempts { window_start_ms: Some(start), left: left.min(MAX_FAILED_ATTEMPTS) },
         _ => Attempts::FRESH,
     })
 }
 
-async fn write_attempts(pool: &SqlitePool, a: Attempts) -> Result<(), String> {
+async fn write_attempts(pool: &SqlitePool, limiter: &Limiter, a: Attempts) -> Result<(), String> {
     match a.window_start_ms {
         Some(start) => {
-            write_setting(pool, WINDOW_START_SETTING, &start.to_string()).await?;
-            write_setting(pool, ATTEMPTS_LEFT_SETTING, &a.left.to_string()).await
+            write_setting(pool, limiter.start_key, &start.to_string()).await?;
+            write_setting(pool, limiter.left_key, &a.left.to_string()).await
         }
-        None => delete_settings(pool, &[WINDOW_START_SETTING, ATTEMPTS_LEFT_SETTING]).await,
+        None => delete_settings(pool, &[limiter.start_key, limiter.left_key]).await,
     }
 }
 
@@ -261,11 +355,11 @@ enum Verify {
     NoPin,
 }
 
-/// Checks `pin` against the stored hash, honoring and updating the
-/// failed-attempt window.
-async fn verify_limited(pool: &SqlitePool, pin: &str) -> Result<Verify, String> {
+/// Checks `secret` against the hash the limiter guards, honoring and updating
+/// that limiter's failed-attempt window. `NoPin` means no hash is stored.
+async fn verify_limited(pool: &SqlitePool, limiter: &Limiter, secret: &str) -> Result<Verify, String> {
     if VERIFYING.swap(true, Ordering::SeqCst) {
-        return Err("A PIN check is already in progress. Try again.".into());
+        return Err(format!("A {} check is already in progress. Try again.", limiter.what));
     }
     struct Release;
     impl Drop for Release {
@@ -275,37 +369,89 @@ async fn verify_limited(pool: &SqlitePool, pin: &str) -> Result<Verify, String> 
     }
     let _release = Release;
 
-    let Some(stored) = read_pin_hash(pool).await? else { return Ok(Verify::NoPin) };
-    let attempts = read_attempts(pool).await?;
+    let Some(stored) = read_setting(pool, limiter.hash_key).await?.filter(|h| !h.is_empty()) else {
+        return Ok(Verify::NoPin);
+    };
+    let attempts = read_attempts(pool, limiter).await?;
     if let Some(until_ms) = attempts.locked_out_until(now_ms()) {
         return Ok(Verify::LockedOut { until_ms });
     }
-    let pin_owned = pin.to_string();
-    let matched = tauri::async_runtime::spawn_blocking(move || pin_matches(&pin_owned, &stored))
+    let secret_owned = secret.to_string();
+    let matched = tauri::async_runtime::spawn_blocking(move || secret_matches(&secret_owned, &stored))
         .await
-        .map_err(|e| format!("PIN check failed: {e}"))?;
+        .map_err(|e| format!("{} check failed: {e}", limiter.what))?;
     if matched {
-        write_attempts(pool, Attempts::FRESH).await?;
+        write_attempts(pool, limiter, Attempts::FRESH).await?;
         return Ok(Verify::Match);
     }
     let next = attempts.after_failure(now_ms());
-    write_attempts(pool, next).await?;
-    log::info!("app lock: wrong PIN, {} attempt(s) left in this window", next.left);
+    write_attempts(pool, limiter, next).await?;
+    log::info!("app lock: wrong {}, {} attempt(s) left in this window", limiter.what, next.left);
     Ok(match next.locked_out_until(now_ms()) {
         Some(until_ms) => Verify::LockedOut { until_ms },
         None => Verify::Wrong { left: next.left },
     })
 }
 
-fn lockout_message(until_ms: i64) -> String {
+fn lockout_message(limiter: &Limiter, until_ms: i64) -> String {
     let minutes = ((until_ms - now_ms()).max(0) + 59_999) / 60_000;
-    format!("Too many wrong PINs. Try again in {minutes} min.")
+    format!("Too many wrong {}s. Try again in {minutes} min.", limiter.what)
+}
+
+/// Replaces the stored recovery code with a fresh one and returns it in its
+/// display form. The previous code stops working the moment the new hash is
+/// written; the recovery attempt window starts over.
+async fn issue_recovery_code(pool: &SqlitePool) -> Result<String, String> {
+    let raw = generate_recovery_code();
+    let to_hash = raw.clone();
+    let hash = tauri::async_runtime::spawn_blocking(move || hash_secret(&to_hash))
+        .await
+        .map_err(|e| format!("couldn't hash the recovery code: {e}"))?;
+    write_setting(pool, RECOVERY_HASH_SETTING, &hash).await?;
+    write_attempts(pool, &RECOVERY_LIMITER, Attempts::FRESH).await?;
+    Ok(format_recovery_code(&raw))
+}
+
+/// Verifies `current_pin` against the PIN limiter, mapping every non-match to
+/// the error the UI shows. Shared by the commands that need the current PIN.
+async fn require_current_pin(pool: &SqlitePool, current_pin: &str) -> Result<(), String> {
+    match verify_limited(pool, &PIN_LIMITER, current_pin).await? {
+        Verify::Match | Verify::NoPin => Ok(()),
+        Verify::Wrong { left } => Err(format!("Current PIN is incorrect. {left} attempt(s) left.")),
+        Verify::LockedOut { until_ms } => Err(lockout_message(&PIN_LIMITER, until_ms)),
+    }
+}
+
+/// The database half of `app_lock_recover` (no lock state, so it can be
+/// tested against an in-memory pool): checks the code through the recovery
+/// limiter, then replaces the PIN and issues the next code. A bad `new_pin`
+/// is rejected *before* the code is checked, so a typo there can't cost an
+/// attempt or consume the code.
+async fn recover_with_pool(pool: &SqlitePool, code: &str, new_pin: &str) -> Result<String, String> {
+    validate_new_pin(new_pin)?;
+    let normalized = normalize_recovery_code(code);
+    if normalized.len() != RECOVERY_CODE_LEN {
+        return Err(format!("A recovery code has {RECOVERY_CODE_LEN} letters and digits."));
+    }
+    match verify_limited(pool, &RECOVERY_LIMITER, &normalized).await? {
+        Verify::Match => {}
+        Verify::NoPin => return Err("This device has no recovery code.".into()),
+        Verify::Wrong { left } => return Err(format!("Recovery code is incorrect. {left} attempt(s) left.")),
+        Verify::LockedOut { until_ms } => return Err(lockout_message(&RECOVERY_LIMITER, until_ms)),
+    }
+    let new_pin = new_pin.to_string();
+    let pin_hash = tauri::async_runtime::spawn_blocking(move || hash_secret(&new_pin))
+        .await
+        .map_err(|e| format!("couldn't hash the PIN: {e}"))?;
+    write_setting(pool, PIN_HASH_SETTING, &pin_hash).await?;
+    write_attempts(pool, &PIN_LIMITER, Attempts::FRESH).await?;
+    issue_recovery_code(pool).await
 }
 
 // --- State ------------------------------------------------------------------
 
 async fn status_from(pool: &SqlitePool) -> Result<AppLockStatus, String> {
-    let attempts = read_attempts(pool).await?;
+    let attempts = read_attempts(pool, &PIN_LIMITER).await?;
     let now = now_ms();
     Ok(AppLockStatus {
         enabled: ENABLED.load(Ordering::SeqCst),
@@ -314,6 +460,7 @@ async fn status_from(pool: &SqlitePool) -> Result<AppLockStatus, String> {
         locked_out_until_ms: attempts.locked_out_until(now),
         min_pin_digits: MIN_PIN_DIGITS,
         max_pin_digits: MAX_PIN_DIGITS,
+        has_recovery_code: has_recovery_code(pool).await?,
     })
 }
 
@@ -423,7 +570,7 @@ pub fn app_lock_engage() {
 pub async fn app_lock_unlock(app: AppHandle, pin: String) -> Result<AppLockStatus, String> {
     let handle = app.clone();
     with_pool(&app, |pool| async move {
-        match verify_limited(&pool, &pin).await? {
+        match verify_limited(&pool, &PIN_LIMITER, &pin).await? {
             Verify::Match | Verify::NoPin => {
                 if !LOCKED.swap(false, Ordering::SeqCst) {
                     // Already unlocked (another window got there first).
@@ -439,36 +586,76 @@ pub async fn app_lock_unlock(app: AppHandle, pin: String) -> Result<AppLockStatu
     .await
 }
 
-/// Sets a new PIN. When one is already set, `current_pin` must match it
-/// (and a wrong one counts as a failed attempt, so this isn't a way around
-/// the limit).
+/// Sets a new PIN and issues a fresh recovery code for it (returned once, in
+/// the result). When a PIN is already set, `current_pin` must match it (and a
+/// wrong one counts as a failed attempt, so this isn't a way around the
+/// limit).
 #[tauri::command]
 pub async fn app_lock_set_pin(
     app: AppHandle,
     current_pin: Option<String>,
     new_pin: String,
-) -> Result<AppLockStatus, String> {
+) -> Result<AppLockCodeResult, String> {
     validate_new_pin(&new_pin)?;
     let handle = app.clone();
     with_pool(&app, |pool| async move {
         if read_pin_hash(&pool).await?.is_some() {
-            match verify_limited(&pool, current_pin.as_deref().unwrap_or("")).await? {
-                Verify::Match | Verify::NoPin => {}
-                Verify::Wrong { left } => return Err(format!("Current PIN is incorrect. {left} attempt(s) left.")),
-                Verify::LockedOut { until_ms } => return Err(lockout_message(until_ms)),
-            }
+            require_current_pin(&pool, current_pin.as_deref().unwrap_or("")).await?;
         }
-        let hash = tauri::async_runtime::spawn_blocking(move || hash_pin(&new_pin))
+        let hash = tauri::async_runtime::spawn_blocking(move || hash_secret(&new_pin))
             .await
             .map_err(|e| format!("couldn't hash the PIN: {e}"))?;
         write_setting(&pool, PIN_HASH_SETTING, &hash).await?;
-        write_attempts(&pool, Attempts::FRESH).await?;
+        write_attempts(&pool, &PIN_LIMITER, Attempts::FRESH).await?;
+        let recovery_code = issue_recovery_code(&pool).await?;
         ENABLED.store(true, Ordering::SeqCst);
         // The user is here, setting it: stay unlocked until they next leave.
         LOCKED.store(false, Ordering::SeqCst);
-        log::info!("app lock: PIN set");
+        log::info!("app lock: PIN set, recovery code issued");
         emit_state(&handle);
-        status_from(&pool).await
+        Ok(AppLockCodeResult { status: status_from(&pool).await?, recovery_code })
+    })
+    .await
+}
+
+/// Replaces the recovery code (the way to get one for a PIN that predates
+/// recovery codes, or after losing the copy). Needs the current PIN.
+#[tauri::command]
+pub async fn app_lock_regenerate_recovery_code(
+    app: AppHandle,
+    current_pin: String,
+) -> Result<AppLockCodeResult, String> {
+    let handle = app.clone();
+    with_pool(&app, |pool| async move {
+        if read_pin_hash(&pool).await?.is_none() {
+            return Err("Turn on app lock first.".into());
+        }
+        require_current_pin(&pool, &current_pin).await?;
+        let recovery_code = issue_recovery_code(&pool).await?;
+        log::info!("app lock: recovery code regenerated");
+        emit_state(&handle);
+        Ok(AppLockCodeResult { status: status_from(&pool).await?, recovery_code })
+    })
+    .await
+}
+
+/// "Forgot PIN" with a recovery code: sets `new_pin`, unlocks, and returns the
+/// replacement code. Callable while locked, so it takes no current PIN. A
+/// wrong code is an `Err` carrying the attempts left or the lockout.
+#[tauri::command]
+pub async fn app_lock_recover(
+    app: AppHandle,
+    recovery_code: String,
+    new_pin: String,
+) -> Result<AppLockCodeResult, String> {
+    let handle = app.clone();
+    with_pool(&app, |pool| async move {
+        let next_code = recover_with_pool(&pool, &recovery_code, &new_pin).await?;
+        ENABLED.store(true, Ordering::SeqCst);
+        LOCKED.store(false, Ordering::SeqCst);
+        log::info!("app lock: PIN reset with a recovery code, unlocked");
+        emit_state(&handle);
+        Ok(AppLockCodeResult { status: status_from(&pool).await?, recovery_code: next_code })
     })
     .await
 }
@@ -477,11 +664,7 @@ pub async fn app_lock_set_pin(
 pub async fn app_lock_disable(app: AppHandle, current_pin: String) -> Result<AppLockStatus, String> {
     let handle = app.clone();
     with_pool(&app, |pool| async move {
-        match verify_limited(&pool, &current_pin).await? {
-            Verify::Match | Verify::NoPin => {}
-            Verify::Wrong { left } => return Err(format!("Current PIN is incorrect. {left} attempt(s) left.")),
-            Verify::LockedOut { until_ms } => return Err(lockout_message(until_ms)),
-        }
+        require_current_pin(&pool, &current_pin).await?;
         delete_settings(&pool, &DEVICE_LOCAL_SETTINGS).await?;
         ENABLED.store(false, Ordering::SeqCst);
         LOCKED.store(false, Ordering::SeqCst);
@@ -562,23 +745,23 @@ mod tests {
 
     #[test]
     fn pin_hash_round_trips_and_rejects_others() {
-        let stored = hash_pin_with("4821", b"0123456789abcdef", 10);
-        assert!(pin_matches("4821", &stored));
-        assert!(!pin_matches("4822", &stored));
-        assert!(!pin_matches("04821", &stored));
-        assert!(!pin_matches("", &stored));
+        let stored = hash_secret_with("4821", b"0123456789abcdef", 10);
+        assert!(secret_matches("4821", &stored));
+        assert!(!secret_matches("4822", &stored));
+        assert!(!secret_matches("04821", &stored));
+        assert!(!secret_matches("", &stored));
     }
 
     #[test]
     fn malformed_hash_never_matches() {
         for stored in ["", "garbage", "pbkdf2-sha256$0$AAAA$AAAA", "other$10$AAAA$AAAA", "pbkdf2-sha256$10$!!$AAAA"] {
-            assert!(!pin_matches("1234", stored), "{stored}");
+            assert!(!secret_matches("1234", stored), "{stored}");
         }
     }
 
     #[test]
     fn random_salt_differs_per_hash() {
-        assert_ne!(hash_pin_with("1234", b"aaaaaaaaaaaaaaaa", 5), hash_pin_with("1234", b"bbbbbbbbbbbbbbbb", 5));
+        assert_ne!(hash_secret_with("1234", b"aaaaaaaaaaaaaaaa", 5), hash_secret_with("1234", b"bbbbbbbbbbbbbbbb", 5));
     }
 
     #[test]
@@ -650,36 +833,160 @@ mod tests {
     #[tokio::test]
     async fn attempts_persist_and_clear() {
         let pool = test_pool().await;
-        assert_eq!(read_attempts(&pool).await.unwrap(), Attempts::FRESH);
+        assert_eq!(read_attempts(&pool, &PIN_LIMITER).await.unwrap(), Attempts::FRESH);
         let a = Attempts { window_start_ms: Some(42), left: 3 };
-        write_attempts(&pool, a).await.unwrap();
-        assert_eq!(read_attempts(&pool).await.unwrap(), a);
-        write_attempts(&pool, Attempts::FRESH).await.unwrap();
-        assert_eq!(read_attempts(&pool).await.unwrap(), Attempts::FRESH);
+        write_attempts(&pool, &PIN_LIMITER, a).await.unwrap();
+        assert_eq!(read_attempts(&pool, &PIN_LIMITER).await.unwrap(), a);
+        write_attempts(&pool, &PIN_LIMITER, Attempts::FRESH).await.unwrap();
+        assert_eq!(read_attempts(&pool, &PIN_LIMITER).await.unwrap(), Attempts::FRESH);
     }
 
     #[tokio::test]
     async fn verify_counts_down_then_refuses_even_the_right_pin() {
         let _serial = VERIFY_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let pool = test_pool().await;
-        write_setting(&pool, PIN_HASH_SETTING, &hash_pin_with("1234", b"0123456789abcdef", 5)).await.unwrap();
+        write_setting(&pool, PIN_HASH_SETTING, &hash_secret_with("1234", b"0123456789abcdef", 5)).await.unwrap();
         for expected_left in (1..MAX_FAILED_ATTEMPTS).rev() {
-            match verify_limited(&pool, "0000").await.unwrap() {
+            match verify_limited(&pool, &PIN_LIMITER, "0000").await.unwrap() {
                 Verify::Wrong { left } => assert_eq!(left, expected_left),
                 _ => panic!("expected Wrong"),
             }
         }
-        assert!(matches!(verify_limited(&pool, "0000").await.unwrap(), Verify::LockedOut { .. }));
-        assert!(matches!(verify_limited(&pool, "1234").await.unwrap(), Verify::LockedOut { .. }));
+        assert!(matches!(verify_limited(&pool, &PIN_LIMITER, "0000").await.unwrap(), Verify::LockedOut { .. }));
+        assert!(matches!(verify_limited(&pool, &PIN_LIMITER, "1234").await.unwrap(), Verify::LockedOut { .. }));
     }
 
     #[tokio::test]
     async fn success_resets_the_window() {
         let _serial = VERIFY_TESTS.lock().unwrap_or_else(|e| e.into_inner());
         let pool = test_pool().await;
-        write_setting(&pool, PIN_HASH_SETTING, &hash_pin_with("1234", b"0123456789abcdef", 5)).await.unwrap();
-        assert!(matches!(verify_limited(&pool, "9999").await.unwrap(), Verify::Wrong { .. }));
-        assert!(matches!(verify_limited(&pool, "1234").await.unwrap(), Verify::Match));
-        assert_eq!(read_attempts(&pool).await.unwrap(), Attempts::FRESH);
+        write_setting(&pool, PIN_HASH_SETTING, &hash_secret_with("1234", b"0123456789abcdef", 5)).await.unwrap();
+        assert!(matches!(verify_limited(&pool, &PIN_LIMITER, "9999").await.unwrap(), Verify::Wrong { .. }));
+        assert!(matches!(verify_limited(&pool, &PIN_LIMITER, "1234").await.unwrap(), Verify::Match));
+        assert_eq!(read_attempts(&pool, &PIN_LIMITER).await.unwrap(), Attempts::FRESH);
+    }
+
+    // --- Recovery code ---------------------------------------------------
+
+    #[test]
+    fn generated_recovery_codes_use_the_alphabet() {
+        let a = generate_recovery_code();
+        let b = generate_recovery_code();
+        assert_eq!(a.len(), RECOVERY_CODE_LEN);
+        assert!(a.bytes().all(|c| RECOVERY_ALPHABET.contains(&c)));
+        assert_ne!(a, b);
+        for ambiguous in ['0', 'O', '1', 'I'] {
+            assert!(!RECOVERY_ALPHABET.contains(&(ambiguous as u8)));
+        }
+    }
+
+    #[test]
+    fn recovery_code_display_and_normalization_round_trip() {
+        let raw = "ABCDEFGHJKLMNPQR";
+        let shown = format_recovery_code(raw);
+        assert_eq!(shown, "ABCD-EFGH-JKLM-NPQR");
+        assert_eq!(normalize_recovery_code(&shown), raw);
+        assert_eq!(normalize_recovery_code(" abcd efgh-jklm  npqr "), raw);
+    }
+
+    #[test]
+    fn device_local_settings_cover_the_recovery_keys() {
+        for key in [
+            "app_lock_pin_hash",
+            "app_lock_attempts_left",
+            "app_lock_window_start_ms",
+            "app_lock_recovery_hash",
+            "app_lock_recovery_attempts_left",
+            "app_lock_recovery_window_start_ms",
+        ] {
+            assert!(DEVICE_LOCAL_SETTINGS.contains(&key), "{key}");
+        }
+    }
+
+    async fn pool_with_pin(pin: &str) -> (SqlitePool, String) {
+        let pool = test_pool().await;
+        write_setting(&pool, PIN_HASH_SETTING, &hash_secret_with(pin, b"0123456789abcdef", 5)).await.unwrap();
+        let code = issue_recovery_code(&pool).await.unwrap();
+        (pool, code)
+    }
+
+    #[tokio::test]
+    async fn recovery_replaces_the_pin_and_consumes_the_code() {
+        let _serial = VERIFY_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (pool, code) = pool_with_pin("1234").await;
+        // Some failed PIN attempts that recovery should clear.
+        assert!(matches!(verify_limited(&pool, &PIN_LIMITER, "0000").await.unwrap(), Verify::Wrong { .. }));
+
+        // Lower case and no dashes is fine.
+        let next = recover_with_pool(&pool, &code.replace('-', "").to_lowercase(), "9876").await.unwrap();
+        assert_ne!(next, code);
+
+        assert_eq!(read_attempts(&pool, &PIN_LIMITER).await.unwrap(), Attempts::FRESH);
+        assert!(matches!(verify_limited(&pool, &PIN_LIMITER, "1234").await.unwrap(), Verify::Wrong { .. }));
+        assert!(matches!(verify_limited(&pool, &PIN_LIMITER, "9876").await.unwrap(), Verify::Match));
+        // The used code is dead, the new one works.
+        assert!(recover_with_pool(&pool, &code, "5555").await.is_err());
+        assert!(recover_with_pool(&pool, &next, "5555").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_bad_new_pin_does_not_consume_the_code_or_an_attempt() {
+        let _serial = VERIFY_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (pool, code) = pool_with_pin("1234").await;
+        assert!(recover_with_pool(&pool, &code, "12").await.is_err());
+        assert_eq!(read_attempts(&pool, &RECOVERY_LIMITER).await.unwrap(), Attempts::FRESH);
+        assert!(recover_with_pool(&pool, &code, "9876").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_wrong_code_leaves_the_pin_alone() {
+        let _serial = VERIFY_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (pool, _code) = pool_with_pin("1234").await;
+        let err = recover_with_pool(&pool, "AAAA-AAAA-AAAA-AAAA", "9876").await.unwrap_err();
+        assert!(err.contains("incorrect"), "{err}");
+        assert!(matches!(verify_limited(&pool, &PIN_LIMITER, "1234").await.unwrap(), Verify::Match));
+        // Malformed input is refused without costing an attempt.
+        assert!(recover_with_pool(&pool, "short", "9876").await.is_err());
+        assert_eq!(
+            read_attempts(&pool, &RECOVERY_LIMITER).await.unwrap().left,
+            MAX_FAILED_ATTEMPTS - 1
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_has_its_own_attempt_window() {
+        let _serial = VERIFY_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (pool, code) = pool_with_pin("1234").await;
+        // Burn every PIN attempt: PIN entry is locked out.
+        for _ in 0..MAX_FAILED_ATTEMPTS {
+            let _ = verify_limited(&pool, &PIN_LIMITER, "0000").await.unwrap();
+        }
+        assert!(matches!(verify_limited(&pool, &PIN_LIMITER, "1234").await.unwrap(), Verify::LockedOut { .. }));
+        // The recovery code still works.
+        assert!(recover_with_pool(&pool, &code, "9876").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn recovery_attempts_run_out_even_for_the_right_code() {
+        let _serial = VERIFY_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let (pool, code) = pool_with_pin("1234").await;
+        for _ in 0..MAX_FAILED_ATTEMPTS {
+            assert!(recover_with_pool(&pool, "AAAA-AAAA-AAAA-AAAA", "9876").await.is_err());
+        }
+        let err = recover_with_pool(&pool, &code, "9876").await.unwrap_err();
+        assert!(err.starts_with("Too many wrong recovery codes"), "{err}");
+        // The PIN window was never touched.
+        assert_eq!(read_attempts(&pool, &PIN_LIMITER).await.unwrap(), Attempts::FRESH);
+    }
+
+    #[tokio::test]
+    async fn no_recovery_code_means_recovery_is_refused() {
+        let _serial = VERIFY_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let pool = test_pool().await;
+        write_setting(&pool, PIN_HASH_SETTING, &hash_secret_with("1234", b"0123456789abcdef", 5)).await.unwrap();
+        assert!(!has_recovery_code(&pool).await.unwrap());
+        let err = recover_with_pool(&pool, "AAAA-AAAA-AAAA-AAAA", "9876").await.unwrap_err();
+        assert_eq!(err, "This device has no recovery code.");
+        assert!(matches!(verify_limited(&pool, &PIN_LIMITER, "1234").await.unwrap(), Verify::Match));
     }
 }

@@ -13,20 +13,31 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { ask } from "@tauri-apps/plugin-dialog";
+  import RecoveryCodeDisplay from "$lib/RecoveryCodeDisplay.svelte";
   import {
     getAppLockStatus,
     unlockAppLock,
     engageAppLock,
     forgotAppLockPinErase,
+    recoverAppLock,
     sanitizePinInput,
+    sanitizeRecoveryCodeInput,
+    isCompleteRecoveryCode,
     APP_LOCK_STATE_EVENT,
     APP_LOCK_ERASED_EVENT,
     type AppLockStatus,
   } from "$lib/db";
 
   let status = $state<AppLockStatus | null>(null);
-  let view = $state<"pin" | "forgot">("pin");
+  let view = $state<"pin" | "forgot" | "recover">("pin");
   let pin = $state("");
+  let recoveryCode = $state("");
+  let newPin = $state("");
+  let confirmPin = $state("");
+  /** The replacement code issued by a successful recovery. Rust has already
+   * unlocked by then, so this is what keeps the prompt up until the user has
+   * saved it. */
+  let pendingRecoveryCode = $state<string | null>(null);
   let busy = $state(false);
   let error = $state("");
   let eraseUnderstood = $state(false);
@@ -39,7 +50,9 @@
   let clock: ReturnType<typeof setInterval> | null = null;
   let isMobile = false;
 
-  const visible = $derived(status !== null && status.enabled && status.locked);
+  const visible = $derived(
+    (status !== null && status.enabled && status.locked) || pendingRecoveryCode !== null,
+  );
   const lockedOutUntil = $derived(
     status?.lockedOutUntilMs != null && status.lockedOutUntilMs > now ? status.lockedOutUntilMs : null,
   );
@@ -60,6 +73,9 @@
       if (visible && !wasVisible) {
         view = "pin";
         pin = "";
+        recoveryCode = "";
+        newPin = "";
+        confirmPin = "";
         error = "";
         eraseUnderstood = false;
         await focusInput();
@@ -185,6 +201,74 @@
     }
   }
 
+  function onRecoveryCodeInput(e: Event) {
+    const el = e.target as HTMLInputElement;
+    recoveryCode = sanitizeRecoveryCodeInput(el.value);
+    el.value = recoveryCode;
+    error = "";
+  }
+
+  function onNewPinInput(e: Event) {
+    const el = e.target as HTMLInputElement;
+    newPin = sanitizePinInput(el.value, maxDigits);
+    el.value = newPin;
+    error = "";
+  }
+
+  function onConfirmPinInput(e: Event) {
+    const el = e.target as HTMLInputElement;
+    confirmPin = sanitizePinInput(el.value, maxDigits);
+    el.value = confirmPin;
+    error = "";
+  }
+
+  async function submitRecover(e: Event) {
+    e.preventDefault();
+    if (busy) return;
+    if (!isCompleteRecoveryCode(recoveryCode)) {
+      error = "Enter the whole recovery code.";
+      return;
+    }
+    if (newPin.length < minDigits) {
+      error = `Use at least ${minDigits} digits for the new PIN.`;
+      return;
+    }
+    if (newPin !== confirmPin) {
+      error = "The PINs don't match.";
+      return;
+    }
+    busy = true;
+    error = "";
+    try {
+      const result = await recoverAppLock(recoveryCode, newPin);
+      // Set before status: status flips `locked` off, and `visible` must
+      // already be held open by the pending code when that happens.
+      pendingRecoveryCode = result.recoveryCode;
+      status = result.status;
+      recoveryCode = "";
+      newPin = "";
+      confirmPin = "";
+    } catch (err) {
+      error = String(err);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function finishRecovery() {
+    pendingRecoveryCode = null;
+    view = "pin";
+    error = "";
+  }
+
+  function goRecover() {
+    view = "recover";
+    error = "";
+    recoveryCode = "";
+    newPin = "";
+    confirmPin = "";
+  }
+
   function goForgot() {
     view = "forgot";
     error = "";
@@ -201,13 +285,83 @@
 {#if visible && status}
   <div class="lock-backdrop" role="presentation">
     <div class="lock-modal" role="dialog" aria-modal="true" aria-labelledby="lock-title" bind:this={modalEl}>
-      {#if view === "forgot"}
+      {#if pendingRecoveryCode}
+        <h2 id="lock-title">PIN reset</h2>
+        <p class="hint">Your new PIN is set and Reflectodoro is unlocked. Here is your new recovery code.</p>
+        <RecoveryCodeDisplay code={pendingRecoveryCode} onDone={finishRecovery} />
+      {:else if view === "recover"}
+        <h2 id="lock-title">Use your recovery code</h2>
+        <p class="hint">Enter the recovery code you saved, then choose a new PIN. Nothing is erased.</p>
+        <form onsubmit={submitRecover}>
+          <input
+            class="code"
+            type="text"
+            autocomplete="off"
+            autocapitalize="characters"
+            spellcheck="false"
+            placeholder="XXXX-XXXX-XXXX-XXXX"
+            aria-label="Recovery code"
+            value={recoveryCode}
+            oninput={onRecoveryCodeInput}
+            disabled={busy}
+          />
+          <input
+            class="newpin"
+            type="password"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            autocomplete="off"
+            maxlength={maxDigits}
+            placeholder="New PIN"
+            aria-label="New PIN"
+            value={newPin}
+            oninput={onNewPinInput}
+            disabled={busy}
+          />
+          <input
+            class="newpin"
+            type="password"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            autocomplete="off"
+            maxlength={maxDigits}
+            placeholder="Confirm new PIN"
+            aria-label="Confirm new PIN"
+            value={confirmPin}
+            oninput={onConfirmPinInput}
+            disabled={busy}
+          />
+          {#if error}
+            <p class="hint error" role="alert">{error}</p>
+          {/if}
+          <div class="row">
+            <button type="submit" disabled={busy || !isCompleteRecoveryCode(recoveryCode) || newPin.length < minDigits}>
+              {busy ? "Checking…" : "Reset PIN"}
+            </button>
+            <button type="button" class="secondary" disabled={busy} onclick={goForgot}>Back</button>
+          </div>
+        </form>
+      {:else if view === "forgot"}
         <h2 id="lock-title">Forgot your PIN?</h2>
-        <p class="hint warn">
-          The PIN can't be recovered. The only way back in is to erase everything this app has stored on this device
-          &mdash; reflections, task lists, check-ins, habits and screen time &mdash; and forget your paired devices, so
-          they can't send it all back. Your settings are kept.
-        </p>
+        {#if status.hasRecoveryCode}
+          <p class="hint">
+            If you saved the recovery code shown when you set your PIN, use it to choose a new PIN. Nothing is erased.
+          </p>
+          <div class="row recover-row">
+            <button type="button" onclick={goRecover}>Use my recovery code</button>
+          </div>
+          <p class="hint warn">
+            No recovery code? The only other way back in is to erase everything this app has stored on this device
+            &mdash; reflections, task lists, check-ins, habits and screen time &mdash; and forget your paired devices, so
+            they can't send it all back. Your settings are kept.
+          </p>
+        {:else}
+          <p class="hint warn">
+            There's no recovery code on this device, so the PIN can't be recovered. The only way back in is to erase
+            everything this app has stored on this device &mdash; reflections, task lists, check-ins, habits and screen
+            time &mdash; and forget your paired devices, so they can't send it all back. Your settings are kept.
+          </p>
+        {/if}
         <label class="check">
           <input type="checkbox" bind:checked={eraseUnderstood} />
           I understand all my entries on this device will be erased
@@ -309,6 +463,34 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+
+  input.code,
+  input.newpin {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: inherit;
+    padding: 10px 12px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  input.code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 16px;
+    letter-spacing: 0.08em;
+    text-align: center;
+  }
+
+  input.newpin {
+    font-size: 18px;
+    letter-spacing: 0.3em;
+    text-align: center;
+  }
+
+  .recover-row {
+    margin-bottom: 14px;
   }
 
   input.pin {

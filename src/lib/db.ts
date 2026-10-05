@@ -2359,11 +2359,12 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
       ? // encryption_key_location is where *this* device's key lives
         // (key_store.rs) -- meaningless, and harmful, on another device.
         // llm_summary_api_key is a credential; the export is plaintext JSON.
-        // app_lock_* is this device's PIN hash and attempt counter (app_lock.rs).
+        // app_lock_* is this device's PIN and recovery-code hashes and their
+        // attempt counters (app_lock.rs).
         db.select<SettingRow[]>(
           `SELECT key, value FROM app_setting
            WHERE key NOT IN ('encryption_key_location', 'llm_summary_api_key')
-             AND key NOT IN ('app_lock_pin_hash', 'app_lock_attempts_left', 'app_lock_window_start_ms')`,
+             AND key NOT IN (${APP_LOCK_DEVICE_LOCAL_KEYS.map((k) => `'${k}'`).join(", ")})`,
         )
       : Promise.resolve([]),
     db.select<{ slot_start_at: string; relaxed_eyes: string; exercise: string; drank_water: string; washroom: string; created_at: string }[]>(
@@ -3219,7 +3220,32 @@ export type AppLockStatus = {
   lockedOutUntilMs: number | null;
   minPinDigits: number;
   maxPinDigits: number;
+  /** A PIN set before recovery codes existed has none until one is generated. */
+  hasRecoveryCode: boolean;
 };
+
+/** Every command that issues a recovery code. The code is shown once. */
+export type AppLockCodeResult = {
+  status: AppLockStatus;
+  /** Display form, `XXXX-XXXX-XXXX-XXXX`. */
+  recoveryCode: string;
+};
+
+/**
+ * This device's app lock rows in `app_setting`: never exported. Mirrors
+ * `DEVICE_LOCAL_SETTINGS` in app_lock.rs -- keep the two in step.
+ */
+export const APP_LOCK_DEVICE_LOCAL_KEYS = [
+  "app_lock_pin_hash",
+  "app_lock_attempts_left",
+  "app_lock_window_start_ms",
+  "app_lock_recovery_hash",
+  "app_lock_recovery_attempts_left",
+  "app_lock_recovery_window_start_ms",
+] as const;
+
+export const RECOVERY_CODE_LENGTH = 16;
+const RECOVERY_GROUP_SIZE = 4;
 
 /** Emitted by Rust whenever the app locks/unlocks or the PIN changes. */
 export const APP_LOCK_STATE_EVENT = "applock://state";
@@ -3240,8 +3266,19 @@ export function unlockAppLock(pin: string): Promise<AppLockStatus> {
   return invoke<AppLockStatus>("app_lock_unlock", { pin });
 }
 
-export function setAppLockPin(newPin: string, currentPin?: string): Promise<AppLockStatus> {
-  return invoke<AppLockStatus>("app_lock_set_pin", { currentPin: currentPin ?? null, newPin });
+/** Sets or changes the PIN and issues a new recovery code for it. */
+export function setAppLockPin(newPin: string, currentPin?: string): Promise<AppLockCodeResult> {
+  return invoke<AppLockCodeResult>("app_lock_set_pin", { currentPin: currentPin ?? null, newPin });
+}
+
+/** Replaces the recovery code (needs the current PIN). */
+export function regenerateAppLockRecoveryCode(currentPin: string): Promise<AppLockCodeResult> {
+  return invoke<AppLockCodeResult>("app_lock_regenerate_recovery_code", { currentPin });
+}
+
+/** From the lock screen: sets `newPin`, unlocks, and returns the replacement code. */
+export function recoverAppLock(recoveryCode: string, newPin: string): Promise<AppLockCodeResult> {
+  return invoke<AppLockCodeResult>("app_lock_recover", { recoveryCode, newPin });
 }
 
 export function disableAppLock(currentPin: string): Promise<AppLockStatus> {
@@ -3255,4 +3292,21 @@ export function forgotAppLockPinErase(): Promise<AppLockStatus> {
 /** Keeps only digits, capped at `max` -- for PIN inputs' oninput. */
 export function sanitizePinInput(value: string, max: number): string {
   return value.replace(/\D/g, "").slice(0, max);
+}
+
+/**
+ * For the recovery-code input's oninput: upper case, letters and digits only,
+ * capped at the code's length and re-grouped with dashes as it is typed or
+ * pasted. Rust normalizes again, so this is only for readability.
+ */
+export function sanitizeRecoveryCodeInput(value: string): string {
+  const raw = value.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, RECOVERY_CODE_LENGTH);
+  const groups: string[] = [];
+  for (let i = 0; i < raw.length; i += RECOVERY_GROUP_SIZE) groups.push(raw.slice(i, i + RECOVERY_GROUP_SIZE));
+  return groups.join("-");
+}
+
+/** Whether `value` has all the characters of a recovery code (dashes ignored). */
+export function isCompleteRecoveryCode(value: string): boolean {
+  return value.replace(/[^A-Za-z0-9]/g, "").length === RECOVERY_CODE_LENGTH;
 }
