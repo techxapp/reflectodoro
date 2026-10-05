@@ -138,7 +138,7 @@
     <h2>Reflectodoro</h2>
     <p class="version">{version ? `Version ${version}` : "Loading version…"}</p>
     <p class="hint">
-      A Pomodoro app that forces a short self-reflection at the end of every break.
+      The Pomodoro app with self-reflection and break you can't skip.
     </p>
     <p class="hint">Licensed under PolyForm Noncommercial 1.0.0.</p>
   </section>
