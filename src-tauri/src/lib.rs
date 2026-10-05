@@ -727,8 +727,22 @@ async fn run_scheduler(app: AppHandle) {
         // one iteration. `slot.end` is deliberately left as the real work
         // slot's end, so the forced break closes itself at the next genuine
         // boundary and `last_phase` rejoins the normal grid from there.
+        //
+        // `slot.start` must become a real *break* start, though: it becomes
+        // `current_slot_start`, which every reflection writer maps to a work
+        // slot by a fixed -25min offset (`preceding_work_slot_start_iso`,
+        // db.ts's `precedingWorkSlotStartIso`). Left as the work slot's own
+        // :00/:30 start, that filed the forced break's reflection under :35/:05
+        // -- off the :00/:30 grid, so it duplicated the real entry instead of
+        // overwriting it, and `findMissedSlots` cascaded back along the bogus
+        // :05/:35 grid too. Using the break that preceded this work slot files
+        // it under the previous work slot, same as a real break would have.
         if force_break_pending {
             force_break_pending = false;
+            if slot.phase == Phase::Work {
+                slot.start =
+                    grid::slot_for_mode(slot.start - chrono::Duration::seconds(1), current_mode()).start;
+            }
             slot.phase = Phase::Break;
             let floor = now + chrono::Duration::minutes(force_break_minutes());
             if slot.end < floor {

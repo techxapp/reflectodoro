@@ -72,7 +72,11 @@ them on by accident on a real install):
 | `POMODORO_FORCE_BREAK_MINUTES=2` | Floor on how long the forced break is held open. Default 2. Without it the break inherits the *real* slot's end, which can be seconds away — launch at `:29:55` and the overlay opens and closes before you can look at it. |
 
 Only the first scheduler iteration is forced; the grid carries on untouched
-afterwards, so this can't leave the app stuck in a permanent break. Escape a
+afterwards, so this can't leave the app stuck in a permanent break. A break
+forced during a work slot takes the start of the break *before* that slot as
+its `current_slot_start`, so its reflection files under the previous `:00`/`:30`
+work slot and overwrites it. Using the work slot's own start, as it once did,
+filed reflections under `:05`/`:35` next to the real entries. Escape a
 forced break the usual ways (the "Close (DEV)" button, or Cmd+Option+Shift+F12).
 
 ```sh
