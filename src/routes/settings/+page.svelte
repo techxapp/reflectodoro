@@ -1121,7 +1121,6 @@
     {/if}
   </section>
 
-  <AppLockCard {isAndroid} />
 
   <section class="card">
     <h2>Session schedule</h2>
@@ -1138,67 +1137,6 @@
     <p class="hint">To change the mode, use the mode selector on the Timer screen.</p>
   </section>
 
-  {#if !isMobile}
-    <section class="card">
-      <h2>Auto-pause on wake</h2>
-      {#if autoPauseOnWakeLoaded}
-        <div class="data-row">
-          <label class="checkbox">
-            <input
-              type="checkbox"
-              checked={autoPauseOnWakeEnabled}
-              disabled={autoPauseOnWakeBusy}
-              onchange={toggleAutoPauseOnWakeEnabled}
-            />
-            Auto-pause after waking from sleep near a boundary
-          </label>
-        </div>
-        {#if isWindows}
-          <div class="data-row">
-            <label class="checkbox">
-              <input
-                type="checkbox"
-                checked={autoPauseOnWakeIncludeScreenOff}
-                disabled={autoPauseOnWakeBusy || !autoPauseOnWakeEnabled}
-                onchange={toggleAutoPauseOnWakeIncludeScreenOff}
-              />
-              Also count time with the screen locked or turned off
-            </label>
-          </div>
-        {/if}
-        <form onsubmit={saveAutoPauseOnWakeThresholds}>
-          <label>
-            PC was off for more than
-            <input type="number" min="1" max="180" bind:value={autoPauseOnWakeOffMinutes} />
-            minutes
-          </label>
-          <label>
-            and less than
-            <input type="number" min="1" max="60" bind:value={autoPauseOnWakeRemainingMinutes} />
-            minutes remain in the current session
-          </label>
-          <label>
-            Pause for
-            <input type="number" min="5" max="240" bind:value={autoPauseOnWakePauseMinutes} />
-            minutes
-          </label>
-          <button type="submit">Save</button>
-          {#if autoPauseOnWakeSaved}
-            <span class="hint saved">Saved</span>
-          {/if}
-        </form>
-        <p class="hint">
-          If you reopen this device after it's been asleep for a while{isWindows &&
-          autoPauseOnWakeIncludeScreenOff
-            ? " (or locked, or with its screen off)"
-            : ""}, right before a work or break boundary, Pomodoro mode pauses itself for the duration above instead of dropping
-          you straight into a session you never chose to start. Resumes on its own, exactly like
-          picking a pause from the Timer tab's dropdown &mdash; to resume early, set Pomodoro back
-          to On.
-        </p>
-      {/if}
-    </section>
-  {/if}
 
   <section class="card">
     <h2>Break screen</h2>
@@ -1500,128 +1438,6 @@
     {/if}
   </section>
 
-  <section class="card">
-    <h2>Daily summary (local AI)</h2>
-    <p class="hint">
-      Adds a <strong>Summarize</strong> button to the Entries tab that sends that day's reflections
-      to an AI model you run yourself &mdash; e.g. Ollama or LM Studio &mdash; through its
-      OpenAI-compatible chat endpoint. Nothing is sent until you click it, and the summary isn't
-      saved.
-    </p>
-
-    {#if llmSummaryLoaded}
-      <form onsubmit={saveLlmSummaryBasicSetting}>
-        <label class="grow">
-          Endpoint URL
-          <input
-            type="text"
-            bind:value={llmSummaryApiUrl}
-            placeholder="http://localhost:11434/v1/chat/completions"
-          />
-        </label>
-        <label>
-          Model
-          <input type="text" bind:value={llmSummaryModel} placeholder="llama3.1" />
-        </label>
-        <button type="submit">Save</button>
-        {#if llmSummaryBasicSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-      <p class="hint">
-        Leave the URL blank to turn this off. Ollama:
-        <code>http://localhost:11434/v1/chat/completions</code>. LM Studio:
-        <code>http://localhost:1234/v1/chat/completions</code>. The model name must match one
-        installed on that server. An API key, timeout and custom prompt are under Advanced settings.
-      </p>
-    {/if}
-  </section>
-
-
-
-  <section class="card">
-    <h2>Wellness check-in</h2>
-    
-    {#if checkinAutoCloseLoaded}
-      <form onsubmit={saveCheckinAutoClose}>
-        <label>
-          Auto-close after (minutes, if untouched)
-          <input type="number" min="1" max="60" bind:value={checkinAutoCloseMinutes} />
-        </label>
-        <button type="submit">Save</button>
-        {#if checkinAutoCloseSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-    {/if}
-
-    <!-- <p class="hint">
-      Comma-separated list of check-in items (Relaxed eyes, Exercise, Drank water, Washroom) that
-      should stay quiet -- no "Let's Try Next Time :)" nudge when switched off.
-    </p>
-
-    {#if wellnessExclusionsLoaded}
-      <form onsubmit={saveWellnessExclusions}>
-        <label class="grow">
-          Excluded items
-          <input type="text" bind:value={wellnessExclusions} placeholder="e.g. Washroom, Exercise" />
-        </label>
-        <button type="submit">Save</button>
-        {#if wellnessExclusionsSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-    {/if} -->
-
-  </section>
-
-
-  {#if !isMobile}
-  <section class="card">
-    <h2>If the break screen ever gets stuck</h2>
-    <ul class="hint">
-      <li>Press {forceCloseShortcutLabel} to force-close the break screen.</li>
-    </ul>
-
-    {#if forceCloseShortcutLoaded}
-      <div class="data-row slider-row">
-        <div
-          class="slide-track"
-          class:busy={forceCloseShortcutBusy}
-          role="switch"
-          aria-checked={forceCloseShortcutEnabled}
-          aria-label={`Enable ${forceCloseShortcutLabel} force-close shortcut`}
-          tabindex="0"
-          onpointerdown={onSliderPointerDown}
-          onpointermove={onSliderPointerMove}
-          onpointerup={onSliderPointerUp}
-          onpointercancel={onSliderPointerUp}
-          onkeydown={onSliderKeydown}
-        >
-          <span class="slide-track-label off">Disabled</span>
-          <span class="slide-track-label on">Enabled</span>
-          <div
-            class="slide-thumb"
-            class:accent={sliderOffset > SLIDER_MAX_OFFSET / 2}
-            style={`transform: translateX(${sliderOffset}px)`}
-          >
-            {sliderOffset > SLIDER_MAX_OFFSET / 2 ? "Enabled" : "Disabled"}
-          </div>
-        </div>
-        <span class="hint">Slide to enable/disable the force-close shortcut</span>
-      </div>
-
-      {#if forceCloseShortcutEnabled}
-        <p class="hint warning">
-          Only turn this off once break screen behavior has been confirmed good across log off/log on,
-          system start, and restart &mdash; it's recommended to keep it enabled for at least a week
-          first. It's a safety net, not something you'll trigger day to day.
-        </p>
-      {/if}
-    {/if}
-  </section>
-  {/if}
-
 
   <section class="card">
     <h2>Screen time</h2>
@@ -1710,6 +1526,193 @@
       </p>
     {/if}
   </section>
+
+  <AppLockCard {isAndroid} />
+
+
+  <section class="card">
+    <h2>Daily summary (local AI)</h2>
+    <p class="hint">
+      Adds a <strong>Summarize</strong> button to the Entries tab that sends that day's reflections
+      to an AI model you run yourself &mdash; e.g. Ollama or LM Studio &mdash; through its
+      OpenAI-compatible chat endpoint. Nothing is sent until you click it, and the summary isn't
+      saved.
+    </p>
+
+    {#if llmSummaryLoaded}
+      <form onsubmit={saveLlmSummaryBasicSetting}>
+        <label class="grow">
+          Endpoint URL
+          <input
+            type="text"
+            bind:value={llmSummaryApiUrl}
+            placeholder="http://localhost:11434/v1/chat/completions"
+          />
+        </label>
+        <label>
+          Model
+          <input type="text" bind:value={llmSummaryModel} placeholder="llama3.1" />
+        </label>
+        <button type="submit">Save</button>
+        {#if llmSummaryBasicSaved}
+          <span class="hint saved">Saved</span>
+        {/if}
+      </form>
+      <p class="hint">
+        Leave the URL blank to turn this off. Ollama:
+        <code>http://localhost:11434/v1/chat/completions</code>. LM Studio:
+        <code>http://localhost:1234/v1/chat/completions</code>. The model name must match one
+        installed on that server. An API key, timeout and custom prompt are under Advanced settings.
+      </p>
+    {/if}
+  </section>
+
+  {#if !isMobile}
+    <section class="card">
+      <h2>Auto-pause pomodoro on wakeup after sleep</h2>
+      {#if autoPauseOnWakeLoaded}
+        <div class="data-row">
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              checked={autoPauseOnWakeEnabled}
+              disabled={autoPauseOnWakeBusy}
+              onchange={toggleAutoPauseOnWakeEnabled}
+            />
+            Auto-pause after waking from sleep near a boundary
+          </label>
+        </div>
+        {#if isWindows}
+          <div class="data-row">
+            <label class="checkbox">
+              <input
+                type="checkbox"
+                checked={autoPauseOnWakeIncludeScreenOff}
+                disabled={autoPauseOnWakeBusy || !autoPauseOnWakeEnabled}
+                onchange={toggleAutoPauseOnWakeIncludeScreenOff}
+              />
+              Also count time with the screen locked or turned off
+            </label>
+          </div>
+        {/if}
+        <form onsubmit={saveAutoPauseOnWakeThresholds}>
+          <label>
+            PC was off for more than
+            <input type="number" min="1" max="180" bind:value={autoPauseOnWakeOffMinutes} />
+            minutes
+          </label>
+          <label>
+            and less than
+            <input type="number" min="1" max="60" bind:value={autoPauseOnWakeRemainingMinutes} />
+            minutes remain in the current session
+          </label>
+          <label>
+            Pause for
+            <input type="number" min="5" max="240" bind:value={autoPauseOnWakePauseMinutes} />
+            minutes
+          </label>
+          <button type="submit">Save</button>
+          {#if autoPauseOnWakeSaved}
+            <span class="hint saved">Saved</span>
+          {/if}
+        </form>
+        <p class="hint">
+          If you reopen this device after it's been asleep for a while{isWindows &&
+          autoPauseOnWakeIncludeScreenOff
+            ? " (or locked, or with its screen off)"
+            : ""}, right before a work or break boundary, Pomodoro mode pauses itself for the duration above instead of dropping
+          you straight into a session you never chose to start. Resumes on its own, exactly like
+          picking a pause from the Timer tab's dropdown &mdash; to resume early, set Pomodoro back
+          to On.
+        </p>
+      {/if}
+    </section>
+  {/if}
+
+  <section class="card">
+    <h2>Wellness check-in</h2>
+    
+    {#if checkinAutoCloseLoaded}
+      <form onsubmit={saveCheckinAutoClose}>
+        <label>
+          Auto-close after (minutes, if untouched)
+          <input type="number" min="1" max="60" bind:value={checkinAutoCloseMinutes} />
+        </label>
+        <button type="submit">Save</button>
+        {#if checkinAutoCloseSaved}
+          <span class="hint saved">Saved</span>
+        {/if}
+      </form>
+    {/if}
+
+    <!-- <p class="hint">
+      Comma-separated list of check-in items (Relaxed eyes, Exercise, Drank water, Washroom) that
+      should stay quiet -- no "Let's Try Next Time :)" nudge when switched off.
+    </p>
+
+    {#if wellnessExclusionsLoaded}
+      <form onsubmit={saveWellnessExclusions}>
+        <label class="grow">
+          Excluded items
+          <input type="text" bind:value={wellnessExclusions} placeholder="e.g. Washroom, Exercise" />
+        </label>
+        <button type="submit">Save</button>
+        {#if wellnessExclusionsSaved}
+          <span class="hint saved">Saved</span>
+        {/if}
+      </form>
+    {/if} -->
+
+  </section>
+
+
+  {#if !isMobile}
+  <section class="card">
+    <h2>If the break screen ever gets stuck</h2>
+    <ul class="hint">
+      <li>Press {forceCloseShortcutLabel} to force-close the break screen.</li>
+    </ul>
+
+    {#if forceCloseShortcutLoaded}
+      <div class="data-row slider-row">
+        <div
+          class="slide-track"
+          class:busy={forceCloseShortcutBusy}
+          role="switch"
+          aria-checked={forceCloseShortcutEnabled}
+          aria-label={`Enable ${forceCloseShortcutLabel} force-close shortcut`}
+          tabindex="0"
+          onpointerdown={onSliderPointerDown}
+          onpointermove={onSliderPointerMove}
+          onpointerup={onSliderPointerUp}
+          onpointercancel={onSliderPointerUp}
+          onkeydown={onSliderKeydown}
+        >
+          <span class="slide-track-label off">Disabled</span>
+          <span class="slide-track-label on">Enabled</span>
+          <div
+            class="slide-thumb"
+            class:accent={sliderOffset > SLIDER_MAX_OFFSET / 2}
+            style={`transform: translateX(${sliderOffset}px)`}
+          >
+            {sliderOffset > SLIDER_MAX_OFFSET / 2 ? "Enabled" : "Disabled"}
+          </div>
+        </div>
+        <span class="hint">Slide to enable/disable the force-close shortcut</span>
+      </div>
+
+      {#if forceCloseShortcutEnabled}
+        <p class="hint warning">
+          Only turn this off once break screen behavior has been confirmed good across log off/log on,
+          system start, and restart &mdash; it's recommended to keep it enabled for at least a week
+          first. It's a safety net, not something you'll trigger day to day.
+        </p>
+      {/if}
+    {/if}
+  </section>
+  {/if}
+
+
 
   {#if !isMobile}
   <section class="card">
