@@ -26,6 +26,8 @@
     saveBreakNotificationPersistentEnabled,
     getHideOverlayOnCallEnabled,
     saveHideOverlayOnCallEnabled,
+    getOverlayDueHabitsEnabled,
+    saveOverlayDueHabitsEnabled,
     getNightPauseConfig,
     saveNightPauseConfig,
     getAutoPauseOnWakeConfig,
@@ -143,6 +145,9 @@
   let hideOverlayOnCallEnabled = $state(true);
   let hideOverlayOnCallLoaded = $state(false);
   let hideOverlayOnCallBusy = $state(false);
+  let overlayDueHabitsEnabled = $state(true);
+  let overlayDueHabitsLoaded = $state(false);
+  let overlayDueHabitsBusy = $state(false);
 
   let nightPauseEnabled = $state(true);
   let nightPauseStart = $state("22:00");
@@ -576,6 +581,11 @@
   });
 
   onMount(async () => {
+    overlayDueHabitsEnabled = await getOverlayDueHabitsEnabled();
+    overlayDueHabitsLoaded = true;
+  });
+
+  onMount(async () => {
     quoteApiUrl = await getQuoteApiUrl();
     quoteApiUrlLoaded = true;
   });
@@ -756,6 +766,17 @@
       breakNotificationPersistentEnabled = next;
     } finally {
       breakNotificationPersistentBusy = false;
+    }
+  }
+
+  async function toggleOverlayDueHabits() {
+    const next = !overlayDueHabitsEnabled;
+    overlayDueHabitsBusy = true;
+    try {
+      await saveOverlayDueHabitsEnabled(next);
+      overlayDueHabitsEnabled = next;
+    } finally {
+      overlayDueHabitsBusy = false;
     }
   }
 
@@ -1222,6 +1243,23 @@
           <span class="hint saved">Saved</span>
         {/if}
       </form>
+    {/if}
+
+    {#if overlayDueHabitsLoaded}
+      <p class="hint">
+        Lists habits from the Habits tab that have reached their &ldquo;every N days&rdquo; target,
+        with a button to log each one. Turn it off if others can see your screen. Not shown on
+        Android when the break screen draws over other apps.
+      </p>
+      <label class="checkbox">
+        <input
+          type="checkbox"
+          checked={overlayDueHabitsEnabled}
+          disabled={overlayDueHabitsBusy}
+          onchange={toggleOverlayDueHabits}
+        />
+        Show due habits on the break screen
+      </label>
     {/if}
 
     {#if quoteApiUrlLoaded}

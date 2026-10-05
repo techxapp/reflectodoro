@@ -4,11 +4,13 @@ import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { error as logError } from "@tauri-apps/plugin-log";
 import {
+  dueHabits,
   normalizeHabitInput,
   normalizeLogInput,
   parseTargetDays,
   sortLogsNewestFirst,
   toHabitColor,
+  type DueHabit,
   type Habit,
   type HabitInput,
   type HabitLog,
@@ -930,6 +932,37 @@ export async function getHabitLogs(): Promise<HabitLog[]> {
       time: values[i * 3 + 1],
       note: values[i * 3 + 2],
     })),
+  );
+}
+
+/** Habits due today, for the break screen (see habits.ts's `dueHabits`). Two
+ * batched decrypts, no new SQL; rejects with a KEY_LOCKED error while the
+ * encryption key is locked, which the caller treats as "nothing to show". */
+export async function getDueHabits(): Promise<DueHabit[]> {
+  const [habits, logs] = await Promise.all([getHabits(), getHabitLogs()]);
+  return dueHabits(habits, logs, localDateStamp());
+}
+
+// Whether the break screen lists due habits. Frontend-only, like
+// screen_time_app_threshold_minutes: nothing in Rust reads it. Absent row =
+// on. Exists because habit names (e.g. a period tracker) would otherwise
+// appear on a screen other people may be able to see.
+const OVERLAY_DUE_HABITS_KEY = "overlay_due_habits_enabled";
+
+export async function getOverlayDueHabitsEnabled(): Promise<boolean> {
+  const db = await getDb();
+  const rows = await db.select<{ value: string }[]>(`SELECT value FROM app_setting WHERE key = $1`, [
+    OVERLAY_DUE_HABITS_KEY,
+  ]);
+  return rows[0]?.value !== "false";
+}
+
+export async function saveOverlayDueHabitsEnabled(enabled: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `INSERT INTO app_setting (key, value) VALUES ($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [OVERLAY_DUE_HABITS_KEY, enabled ? "true" : "false"],
   );
 }
 

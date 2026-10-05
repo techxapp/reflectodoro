@@ -173,6 +173,53 @@ export function habitStats(logs: HabitLog[], targetDays: number | null, todaySta
   };
 }
 
+export interface DueHabit {
+  habit: Habit;
+  /** Whole days since the last log, or null when never logged. */
+  daysSince: number | null;
+  /** Days past the target (0 = due today), or null when never logged. */
+  overdueDays: number | null;
+}
+
+/**
+ * Habits that are due on `todayStamp`: visible, with an "every N days" target,
+ * and either never logged or last logged at least N days ago. A habit without a
+ * target is never due (there's nothing to be due against). Due on the target
+ * day itself, a day earlier than the Habits tab's "Overdue" badge (which needs
+ * days-since > target). Most overdue first, never-logged last, ties by the
+ * habit's own sort order.
+ */
+export function dueHabits(habits: Habit[], logs: HabitLog[], todayStamp: string): DueHabit[] {
+  const logsByHabit = new Map<string, HabitLog[]>();
+  for (const log of logs) {
+    const list = logsByHabit.get(log.habitId);
+    if (list) list.push(log);
+    else logsByHabit.set(log.habitId, [log]);
+  }
+  const due: DueHabit[] = [];
+  for (const habit of habits) {
+    if (habit.archived || habit.targetDays === null) continue;
+    const { daysSince } = habitStats(logsByHabit.get(habit.id) ?? [], habit.targetDays, todayStamp);
+    if (daysSince === null) {
+      due.push({ habit, daysSince, overdueDays: null });
+    } else if (daysSince >= habit.targetDays) {
+      due.push({ habit, daysSince, overdueDays: daysSince - habit.targetDays });
+    }
+  }
+  return due.sort((a, b) => {
+    if ((a.overdueDays === null) !== (b.overdueDays === null)) return a.overdueDays === null ? 1 : -1;
+    if (a.overdueDays !== b.overdueDays) return (b.overdueDays ?? 0) - (a.overdueDays ?? 0);
+    return a.habit.sortOrder - b.habit.sortOrder;
+  });
+}
+
+/** "Due today", "Overdue by 2 days" or "Not logged yet". */
+export function formatDueStatus(item: DueHabit): string {
+  if (item.overdueDays === null) return "Not logged yet";
+  if (item.overdueDays <= 0) return "Due today";
+  return `Overdue by ${item.overdueDays} day${item.overdueDays === 1 ? "" : "s"}`;
+}
+
 /** "today", "yesterday", "5d ago", or "never". */
 export function formatDaysSince(daysSince: number | null): string {
   if (daysSince === null) return "never";

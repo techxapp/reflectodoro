@@ -20,7 +20,13 @@
     getReflectionTextForSlot,
     getQuoteApiUrl,
     getQuoteApiAttribution,
+    getDueHabits,
+    addHabitLog,
+    getOverlayDueHabitsEnabled,
+    isKeyLockedError,
+    KEY_STATE_EVENT,
   } from "$lib/db";
+  import { formatDueStatus, timeHHMM, type DueHabit } from "$lib/habits";
   import { breakQualifiesForQuote } from "$lib/grid";
   import { sanitizeAttributionHtml } from "$lib/sanitizeHtml";
 
@@ -44,6 +50,14 @@
   let taskListContent = $state("");
   let notToDoContent = $state("");
   let missedSlots = $state<string[]>([]);
+  // Habits due today (Habits tab, "every N days" target). Empty hides the
+  // panel entirely. habitBusyId guards a double-tap on a row's check button
+  // from writing two logs; dueGeneration discards a slow read that finished
+  // after a newer one started.
+  let dueList = $state<DueHabit[]>([]);
+  let habitBusyId = $state<string | null>(null);
+  let habitError = $state<string | null>(null);
+  let dueGeneration = 0;
   let comingNextText = $state<string | null>(null);
   let quoteApiUrl = $state<string | null>(null);
   let quoteText = $state<string | null>(null);
@@ -89,6 +103,7 @@
   let unlisten: UnlistenFn | null = null;
   let unlistenTasks: UnlistenFn | null = null;
   let unlistenNotToDo: UnlistenFn | null = null;
+  let unlistenKeyState: UnlistenFn | null = null;
   let taskSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let notToDoSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let tickInterval: ReturnType<typeof setInterval> | null = null;
@@ -149,6 +164,35 @@
     const next = nextWorkSlotStartIso(overlayState.current_slot_start);
     const text = await getReflectionTextForSlot(next);
     comingNextText = text !== null && !isSkipOnlyText(text) ? text : null;
+  }
+
+  /** Re-reads which habits are due today. Any failure -- a locked encryption
+   * key included -- just hides the panel: it's a convenience, and an error box
+   * on a break screen helps nobody. */
+  async function refreshDueHabits() {
+    const generation = ++dueGeneration;
+    let next: DueHabit[] = [];
+    try {
+      if (await getOverlayDueHabitsEnabled()) next = await getDueHabits();
+    } catch (e) {
+      if (!isKeyLockedError(e)) void logError(`[overlay] due habits: ${e}`);
+    }
+    if (generation === dueGeneration) dueList = next;
+  }
+
+  async function logDueHabit(item: DueHabit) {
+    if (habitBusyId !== null) return;
+    habitBusyId = item.habit.id;
+    habitError = null;
+    try {
+      await addHabitLog(item.habit.id, localDateStamp(), timeHHMM(), "");
+      await refreshDueHabits();
+    } catch (e) {
+      void logError(`[overlay] log habit failed: ${e}`);
+      habitError = e instanceof Error ? e.message : String(e);
+    } finally {
+      habitBusyId = null;
+    }
   }
 
   /** Fetches a fresh quote from the user-configured Settings endpoint
@@ -409,6 +453,8 @@
         // give the panels next to it.
         taskListContent = await getTaskList(localDateStamp());
         notToDoContent = await getNotToDoList(localDateStamp());
+        habitError = null;
+        await refreshDueHabits();
         // Same freshness reasoning as the task lists above -- a cheap local
         // read, re-run on every slot-start change so a Settings edit made
         // while this window sat precreated/hidden shows up on the next
@@ -456,6 +502,11 @@
     taskListContent = await getTaskList(localDateStamp());
     notToDoContent = await getNotToDoList(localDateStamp());
     quoteAttribution = await getQuoteApiAttribution();
+    await refreshDueHabits();
+
+    // Habit names are encrypted, so a break that opened while the key was
+    // locked has no list until the user unlocks it.
+    unlistenKeyState = await listen(KEY_STATE_EVENT, () => void refreshDueHabits());
 
     unlistenTasks = await listenForTaskListUpdates((content) => {
       taskListContent = content;
@@ -473,6 +524,7 @@
     unlisten?.();
     unlistenTasks?.();
     unlistenNotToDo?.();
+    unlistenKeyState?.();
     if (tickInterval) clearInterval(tickInterval);
     if (taskSaveTimer) clearTimeout(taskSaveTimer);
     if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
@@ -488,6 +540,7 @@
   <p class="clock">{clockLabel}</p>
 
   <div class="grid">
+    <div class="main-col">
     <section class="panel primary">
       <p class="timer">{remainingSeconds > 0 ? remainingLabel : "Time's up"}</p>
 
@@ -564,6 +617,38 @@
         <p class="hint">Reflection is still required either way.</p>
       </div>
     </section>
+
+    {#if dueList.length > 0}
+      <section class="panel habits-due">
+        <h2>Habits due</h2>
+        <ul class="habit-list">
+          {#each dueList as item (item.habit.id)}
+            <li class="habit-row">
+              <span class="habit-dot" style="background: var(--habit-{item.habit.color})"></span>
+              <span class="habit-name">
+                {#if item.habit.emoji}{item.habit.emoji}{/if}
+                {item.habit.name}
+              </span>
+              <span class="habit-status">{formatDueStatus(item)}</span>
+              <button
+                type="button"
+                class="habit-log"
+                title="Log it now"
+                aria-label="Log {item.habit.name} now"
+                disabled={habitBusyId !== null}
+                onclick={() => logDueHabit(item)}
+              >
+                ✓
+              </button>
+            </li>
+          {/each}
+        </ul>
+        {#if habitError}
+          <p class="hint error">Couldn't log: {habitError}</p>
+        {/if}
+      </section>
+    {/if}
+    </div>
 
     <div class="side-col">
       <section class="panel side">
@@ -713,10 +798,51 @@
     padding: 28px;
   }
 
-  .side-col {
+  .side-col,
+  .main-col {
     display: flex;
     flex-direction: column;
     gap: 20px;
+  }
+
+  .habit-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .habit-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .habit-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
+  }
+
+  .habit-name {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .habit-status {
+    font-size: 0.85em;
+    opacity: 0.65;
+    white-space: nowrap;
+  }
+
+  .habit-log {
+    margin-top: 0;
+    padding: 4px 12px;
+    flex: none;
   }
 
   .quote-text {
