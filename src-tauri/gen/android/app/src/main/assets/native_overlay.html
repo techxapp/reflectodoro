@@ -231,13 +231,13 @@
       </div>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="task-list-panel">
       <h2>Most Important Tasks Today</h2>
       <textarea id="task-list" rows="5" placeholder="1.&#10;2.&#10;3."></textarea>
       <p class="hint">Auto-saves as you type.</p>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="not-to-do-panel">
       <h2>Not To Do Tasks Today</h2>
       <textarea id="not-to-do-list" rows="3" placeholder="1.&#10;2.&#10;3."></textarea>
       <p class="hint">Auto-saves as you type.</p>
@@ -267,6 +267,7 @@
       coming_next_text: "",
       quote_text: "",
       quote_attribution_html: "",
+      app_lock_enabled: false,
     };
 
     // Allowlist HTML sanitizer for the Quote API attribution credit line --
@@ -358,6 +359,8 @@
     var taskListEl = document.getElementById("task-list");
     var notToDoListEl = document.getElementById("not-to-do-list");
     var spacerEl = document.getElementById("spacer");
+    var taskListPanelEl = document.getElementById("task-list-panel");
+    var notToDoPanelEl = document.getElementById("not-to-do-panel");
 
     function pad(n) { return String(n).padStart(2, "0"); }
 
@@ -458,6 +461,12 @@
         }
       }
 
+      // App lock on (app_lock.rs): this overlay can't ask for the PIN, so
+      // nothing written earlier is shown, and Rust sends these blank anyway.
+      taskListPanelEl.style.display = state.app_lock_enabled ? "none" : "";
+      notToDoPanelEl.style.display = state.app_lock_enabled ? "none" : "";
+      if (state.app_lock_enabled) return;
+
       // Never while the field has focus -- a push triggered by something
       // unrelated (e.g. a breakit attempt) would otherwise clobber
       // in-progress typing with the last value Rust knew about.
@@ -529,6 +538,7 @@
     });
 
     taskListEl.addEventListener("input", function () {
+      if (state.app_lock_enabled) return;
       if (taskSaveTimer) clearTimeout(taskSaveTimer);
       taskSaveTimer = setTimeout(function () {
         window.AndroidBridge.saveTaskList(taskListEl.value);
@@ -536,6 +546,7 @@
     });
 
     notToDoListEl.addEventListener("input", function () {
+      if (state.app_lock_enabled) return;
       if (notToDoSaveTimer) clearTimeout(notToDoSaveTimer);
       notToDoSaveTimer = setTimeout(function () {
         window.AndroidBridge.saveNotToDoList(notToDoListEl.value);

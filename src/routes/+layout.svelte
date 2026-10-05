@@ -15,6 +15,7 @@
     type ThemeChangedPayload,
   } from "$lib/db";
   import KeyUnlockModal from "$lib/KeyUnlockModal.svelte";
+  import AppLockModal from "$lib/AppLockModal.svelte";
 
   let { children } = $props();
 
@@ -301,6 +302,8 @@
 
 <!-- Every window, special ones included: see KeyUnlockModal's doc comment. -->
 <KeyUnlockModal />
+<!-- Same: every window, so the break screen and check-in ask for the PIN too. -->
+<AppLockModal />
 
 <style>
   .app-shell {

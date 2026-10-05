@@ -233,6 +233,8 @@ static AWAY: AtomicBool = AtomicBool::new(false);
 /// over-counts by at most the idle stretch before the display turned off.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn user_left(at: DateTime<Utc>) {
+    // Screen locked or display off: lock the app too.
+    crate::app_lock::left_app();
     AWAY.store(true, Ordering::SeqCst);
     record_focus_change_at(None, at.min(Utc::now()));
 }
@@ -586,6 +588,17 @@ mod platform_impl {
     }
 
     fn handle_foreground(hwnd: HWND) {
+        // App lock: focus moved to another process's window. Checked before
+        // (and independently of) screen time's own gating, and skipped for
+        // an invalid hwnd, which also shows up mid-switch between our own
+        // windows.
+        if !hwnd.is_invalid() {
+            let mut pid = 0u32;
+            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+            if pid != 0 && pid != std::process::id() {
+                crate::app_lock::left_app();
+            }
+        }
         if hwnd.is_invalid() {
             // No foreground window at all (the desktop, a switch in flight) --
             // still a switch away from whatever was focused.
@@ -800,6 +813,10 @@ mod platform_impl {
     }
 
     fn record(app: Option<Retained<NSRunningApplication>>) {
+        // App lock: another app is frontmost.
+        if app.as_ref().is_some_and(|a| a.processIdentifier() as u32 != std::process::id()) {
+            crate::app_lock::left_app();
+        }
         record_focus_change(app.and_then(|a| resolve(&a)));
     }
 

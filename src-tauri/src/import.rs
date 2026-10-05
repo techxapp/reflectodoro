@@ -1151,7 +1151,20 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
         sqlx::query("DELETE FROM habit_log").execute(&mut *tx).await.map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM habit").execute(&mut *tx).await.map_err(|e| e.to_string())?;
         if include_settings {
-            sqlx::query("DELETE FROM app_setting").execute(&mut *tx).await.map_err(|e| e.to_string())?;
+            // Device-local settings survive a replace-mode wipe: the key's
+            // location (key_store::LOCATION_SETTING) and the app lock PIN,
+            // recovery code and their attempt counters
+            // (app_lock::DEVICE_LOCAL_SETTINGS).
+            let kept: Vec<&str> = std::iter::once(crate::key_store::LOCATION_SETTING)
+                .chain(crate::app_lock::DEVICE_LOCAL_SETTINGS)
+                .collect();
+            let placeholders = vec!["?"; kept.len()].join(", ");
+            let wipe_sql = format!("DELETE FROM app_setting WHERE key NOT IN ({placeholders})");
+            let mut wipe = sqlx::query(&wipe_sql);
+            for key in &kept {
+                wipe = wipe.bind(*key);
+            }
+            wipe.execute(&mut *tx).await.map_err(|e| e.to_string())?;
         }
     }
 
@@ -1180,7 +1193,11 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
     if include_settings {
         // Where this device's encryption key lives is never another
         // device's call (see key_store::LOCATION_SETTING).
-        for row in data.app_setting.iter().filter(|r| r.key != crate::key_store::LOCATION_SETTING) {
+        // Nor is this device's app lock PIN (app_lock::DEVICE_LOCAL_SETTINGS).
+        for row in data.app_setting.iter().filter(|r| {
+            r.key != crate::key_store::LOCATION_SETTING
+                && !crate::app_lock::DEVICE_LOCAL_SETTINGS.contains(&r.key.as_str())
+        }) {
             let sql = if mode == ImportMode::Merge {
                 "INSERT INTO app_setting (key, value) VALUES (?, ?)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value"

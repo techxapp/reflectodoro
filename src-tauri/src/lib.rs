@@ -1,5 +1,6 @@
 #[cfg(target_os = "android")]
 mod android_bridge;
+mod app_lock;
 mod breakit;
 mod commands;
 mod crypto;
@@ -1266,6 +1267,14 @@ pub fn run() {
             commands::summarize_reflections,
             commands::default_llm_summary_system_prompt,
             import::import_data,
+            app_lock::app_lock_status,
+            app_lock::app_lock_engage,
+            app_lock::app_lock_unlock,
+            app_lock::app_lock_set_pin,
+            app_lock::app_lock_regenerate_recovery_code,
+            app_lock::app_lock_recover,
+            app_lock::app_lock_disable,
+            app_lock::app_lock_forgot_pin_erase,
             key_store::get_key_storage_status,
             key_store::retry_key_resolution,
             key_store::unlock_key_file,
@@ -1322,6 +1331,10 @@ pub fn run() {
                 // running to paint at all. It exits the process once dismissed.
                 return Ok(());
             }
+
+            // Before any window can show content: a set PIN means the app
+            // starts locked (see app_lock.rs).
+            tauri::async_runtime::block_on(app_lock::load(&handle));
 
             #[cfg(desktop)]
             {
@@ -1518,6 +1531,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app, _event| {
+            // Linux has no global foreground hook (Windows/macOS lock from
+            // screen_time.rs's watcher instead), so watch our own windows.
+            #[cfg(target_os = "linux")]
+            if let tauri::RunEvent::WindowEvent { event: WindowEvent::Focused(false), .. } = &_event {
+                app_lock::window_focus_lost(_app);
+            }
             // A suspended iOS app's scheduler sleep is frozen; resuming wakes
             // it so a break that started meanwhile shows immediately, and the
             // Live Activity (which can only be started in the foreground) is

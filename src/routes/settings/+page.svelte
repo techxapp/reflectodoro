@@ -72,6 +72,7 @@
     type PairedDeviceInfo,
   } from "$lib/db";
   import EncryptionKeyCard from "$lib/EncryptionKeyCard.svelte";
+  import AppLockCard from "$lib/AppLockCard.svelte";
 
   /** Settings -> Advanced is collapsed by default; the open/closed choice is
    * a per-viewer convenience, so browser storage (which can throw or come
@@ -1098,6 +1099,8 @@
       </div>
     {/if}
   </section>
+
+  <AppLockCard {isAndroid} />
 
   <section class="card">
     <h2>Session schedule</h2>
