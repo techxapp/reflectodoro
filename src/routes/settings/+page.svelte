@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { save as saveDialog, open as openDialog, ask } from "@tauri-apps/plugin-dialog";
   import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
@@ -95,6 +95,113 @@
       // storage unavailable -- the toggle still works for this visit
     }
   }
+
+  /** Section list in the left-hand navigation panel. Each id is on its card in
+   * the markup below; the desktop-only cards are dropped on mobile, the same
+   * condition that hides the cards themselves. */
+  const sectionNav = $derived(
+    [
+      { id: "appearance", label: "Appearance" },
+      { id: "session-schedule", label: "Schedule" },
+      { id: "break-screen", label: "Break screen" },
+      { id: "screen-time", label: "Screen time" },
+      { id: "app-lock", label: "App lock" },
+      { id: "daily-summary", label: "Daily summary" },
+      { id: "auto-pause", label: "Auto-pause", desktopOnly: true },
+      { id: "wellness-checkin", label: "Check-in" },
+      { id: "stuck-break-screen", label: "Stuck break screen", desktopOnly: true },
+      { id: "startup", label: "Startup", desktopOnly: true },
+      { id: "data", label: "Data" },
+      { id: "paired-devices", label: "Paired devices" },
+      { id: "advanced", label: "Advanced" },
+    ].filter((s) => !(s.desktopOnly && isMobile)),
+  );
+
+  /** Scrolls rather than following the hash, so SvelteKit's router never
+   * sees a navigation. "Advanced" also expands that section, since its
+   * cards don't exist until it's open. */
+  async function jumpToSection(event: MouseEvent, id: string) {
+    event.preventDefault();
+    if (id === "advanced" && !advancedOpen) {
+      toggleAdvanced();
+      await tick();
+    }
+    activeSection = id;
+    document
+      .getElementById(`settings-${id}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  /** Highlights the section currently at the top of the content. The page
+   * scrolls inside the layout's <main>, not the window, so listen there. */
+  let activeSection = $state("appearance");
+  let navEl = $state<HTMLElement | null>(null);
+
+  $effect(() => {
+    const scroller = navEl?.closest("main");
+    if (!scroller) return;
+    const ids = sectionNav.map((s) => s.id);
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const top = scroller.getBoundingClientRect().top + 96;
+      let current = ids[0];
+      for (const id of ids) {
+        const el = document.getElementById(`settings-${id}`);
+        if (el && el.getBoundingClientRect().top <= top) current = id;
+      }
+      // Scrolled to the bottom: the last sections may never reach the top.
+      if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) {
+        current = ids[ids.length - 1];
+      }
+      activeSection = current;
+    };
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    update();
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  });
+
+  /** Narrow screens only, where the panel is one sideways-scrolling row with
+   * its scrollbar hidden: fade whichever edge has more chips beyond it, and
+   * keep the active chip in view as the page scrolls. On the side panel the
+   * track never overflows sideways, so all of this is a no-op there. */
+  let trackEl = $state<HTMLElement | null>(null);
+  let fadeStart = $state(false);
+  let fadeEnd = $state(false);
+
+  function updateFades() {
+    if (!trackEl) return;
+    const max = trackEl.scrollWidth - trackEl.clientWidth;
+    fadeStart = trackEl.scrollLeft > 1;
+    fadeEnd = trackEl.scrollLeft < max - 1;
+  }
+
+  $effect(() => {
+    if (!trackEl) return;
+    const observer = new ResizeObserver(updateFades);
+    observer.observe(trackEl);
+    updateFades();
+    return () => observer.disconnect();
+  });
+
+  $effect(() => {
+    const id = activeSection;
+    if (!trackEl || trackEl.scrollWidth <= trackEl.clientWidth + 1) return;
+    const chip = trackEl.querySelector<HTMLElement>(
+      `a[href="#settings-${id}"]`,
+    );
+    if (!chip) return;
+    trackEl.scrollTo({
+      left: chip.offsetLeft - (trackEl.clientWidth - chip.offsetWidth) / 2,
+      behavior: "smooth",
+    });
+  });
 
   let themePreference = $state<ThemePreference>("auto");
   let themeLoaded = $state(false);
@@ -1104,923 +1211,956 @@
 </script>
 
 <div class="page">
-
-  <section class="card">
-    <h2>Appearance</h2>
-    {#if themeLoaded}
-      <div class="data-row">
-        <label>
-          Theme
-          <select value={themePreference} onchange={handleThemeSelect}>
-            <option value="auto">Auto (based on OS theme)</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
-      </div>
-    {/if}
-  </section>
-
-
-  <section class="card">
-    <h2>Session schedule</h2>
-    <p class="hint">
-      <strong>Normal</strong><br/>
-      Work runs :00&ndash;:25 and :30&ndash;:55 each hour<br/>
-      Breaks run :25&ndash;:30 (5 min) and :55&ndash;:00 (5 min)
-    </p>
-    <p class="hint">
-      <strong>Concentration</strong><br/>
-      Work runs :00&ndash;:25 and :26&ndash;:50 each hour<br/>
-      Breaks run :25&ndash;:26 (1 min) and :50&ndash;:00 (10 min)
-    </p>
-    <p class="hint">To change the mode, use the mode selector on the Timer screen.</p>
-  </section>
-
-
-  <section class="card">
-    <h2>Break screen</h2>
-    <p class="hint">
-      Typing a captcha is the way of early-exit in case of emergency &mdash;
-      it still requires the reflection ("what did I do?") too.
-      Emergency exits are capped per day &mdash; once used up, only the
-      reflection-plus-timer path is left for the rest of the day.
-      If neither happens,
-      the screen auto-closes on its own after the timeout below.
-    </p>
-
-    {#if loaded}
-      <form onsubmit={save}>
-        <label>
-          Captcha length
-          <input type="number" min="8" max="25" bind:value={length} />
-        </label>
-        <label class="checkbox">
-          <input type="checkbox" bind:checked={includeSpecial} />
-          Include special characters
-        </label>
-        <label>
-          Emergency exits per day
-          <input type="number" min="1" max="48" bind:value={maxPerDay} />
-        </label>
-        <button type="submit">Save</button>
-        {#if saved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-    {/if}
-
-    {#if overlayAutoCloseLoaded}
-      <form onsubmit={saveOverlayAutoClose}>
-        <label>
-          Auto-close after (minutes past break end)
-          <input type="number" min="1" max="15" bind:value={overlayAutoCloseMinutes} />
-        </label>
-        <button type="submit">Save</button>
-        {#if overlayAutoCloseSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-    {/if}
-
-    {#if overlayDueHabitsLoaded}
-      <p class="hint">
-        Lists habits from the Habits tab that have reached their &ldquo;every N days&rdquo; target,
-        with a button to log each one. Turn it off if others can see your screen. Not shown on
-        Android when the break screen draws over other apps.
-      </p>
-      <label class="checkbox">
-        <input
-          type="checkbox"
-          checked={overlayDueHabitsEnabled}
-          disabled={overlayDueHabitsBusy}
-          onchange={toggleOverlayDueHabits}
-        />
-        Show due habits on the break screen
-      </label>
-    {/if}
-
-    {#if quoteApiUrlLoaded}
-      <form onsubmit={saveQuoteApiUrlSetting}>
-        <label class="grow">
-          Quote API URL
-          <input
-            type="text"
-            bind:value={quoteApiUrl}
-            placeholder="https://api.example.com/quote"
-          />
-        </label>
-        <button type="submit">Save</button>
-        {#if quoteApiUrlSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-      <p class="hint">
-        Shown at the end of the break screen. Leave blank to disable. Expects a JSON response with
-        a quote field (e.g. <code>quote</code>/<code>content</code>/<code>text</code>, optionally
-        <code>author</code>) &mdash; falls back to showing the raw response text otherwise.
-      </p>
-    {/if}
-
-    {#if quoteApiAttributionLoaded}
-      <form onsubmit={saveQuoteApiAttributionSetting}>
-        <label class="grow">
-          Quote API attribution
-          <textarea
-            rows="2"
-            bind:value={quoteApiAttribution}
-            placeholder={defaultQuoteApiAttribution}
-          ></textarea>
-        </label>
-        <button type="submit">Save</button>
-        <button type="button" onclick={resetQuoteApiAttributionToDefault}>Reset to default</button>
-        {#if quoteApiAttributionSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-      {#if quoteApiAttribution.trim()}
-        <p class="hint quote-attribution-preview">
-          Preview: {@html sanitizeAttributionHtml(quoteApiAttribution)}
-        </p>
-      {/if}
-      <p class="hint">
-        Shown under the quote, credited to whichever API you're calling above. Accepts a small set
-        of HTML (links and basic formatting) &mdash; anything else is stripped before it's shown.
-        Leave blank to show no attribution. <strong
-          >If you change the Quote API URL, check that service's own documentation and update this
-          attribution to match its requirements &mdash; we are not responsible for any compliance
-          issues arising from missing or incorrect attribution.</strong
+  <nav class="section-nav" aria-label="Settings sections" bind:this={navEl}>
+    <div
+      class="nav-track"
+      class:fade-start={fadeStart}
+      class:fade-end={fadeEnd}
+      bind:this={trackEl}
+      onscroll={updateFades}
+    >
+      {#each sectionNav as section (section.id)}
+        <a
+          href={`#settings-${section.id}`}
+          class:active={activeSection === section.id}
+          aria-current={activeSection === section.id ? "location" : undefined}
+          onclick={(e) => jumpToSection(e, section.id)}>{section.label}</a
         >
-      </p>
-    {/if}
+      {/each}
+    </div>
+  </nav>
 
-    {#if isAndroid && overlayChecked}
-      <div class="data-row">
-        <span>Break screen (draw over other apps): {overlayGranted ? "Granted" : "Not granted"}</span>
-        {#if !overlayGranted}
-          <button type="button" onclick={openOverlaySettings}>Open settings&hellip;</button>
-        {/if}
-      </div>
-      <p class="hint">
-        Recommended. Without it, a break can only reach you via a notification instead of
-        appearing directly over whatever else you're doing.
-      </p>
-    {/if}
+  <div class="content">
 
-    {#if isAndroid && exactAlarmChecked}
-      <div class="data-row">
-        <span>Alarms &amp; reminders: {exactAlarmGranted ? "Granted" : "Not granted"}</span>
-        {#if !exactAlarmGranted}
-          <button type="button" onclick={openExactAlarmSettings}>Open settings&hellip;</button>
-        {/if}
-      </div>
-      <p class="hint">
-        Recommended. Without it, the background timer's wake alarm is inexact and can't reliably
-        bring the break screen forward over another app you're actively using.
-      </p>
-    {/if}
-
-    {#if (isAndroid || isIos) && notificationChecked}
-      <div class="data-row">
-        <span>Notifications: {notificationGranted ? "Granted" : "Not granted"}</span>
-        {#if !notificationGranted}
-          <button type="button" onclick={grantNotifications}>Enable notifications</button>
-        {/if}
-      </div>
-      {#if isIos}
-        <p class="hint">
-          Required on iOS: a break notification is the only way a break can reach you while the app
-          isn't open. iOS asks only once &mdash; if you declined, turn them on in the iOS Settings app
-          under Reflectodoro &rarr; Notifications.
-        </p>
-      {:else}
-        <p class="hint">
-          Without it, the background timer's running indicator and the break reminder notification
-          both silently don't show. Onboarding offers this grant on first run; this is here for
-          anyone who skipped it or revoked it since.
-        </p>
-      {/if}
-    {/if}
-
-    {#if isIos}
-      <p class="hint">
-        On iPhone the break screen can only appear inside this app: iOS doesn't let apps cover other
-        apps or open themselves. When a break starts you get a notification, and a Live Activity on
-        the Lock Screen and Dynamic Island counts down to the next break &mdash; open the app to
-        reflect. If Live Activities don't show, turn them on in the iOS Settings app under
-        Reflectodoro.
-      </p>
-    {/if}
-
-    {#if isAndroid && breakNotificationPersistentLoaded}
-      <div class="data-row">
-        <label class="checkbox">
-          <input
-            type="checkbox"
-            checked={breakNotificationPersistentEnabled}
-            disabled={breakNotificationPersistentBusy}
-            onchange={toggleBreakNotificationPersistent}
-          />
-          Make the break notification non-dismissible until the break is resolved
-        </label>
-      </div>
-      <p class="hint">
-        Only used when "Display over other apps" isn't granted &mdash; with it, the break screen
-        itself covers everything and the notification is a plain, dismissible one. Only affects a
-        break that starts while you're using another app &mdash; it can't wake or take over a
-        locked screen.
-      </p>
-    {/if}
-
-    {#if isAndroid && hideOverlayOnCallLoaded}
-      <div class="data-row">
-        <label class="checkbox">
-          <input
-            type="checkbox"
-            checked={hideOverlayOnCallEnabled}
-            disabled={hideOverlayOnCallBusy}
-            onchange={toggleHideOverlayOnCall}
-          />
-          Hide the break screen during phone calls
-        </label>
-      </div>
-      <p class="hint">
-        While a call is ringing or in progress, the break screen steps aside so you can answer,
-        and returns when the call ends. Applies from the next break.
-      </p>
-    {/if}
-
-    {#if isAndroid && nightPauseLoaded}
-      <div class="data-row">
-        <label class="checkbox">
-          <input
-            type="checkbox"
-            checked={nightPauseEnabled}
-            disabled={nightPauseBusy}
-            onchange={toggleNightPauseEnabled}
-          />
-          Pause breaks overnight
-        </label>
-      </div>
-      <form onsubmit={saveNightPauseWindow}>
-        <label>
-          Starts at
-          <input type="time" bind:value={nightPauseStart} />
-        </label>
-        <label>
-          Ends at
-          <input type="time" bind:value={nightPauseEnd} />
-        </label>
-        <button type="submit">Save</button>
-        {#if nightPauseSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-      <p class="hint">
-        Pomodoro mode pauses itself for this window (it can wrap past midnight, like the default
-        10pm&ndash;8am) and resumes on its own at the end, exactly like picking a pause from the
-        Timer tab's dropdown. To resume early, set Pomodoro back to On &mdash; it stays on for the
-        rest of that night. A break already open when the window starts still runs its course, and
-        nothing missed is made up afterward.
-      </p>
-    {/if}
-
-    {#if isMacos}
-      <p class="hint">
-        Cmd+Tab is always blocked during a break, and the break screen always stays visible if you
-        swipe to another desktop Space or into another app's full-screen window.
-      </p>
-    {/if}
-
-    {#if isMacos && macosHideMenuBarDockLoaded}
-      <div class="data-row">
-        <label class="checkbox">
-          <input
-            type="checkbox"
-            checked={macosHideMenuBarDockEnabled}
-            disabled={macosHideMenuBarDockBusy}
-            onchange={toggleMacosHideMenuBarDock}
-          />
-          Also hide the menu bar &amp; Dock during a break
-        </label>
-      </div>
-      <p class="hint">
-        Off by default since it's a bigger change to your desktop than anything else here. Either
-        way the Dock auto-hides for the duration of a break &mdash; macOS won't let an app block
-        Cmd+Tab without that. Like the rest of the break screen, it's a strong deterrent, not an
-        absolute lock: Activity Monitor/Force Quit always still works.
-      </p>
-    {/if}
-
-    {#if isMacos && macosMediaKeyFallbackLoaded}
-      <div class="data-row">
-        <label class="checkbox">
-          <input
-            type="checkbox"
-            checked={macosMediaKeyFallbackEnabled}
-            disabled={macosMediaKeyFallbackBusy}
-            onchange={toggleMacosMediaKeyFallback}
-          />
-          Pause media the old way (needs Accessibility access)
-        </label>
-      </div>
-      <p class="hint">
-        {#if mediaRemoteAvailable === false}
-          This Mac can't use the permission-free method, so Reflectodoro is already falling back to
-          the old one automatically &mdash; you don't need this switch.
-        {:else}
-          Leave this off. Reflectodoro normally pauses media through a method that needs no
-          permission at all. Turning this on switches to sending a Play/Pause key instead, which
-          needs Accessibility access and is a blind toggle &mdash; it can resume media you'd
-          already paused yourself. Only worth trying if media isn't pausing on your breaks.
-        {/if}
-      </p>
-    {/if}
-  </section>
-
-
-  <section class="card">
-    <h2>Screen time</h2>
-    <p class="hint">
-      Records which app has focus and for how long, so the Entries tab can show where your day
-      actually went. Everything stays on this device &mdash; nothing is uploaded, and only the app's
-      name is recorded, never window titles or anything you type.
-    </p>
-    {#if isWindows}
-      <p class="hint">
-        Time with the screen locked or turned off isn't counted. When the screen turns off on its own,
-        the idle minutes before it (up to your power plan's screen timeout) are left out too.
-      </p>
-    {/if}
-
-    {#if screenTimeTrackingLoaded}
-      <div class="data-row">
-        <label class="checkbox">
-          <input
-            type="checkbox"
-            checked={screenTimeTrackingEnabled}
-            disabled={screenTimeTrackingBusy}
-            onchange={toggleScreenTimeTracking}
-          />
-          Track screen time
-        </label>
-      </div>
-    {/if}
-
-    {#if isIos}
-      <p class="hint warning">
-        Not available on iPhone: iOS doesn't let apps see which other apps are in use.
-      </p>
-    {:else if osResolved && !isWindows && !isAndroid && !isMacos}
-      <p class="hint warning">
-        Not captured on this platform yet &mdash; Windows, macOS and Android are the only ones recording
-        so far. The setting is here, but nothing lands until support for this platform ships.
-      </p>
-    {/if}
-
-    {#if isAndroid && usageStatsChecked}
-      <div class="data-row">
-        <span>Usage access: {usageStatsGranted ? "Granted" : "Not granted"}</span>
-        {#if !usageStatsGranted}
-          <button type="button" onclick={openUsageStatsSettings}>Open settings&hellip;</button>
-        {/if}
-      </div>
-      <p class="hint">
-        Required for screen time on Android &mdash; there's no push notification for "which app
-        just took focus" without this special-access grant, so tracking records nothing until
-        it's on.
-      </p>
-    {/if}
-
-    {#if screenTimeAppThresholdLoaded}
-      <form onsubmit={saveScreenTimeAppThreshold}>
-        <label>
-          Hide apps under (minutes)
-          <input type="number" min="0" max="1440" bind:value={screenTimeAppThresholdMinutes} />
-        </label>
-        <button type="submit">Save</button>
-        {#if screenTimeAppThresholdSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-      <p class="hint">
-        Apps with less focus time than this on a given day are left out of the Entries tab's
-        breakdown for that day.
-      </p>
-    {/if}
-
-    {#if deviceNameLoaded}
-      <form onsubmit={saveDeviceNameSetting}>
-        <label>
-          Device name
-          <input type="text" bind:value={deviceName} placeholder="e.g. Work laptop" />
-        </label>
-        <button type="submit">Save</button>
-        {#if deviceNameSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-      <p class="hint">
-        Stamped onto new screen time rows so the same app on two machines stays distinguishable if
-        you ever import one device's data into another. Defaults to this computer's name.
-      </p>
-    {/if}
-  </section>
-
-  <AppLockCard {isAndroid} />
-
-
-  <section class="card">
-    <h2>Daily summary (local AI)</h2>
-    <p class="hint">
-      Adds a <strong>Summarize</strong> button to the Entries tab that sends that day's reflections
-      to an AI model you run yourself &mdash; e.g. Ollama or LM Studio &mdash; through its
-      OpenAI-compatible chat endpoint. Nothing is sent until you click it, and the summary isn't
-      saved.
-    </p>
-
-    {#if llmSummaryLoaded}
-      <form onsubmit={saveLlmSummaryBasicSetting}>
-        <label class="grow">
-          Endpoint URL
-          <input
-            type="text"
-            bind:value={llmSummaryApiUrl}
-            placeholder="http://localhost:11434/v1/chat/completions"
-          />
-        </label>
-        <label>
-          Model
-          <input type="text" bind:value={llmSummaryModel} placeholder="llama3.1" />
-        </label>
-        <button type="submit">Save</button>
-        {#if llmSummaryBasicSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-      <p class="hint">
-        Leave the URL blank to turn this off. Ollama:
-        <code>http://localhost:11434/v1/chat/completions</code>. LM Studio:
-        <code>http://localhost:1234/v1/chat/completions</code>. The model name must match one
-        installed on that server. An API key, timeout and custom prompt are under Advanced settings.
-      </p>
-    {/if}
-  </section>
-
-  {#if !isMobile}
-    <section class="card">
-      <h2>Auto-pause pomodoro on wakeup after sleep</h2>
-      {#if autoPauseOnWakeLoaded}
+    <section class="card" id="settings-appearance">
+      <h2>Appearance</h2>
+      {#if themeLoaded}
         <div class="data-row">
-          <label class="checkbox">
-            <input
-              type="checkbox"
-              checked={autoPauseOnWakeEnabled}
-              disabled={autoPauseOnWakeBusy}
-              onchange={toggleAutoPauseOnWakeEnabled}
-            />
-            Auto-pause after waking from sleep near a boundary
+          <label>
+            Theme
+            <select value={themePreference} onchange={handleThemeSelect}>
+              <option value="auto">Auto (based on OS theme)</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
           </label>
         </div>
-        {#if isWindows}
-          <div class="data-row">
-            <label class="checkbox">
-              <input
-                type="checkbox"
-                checked={autoPauseOnWakeIncludeScreenOff}
-                disabled={autoPauseOnWakeBusy || !autoPauseOnWakeEnabled}
-                onchange={toggleAutoPauseOnWakeIncludeScreenOff}
-              />
-              Also count time with the screen locked or turned off
-            </label>
-          </div>
-        {/if}
-        <form onsubmit={saveAutoPauseOnWakeThresholds}>
+      {/if}
+    </section>
+
+
+    <section class="card" id="settings-session-schedule">
+      <h2>Session schedule</h2>
+      <p class="hint">
+        <strong>Normal</strong><br/>
+        Work runs :00&ndash;:25 and :30&ndash;:55 each hour<br/>
+        Breaks run :25&ndash;:30 (5 min) and :55&ndash;:00 (5 min)
+      </p>
+      <p class="hint">
+        <strong>Concentration</strong><br/>
+        Work runs :00&ndash;:25 and :26&ndash;:50 each hour<br/>
+        Breaks run :25&ndash;:26 (1 min) and :50&ndash;:00 (10 min)
+      </p>
+      <p class="hint">To change the mode, use the mode selector on the Timer screen.</p>
+    </section>
+
+
+    <section class="card" id="settings-break-screen">
+      <h2>Break screen</h2>
+      <p class="hint">
+        Typing a captcha is the way of early-exit in case of emergency &mdash;
+        it still requires the reflection ("what did I do?") too.
+        Emergency exits are capped per day &mdash; once used up, only the
+        reflection-plus-timer path is left for the rest of the day.
+        If neither happens,
+        the screen auto-closes on its own after the timeout below.
+      </p>
+
+      {#if loaded}
+        <form onsubmit={save}>
           <label>
-            PC was off for more than
-            <input type="number" min="1" max="180" bind:value={autoPauseOnWakeOffMinutes} />
-            minutes
+            Captcha length
+            <input type="number" min="8" max="25" bind:value={length} />
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" bind:checked={includeSpecial} />
+            Include special characters
           </label>
           <label>
-            and less than
-            <input type="number" min="1" max="60" bind:value={autoPauseOnWakeRemainingMinutes} />
-            minutes remain in the current session
-          </label>
-          <label>
-            Pause for
-            <input type="number" min="5" max="240" bind:value={autoPauseOnWakePauseMinutes} />
-            minutes
+            Emergency exits per day
+            <input type="number" min="1" max="48" bind:value={maxPerDay} />
           </label>
           <button type="submit">Save</button>
-          {#if autoPauseOnWakeSaved}
+          {#if saved}
+            <span class="hint saved">Saved</span>
+          {/if}
+        </form>
+      {/if}
+
+      {#if overlayAutoCloseLoaded}
+        <form onsubmit={saveOverlayAutoClose}>
+          <label>
+            Auto-close after (minutes past break end)
+            <input type="number" min="1" max="15" bind:value={overlayAutoCloseMinutes} />
+          </label>
+          <button type="submit">Save</button>
+          {#if overlayAutoCloseSaved}
+            <span class="hint saved">Saved</span>
+          {/if}
+        </form>
+      {/if}
+
+      {#if overlayDueHabitsLoaded}
+        <p class="hint">
+          Lists habits from the Habits tab that have reached their &ldquo;every N days&rdquo; target,
+          with a button to log each one. Turn it off if others can see your screen. Not shown on
+          Android when the break screen draws over other apps.
+        </p>
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={overlayDueHabitsEnabled}
+            disabled={overlayDueHabitsBusy}
+            onchange={toggleOverlayDueHabits}
+          />
+          Show due habits on the break screen
+        </label>
+      {/if}
+
+      {#if quoteApiUrlLoaded}
+        <form onsubmit={saveQuoteApiUrlSetting}>
+          <label class="grow">
+            Quote API URL
+            <input
+              type="text"
+              bind:value={quoteApiUrl}
+              placeholder="https://api.example.com/quote"
+            />
+          </label>
+          <button type="submit">Save</button>
+          {#if quoteApiUrlSaved}
             <span class="hint saved">Saved</span>
           {/if}
         </form>
         <p class="hint">
-          If you reopen this device after it's been asleep for a while{isWindows &&
-          autoPauseOnWakeIncludeScreenOff
-            ? " (or locked, or with its screen off)"
-            : ""}, right before a work or break boundary, Pomodoro mode pauses itself for the duration above instead of dropping
-          you straight into a session you never chose to start. Resumes on its own, exactly like
-          picking a pause from the Timer tab's dropdown &mdash; to resume early, set Pomodoro back
-          to On.
+          Shown at the end of the break screen. Leave blank to disable. Expects a JSON response with
+          a quote field (e.g. <code>quote</code>/<code>content</code>/<code>text</code>, optionally
+          <code>author</code>) &mdash; falls back to showing the raw response text otherwise.
+        </p>
+      {/if}
+
+      {#if quoteApiAttributionLoaded}
+        <form onsubmit={saveQuoteApiAttributionSetting}>
+          <label class="grow">
+            Quote API attribution
+            <textarea
+              rows="2"
+              bind:value={quoteApiAttribution}
+              placeholder={defaultQuoteApiAttribution}
+            ></textarea>
+          </label>
+          <button type="submit">Save</button>
+          <button type="button" onclick={resetQuoteApiAttributionToDefault}>Reset to default</button>
+          {#if quoteApiAttributionSaved}
+            <span class="hint saved">Saved</span>
+          {/if}
+        </form>
+        {#if quoteApiAttribution.trim()}
+          <p class="hint quote-attribution-preview">
+            Preview: {@html sanitizeAttributionHtml(quoteApiAttribution)}
+          </p>
+        {/if}
+        <p class="hint">
+          Shown under the quote, credited to whichever API you're calling above. Accepts a small set
+          of HTML (links and basic formatting) &mdash; anything else is stripped before it's shown.
+          Leave blank to show no attribution. <strong
+            >If you change the Quote API URL, check that service's own documentation and update this
+            attribution to match its requirements &mdash; we are not responsible for any compliance
+            issues arising from missing or incorrect attribution.</strong
+          >
+        </p>
+      {/if}
+
+      {#if isAndroid && overlayChecked}
+        <div class="data-row">
+          <span>Break screen (draw over other apps): {overlayGranted ? "Granted" : "Not granted"}</span>
+          {#if !overlayGranted}
+            <button type="button" onclick={openOverlaySettings}>Open settings&hellip;</button>
+          {/if}
+        </div>
+        <p class="hint">
+          Recommended. Without it, a break can only reach you via a notification instead of
+          appearing directly over whatever else you're doing.
+        </p>
+      {/if}
+
+      {#if isAndroid && exactAlarmChecked}
+        <div class="data-row">
+          <span>Alarms &amp; reminders: {exactAlarmGranted ? "Granted" : "Not granted"}</span>
+          {#if !exactAlarmGranted}
+            <button type="button" onclick={openExactAlarmSettings}>Open settings&hellip;</button>
+          {/if}
+        </div>
+        <p class="hint">
+          Recommended. Without it, the background timer's wake alarm is inexact and can't reliably
+          bring the break screen forward over another app you're actively using.
+        </p>
+      {/if}
+
+      {#if (isAndroid || isIos) && notificationChecked}
+        <div class="data-row">
+          <span>Notifications: {notificationGranted ? "Granted" : "Not granted"}</span>
+          {#if !notificationGranted}
+            <button type="button" onclick={grantNotifications}>Enable notifications</button>
+          {/if}
+        </div>
+        {#if isIos}
+          <p class="hint">
+            Required on iOS: a break notification is the only way a break can reach you while the app
+            isn't open. iOS asks only once &mdash; if you declined, turn them on in the iOS Settings app
+            under Reflectodoro &rarr; Notifications.
+          </p>
+        {:else}
+          <p class="hint">
+            Without it, the background timer's running indicator and the break reminder notification
+            both silently don't show. Onboarding offers this grant on first run; this is here for
+            anyone who skipped it or revoked it since.
+          </p>
+        {/if}
+      {/if}
+
+      {#if isIos}
+        <p class="hint">
+          On iPhone the break screen can only appear inside this app: iOS doesn't let apps cover other
+          apps or open themselves. When a break starts you get a notification, and a Live Activity on
+          the Lock Screen and Dynamic Island counts down to the next break &mdash; open the app to
+          reflect. If Live Activities don't show, turn them on in the iOS Settings app under
+          Reflectodoro.
+        </p>
+      {/if}
+
+      {#if isAndroid && breakNotificationPersistentLoaded}
+        <div class="data-row">
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              checked={breakNotificationPersistentEnabled}
+              disabled={breakNotificationPersistentBusy}
+              onchange={toggleBreakNotificationPersistent}
+            />
+            Make the break notification non-dismissible until the break is resolved
+          </label>
+        </div>
+        <p class="hint">
+          Only used when "Display over other apps" isn't granted &mdash; with it, the break screen
+          itself covers everything and the notification is a plain, dismissible one. Only affects a
+          break that starts while you're using another app &mdash; it can't wake or take over a
+          locked screen.
+        </p>
+      {/if}
+
+      {#if isAndroid && hideOverlayOnCallLoaded}
+        <div class="data-row">
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              checked={hideOverlayOnCallEnabled}
+              disabled={hideOverlayOnCallBusy}
+              onchange={toggleHideOverlayOnCall}
+            />
+            Hide the break screen during phone calls
+          </label>
+        </div>
+        <p class="hint">
+          While a call is ringing or in progress, the break screen steps aside so you can answer,
+          and returns when the call ends. Applies from the next break.
+        </p>
+      {/if}
+
+      {#if isAndroid && nightPauseLoaded}
+        <div class="data-row">
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              checked={nightPauseEnabled}
+              disabled={nightPauseBusy}
+              onchange={toggleNightPauseEnabled}
+            />
+            Pause breaks overnight
+          </label>
+        </div>
+        <form onsubmit={saveNightPauseWindow}>
+          <label>
+            Starts at
+            <input type="time" bind:value={nightPauseStart} />
+          </label>
+          <label>
+            Ends at
+            <input type="time" bind:value={nightPauseEnd} />
+          </label>
+          <button type="submit">Save</button>
+          {#if nightPauseSaved}
+            <span class="hint saved">Saved</span>
+          {/if}
+        </form>
+        <p class="hint">
+          Pomodoro mode pauses itself for this window (it can wrap past midnight, like the default
+          10pm&ndash;8am) and resumes on its own at the end, exactly like picking a pause from the
+          Timer tab's dropdown. To resume early, set Pomodoro back to On &mdash; it stays on for the
+          rest of that night. A break already open when the window starts still runs its course, and
+          nothing missed is made up afterward.
+        </p>
+      {/if}
+
+      {#if isMacos}
+        <p class="hint">
+          Cmd+Tab is always blocked during a break, and the break screen always stays visible if you
+          swipe to another desktop Space or into another app's full-screen window.
+        </p>
+      {/if}
+
+      {#if isMacos && macosHideMenuBarDockLoaded}
+        <div class="data-row">
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              checked={macosHideMenuBarDockEnabled}
+              disabled={macosHideMenuBarDockBusy}
+              onchange={toggleMacosHideMenuBarDock}
+            />
+            Also hide the menu bar &amp; Dock during a break
+          </label>
+        </div>
+        <p class="hint">
+          Off by default since it's a bigger change to your desktop than anything else here. Either
+          way the Dock auto-hides for the duration of a break &mdash; macOS won't let an app block
+          Cmd+Tab without that. Like the rest of the break screen, it's a strong deterrent, not an
+          absolute lock: Activity Monitor/Force Quit always still works.
+        </p>
+      {/if}
+
+      {#if isMacos && macosMediaKeyFallbackLoaded}
+        <div class="data-row">
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              checked={macosMediaKeyFallbackEnabled}
+              disabled={macosMediaKeyFallbackBusy}
+              onchange={toggleMacosMediaKeyFallback}
+            />
+            Pause media the old way (needs Accessibility access)
+          </label>
+        </div>
+        <p class="hint">
+          {#if mediaRemoteAvailable === false}
+            This Mac can't use the permission-free method, so Reflectodoro is already falling back to
+            the old one automatically &mdash; you don't need this switch.
+          {:else}
+            Leave this off. Reflectodoro normally pauses media through a method that needs no
+            permission at all. Turning this on switches to sending a Play/Pause key instead, which
+            needs Accessibility access and is a blind toggle &mdash; it can resume media you'd
+            already paused yourself. Only worth trying if media isn't pausing on your breaks.
+          {/if}
         </p>
       {/if}
     </section>
-  {/if}
-
-  <section class="card">
-    <h2>Wellness check-in</h2>
-    
-    {#if checkinAutoCloseLoaded}
-      <form onsubmit={saveCheckinAutoClose}>
-        <label>
-          Auto-close after (minutes, if untouched)
-          <input type="number" min="1" max="60" bind:value={checkinAutoCloseMinutes} />
-        </label>
-        <button type="submit">Save</button>
-        {#if checkinAutoCloseSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-    {/if}
-
-    <!-- <p class="hint">
-      Comma-separated list of check-in items (Relaxed eyes, Exercise, Drank water, Washroom) that
-      should stay quiet -- no "Let's Try Next Time :)" nudge when switched off.
-    </p>
-
-    {#if wellnessExclusionsLoaded}
-      <form onsubmit={saveWellnessExclusions}>
-        <label class="grow">
-          Excluded items
-          <input type="text" bind:value={wellnessExclusions} placeholder="e.g. Washroom, Exercise" />
-        </label>
-        <button type="submit">Save</button>
-        {#if wellnessExclusionsSaved}
-          <span class="hint saved">Saved</span>
-        {/if}
-      </form>
-    {/if} -->
-
-  </section>
 
 
-  {#if !isMobile}
-  <section class="card">
-    <h2>If the break screen ever gets stuck</h2>
-    <ul class="hint">
-      <li>Press {forceCloseShortcutLabel} to force-close the break screen.</li>
-    </ul>
-
-    {#if forceCloseShortcutLoaded}
-      <div class="data-row slider-row">
-        <div
-          class="slide-track"
-          class:busy={forceCloseShortcutBusy}
-          role="switch"
-          aria-checked={forceCloseShortcutEnabled}
-          aria-label={`Enable ${forceCloseShortcutLabel} force-close shortcut`}
-          tabindex="0"
-          onpointerdown={onSliderPointerDown}
-          onpointermove={onSliderPointerMove}
-          onpointerup={onSliderPointerUp}
-          onpointercancel={onSliderPointerUp}
-          onkeydown={onSliderKeydown}
-        >
-          <span class="slide-track-label off">Disabled</span>
-          <span class="slide-track-label on">Enabled</span>
-          <div
-            class="slide-thumb"
-            class:accent={sliderOffset > SLIDER_MAX_OFFSET / 2}
-            style={`transform: translateX(${sliderOffset}px)`}
-          >
-            {sliderOffset > SLIDER_MAX_OFFSET / 2 ? "Enabled" : "Disabled"}
-          </div>
-        </div>
-        <span class="hint">Slide to enable/disable the force-close shortcut</span>
-      </div>
-
-      {#if forceCloseShortcutEnabled}
-        <p class="hint warning">
-          Only turn this off once break screen behavior has been confirmed good across log off/log on,
-          system start, and restart &mdash; it's recommended to keep it enabled for at least a week
-          first. It's a safety net, not something you'll trigger day to day.
+    <section class="card" id="settings-screen-time">
+      <h2>Screen time</h2>
+      <p class="hint">
+        Records which app has focus and for how long, so the Entries tab can show where your day
+        actually went. Everything stays on this device &mdash; nothing is uploaded, and only the app's
+        name is recorded, never window titles or anything you type.
+      </p>
+      {#if isWindows}
+        <p class="hint">
+          Time with the screen locked or turned off isn't counted. When the screen turns off on its own,
+          the idle minutes before it (up to your power plan's screen timeout) are left out too.
         </p>
       {/if}
-    {/if}
-  </section>
-  {/if}
 
-
-
-  {#if !isMobile}
-  <section class="card">
-    <h2>Startup</h2>
-    <p class="hint">Launch Reflectodoro automatically when you log in.</p>
-
-    {#if autostartLoaded}
-      <div class="data-row">
-        <label class="checkbox">
-          <input
-            type="checkbox"
-            checked={autostartEnabled}
-            disabled={autostartBusy}
-            onchange={toggleAutostart}
-          />
-          Start automatically on login
-        </label>
-      </div>
-      <p class="hint warning">Recommended to keep it off atleast for a week, It can help recover from bugs/break screen getting stuck.</p>
-      {#if autostartError}
-        <p class="hint error">{autostartError}</p>
+      {#if screenTimeTrackingLoaded}
+        <div class="data-row">
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              checked={screenTimeTrackingEnabled}
+              disabled={screenTimeTrackingBusy}
+              onchange={toggleScreenTimeTracking}
+            />
+            Track screen time
+          </label>
+        </div>
       {/if}
+
+      {#if isIos}
+        <p class="hint warning">
+          Not available on iPhone: iOS doesn't let apps see which other apps are in use.
+        </p>
+      {:else if osResolved && !isWindows && !isAndroid && !isMacos}
+        <p class="hint warning">
+          Not captured on this platform yet &mdash; Windows, macOS and Android are the only ones recording
+          so far. The setting is here, but nothing lands until support for this platform ships.
+        </p>
+      {/if}
+
+      {#if isAndroid && usageStatsChecked}
+        <div class="data-row">
+          <span>Usage access: {usageStatsGranted ? "Granted" : "Not granted"}</span>
+          {#if !usageStatsGranted}
+            <button type="button" onclick={openUsageStatsSettings}>Open settings&hellip;</button>
+          {/if}
+        </div>
+        <p class="hint">
+          Required for screen time on Android &mdash; there's no push notification for "which app
+          just took focus" without this special-access grant, so tracking records nothing until
+          it's on.
+        </p>
+      {/if}
+
+      {#if screenTimeAppThresholdLoaded}
+        <form onsubmit={saveScreenTimeAppThreshold}>
+          <label>
+            Hide apps under (minutes)
+            <input type="number" min="0" max="1440" bind:value={screenTimeAppThresholdMinutes} />
+          </label>
+          <button type="submit">Save</button>
+          {#if screenTimeAppThresholdSaved}
+            <span class="hint saved">Saved</span>
+          {/if}
+        </form>
+        <p class="hint">
+          Apps with less focus time than this on a given day are left out of the Entries tab's
+          breakdown for that day.
+        </p>
+      {/if}
+
+      {#if deviceNameLoaded}
+        <form onsubmit={saveDeviceNameSetting}>
+          <label>
+            Device name
+            <input type="text" bind:value={deviceName} placeholder="e.g. Work laptop" />
+          </label>
+          <button type="submit">Save</button>
+          {#if deviceNameSaved}
+            <span class="hint saved">Saved</span>
+          {/if}
+        </form>
+        <p class="hint">
+          Stamped onto new screen time rows so the same app on two machines stays distinguishable if
+          you ever import one device's data into another. Defaults to this computer's name.
+        </p>
+      {/if}
+    </section>
+
+    <div id="settings-app-lock" class="anchor-wrap"><AppLockCard {isAndroid} /></div>
+
+
+    <section class="card" id="settings-daily-summary">
+      <h2>Daily summary (local AI)</h2>
+      <p class="hint">
+        Adds a <strong>Summarize</strong> button to the Entries tab that sends that day's reflections
+        to an AI model you run yourself &mdash; e.g. Ollama or LM Studio &mdash; through its
+        OpenAI-compatible chat endpoint. Nothing is sent until you click it, and the summary isn't
+        saved.
+      </p>
+
+      {#if llmSummaryLoaded}
+        <form onsubmit={saveLlmSummaryBasicSetting}>
+          <label class="grow">
+            Endpoint URL
+            <input
+              type="text"
+              bind:value={llmSummaryApiUrl}
+              placeholder="http://localhost:11434/v1/chat/completions"
+            />
+          </label>
+          <label>
+            Model
+            <input type="text" bind:value={llmSummaryModel} placeholder="llama3.1" />
+          </label>
+          <button type="submit">Save</button>
+          {#if llmSummaryBasicSaved}
+            <span class="hint saved">Saved</span>
+          {/if}
+        </form>
+        <p class="hint">
+          Leave the URL blank to turn this off. Ollama:
+          <code>http://localhost:11434/v1/chat/completions</code>. LM Studio:
+          <code>http://localhost:1234/v1/chat/completions</code>. The model name must match one
+          installed on that server. An API key, timeout and custom prompt are under Advanced settings.
+        </p>
+      {/if}
+    </section>
+
+    {#if !isMobile}
+      <section class="card" id="settings-auto-pause">
+        <h2>Auto-pause pomodoro on wakeup after sleep</h2>
+        {#if autoPauseOnWakeLoaded}
+          <div class="data-row">
+            <label class="checkbox">
+              <input
+                type="checkbox"
+                checked={autoPauseOnWakeEnabled}
+                disabled={autoPauseOnWakeBusy}
+                onchange={toggleAutoPauseOnWakeEnabled}
+              />
+              Auto-pause after waking from sleep near a boundary
+            </label>
+          </div>
+          {#if isWindows}
+            <div class="data-row">
+              <label class="checkbox">
+                <input
+                  type="checkbox"
+                  checked={autoPauseOnWakeIncludeScreenOff}
+                  disabled={autoPauseOnWakeBusy || !autoPauseOnWakeEnabled}
+                  onchange={toggleAutoPauseOnWakeIncludeScreenOff}
+                />
+                Also count time with the screen locked or turned off
+              </label>
+            </div>
+          {/if}
+          <form onsubmit={saveAutoPauseOnWakeThresholds}>
+            <label>
+              PC was off for more than
+              <input type="number" min="1" max="180" bind:value={autoPauseOnWakeOffMinutes} />
+              minutes
+            </label>
+            <label>
+              and less than
+              <input type="number" min="1" max="60" bind:value={autoPauseOnWakeRemainingMinutes} />
+              minutes remain in the current session
+            </label>
+            <label>
+              Pause for
+              <input type="number" min="5" max="240" bind:value={autoPauseOnWakePauseMinutes} />
+              minutes
+            </label>
+            <button type="submit">Save</button>
+            {#if autoPauseOnWakeSaved}
+              <span class="hint saved">Saved</span>
+            {/if}
+          </form>
+          <p class="hint">
+            If you reopen this device after it's been asleep for a while{isWindows &&
+            autoPauseOnWakeIncludeScreenOff
+              ? " (or locked, or with its screen off)"
+              : ""}, right before a work or break boundary, Pomodoro mode pauses itself for the duration above instead of dropping
+            you straight into a session you never chose to start. Resumes on its own, exactly like
+            picking a pause from the Timer tab's dropdown &mdash; to resume early, set Pomodoro back
+            to On.
+          </p>
+        {/if}
+      </section>
     {/if}
-  </section>
-  {/if}
+
+    <section class="card" id="settings-wellness-checkin">
+      <h2>Wellness check-in</h2>
+    
+      {#if checkinAutoCloseLoaded}
+        <form onsubmit={saveCheckinAutoClose}>
+          <label>
+            Auto-close after (minutes, if untouched)
+            <input type="number" min="1" max="60" bind:value={checkinAutoCloseMinutes} />
+          </label>
+          <button type="submit">Save</button>
+          {#if checkinAutoCloseSaved}
+            <span class="hint saved">Saved</span>
+          {/if}
+        </form>
+      {/if}
+
+      <!-- <p class="hint">
+        Comma-separated list of check-in items (Relaxed eyes, Exercise, Drank water, Washroom) that
+        should stay quiet -- no "Let's Try Next Time :)" nudge when switched off.
+      </p>
+
+      {#if wellnessExclusionsLoaded}
+        <form onsubmit={saveWellnessExclusions}>
+          <label class="grow">
+            Excluded items
+            <input type="text" bind:value={wellnessExclusions} placeholder="e.g. Washroom, Exercise" />
+          </label>
+          <button type="submit">Save</button>
+          {#if wellnessExclusionsSaved}
+            <span class="hint saved">Saved</span>
+          {/if}
+        </form>
+      {/if} -->
+
+    </section>
+
+
+    {#if !isMobile}
+    <section class="card" id="settings-stuck-break-screen">
+      <h2>If the break screen ever gets stuck</h2>
+      <ul class="hint">
+        <li>Press {forceCloseShortcutLabel} to force-close the break screen.</li>
+      </ul>
+
+      {#if forceCloseShortcutLoaded}
+        <div class="data-row slider-row">
+          <div
+            class="slide-track"
+            class:busy={forceCloseShortcutBusy}
+            role="switch"
+            aria-checked={forceCloseShortcutEnabled}
+            aria-label={`Enable ${forceCloseShortcutLabel} force-close shortcut`}
+            tabindex="0"
+            onpointerdown={onSliderPointerDown}
+            onpointermove={onSliderPointerMove}
+            onpointerup={onSliderPointerUp}
+            onpointercancel={onSliderPointerUp}
+            onkeydown={onSliderKeydown}
+          >
+            <span class="slide-track-label off">Disabled</span>
+            <span class="slide-track-label on">Enabled</span>
+            <div
+              class="slide-thumb"
+              class:accent={sliderOffset > SLIDER_MAX_OFFSET / 2}
+              style={`transform: translateX(${sliderOffset}px)`}
+            >
+              {sliderOffset > SLIDER_MAX_OFFSET / 2 ? "Enabled" : "Disabled"}
+            </div>
+          </div>
+          <span class="hint">Slide to enable/disable the force-close shortcut</span>
+        </div>
+
+        {#if forceCloseShortcutEnabled}
+          <p class="hint warning">
+            Only turn this off once break screen behavior has been confirmed good across log off/log on,
+            system start, and restart &mdash; it's recommended to keep it enabled for at least a week
+            first. It's a safety net, not something you'll trigger day to day.
+          </p>
+        {/if}
+      {/if}
+    </section>
+    {/if}
+
+
+
+    {#if !isMobile}
+    <section class="card" id="settings-startup">
+      <h2>Startup</h2>
+      <p class="hint">Launch Reflectodoro automatically when you log in.</p>
+
+      {#if autostartLoaded}
+        <div class="data-row">
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              checked={autostartEnabled}
+              disabled={autostartBusy}
+              onchange={toggleAutostart}
+            />
+            Start automatically on login
+          </label>
+        </div>
+        <p class="hint warning">Recommended to keep it off atleast for a week, It can help recover from bugs/break screen getting stuck.</p>
+        {#if autostartError}
+          <p class="hint error">{autostartError}</p>
+        {/if}
+      {/if}
+    </section>
+    {/if}
 
   
 
-  <section class="card">
-    <h2>Data</h2>
-    <p class="hint">
-      Export all reflections, task lists, and settings to a JSON file, or import one back in.
-    </p>
+    <section class="card" id="settings-data">
+      <h2>Data</h2>
+      <p class="hint">
+        Export all reflections, task lists, and settings to a JSON file, or import one back in.
+      </p>
 
-    <div class="data-row">
-      <label class="checkbox">
-        <input type="checkbox" bind:checked={includeSettingsInTransfer} />
-        Include settings (breakit code, timeouts, etc.) in export/import
-      </label>
-    </div>
-
-    <div class="data-row">
-      <button type="button" onclick={exportData}>Export data&hellip;</button>
-      {#if exportStatus === "success"}
-        <span class="hint saved">Exported</span>
-      {:else if exportStatus === "error"}
-        <span class="hint error">{exportError}</span>
-      {/if}
-    </div>
-
-    <div class="data-row">
-      <button type="button" onclick={chooseImportFile}>Import Data&hellip;</button>
-      {#if importFileName}
-        <span class="hint">{importFileName}</span>
-      {/if}
-    </div>
-
-    {#if importPath}
       <div class="data-row">
-        <button type="button" disabled={importBusy} onclick={() => runImport("merge")}>
-          Merge
-        </button>
-        <button type="button" class="danger" disabled={importBusy} onclick={() => runImport("replace")}>
-          Replace all data
+        <label class="checkbox">
+          <input type="checkbox" bind:checked={includeSettingsInTransfer} />
+          Include settings (breakit code, timeouts, etc.) in export/import
+        </label>
+      </div>
+
+      <div class="data-row">
+        <button type="button" onclick={exportData}>Export data&hellip;</button>
+        {#if exportStatus === "success"}
+          <span class="hint saved">Exported</span>
+        {:else if exportStatus === "error"}
+          <span class="hint error">{exportError}</span>
+        {/if}
+      </div>
+
+      <div class="data-row">
+        <button type="button" onclick={chooseImportFile}>Import Data&hellip;</button>
+        {#if importFileName}
+          <span class="hint">{importFileName}</span>
+        {/if}
+      </div>
+
+      {#if importPath}
+        <div class="data-row">
+          <button type="button" disabled={importBusy} onclick={() => runImport("merge")}>
+            Merge
+          </button>
+          <button type="button" class="danger" disabled={importBusy} onclick={() => runImport("replace")}>
+            Replace all data
+          </button>
+        </div>
+      {/if}
+
+      {#if importStatus === "success"}
+        <p class="hint saved">{importMessage}</p>
+      {:else if importStatus === "error"}
+        <p class="hint error">{importMessage}</p>
+      {/if}
+    </section>
+
+    <section class="card" id="settings-paired-devices">
+      <h2>Paired devices</h2>
+      <p class="hint">
+        Sync reflections, task lists, wellness check-ins, and screen time directly with another
+        device on the same wifi network &mdash; no account, no cloud. Settings are never included.
+        {#if !isIos}
+          <br/> For auto-sync to work, both laptop and phone should be active at start of break.
+        {/if}
+      </p>
+      {#if isIos}
+        <p class="hint">
+          On iPhone this is manual only, and works while Reflectodoro is open &mdash; iOS suspends
+          apps in the background, so a sync started on your laptop won't reach a phone in your
+          pocket. The first time it runs, iOS asks for Local Network permission; if that was
+          declined, turn it back on in iOS Settings &rarr; Reflectodoro &rarr; Local Network, then
+          reopen this page. A denied permission looks exactly like an empty network here: every
+          device stays offline.
+        </p>
+      {/if}
+
+      {#if pairedDevicesLoaded && pairedDevices.length > 0}
+        <ul class="paired-device-list">
+          {#each pairedDevices as device (device.deviceId)}
+            <li>
+              <span class="paired-device-status" class:online={device.online} title={device.online ? "Online" : "Offline"}
+              ></span>
+              <span class="paired-device-name">{deviceLabel(device.name, device.deviceId)} <span class="hint">({device.platform})</span></span>
+              <span class="hint">Last synced: {formatLastSync(device.lastSyncAt)}</span>
+              {#if !isIos}
+                <label class="checkbox auto-sync-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={device.autoSyncEnabled}
+                    disabled={autoSyncBusyId === device.deviceId}
+                    onchange={() => toggleDeviceAutoSync(device)}
+                  />
+                  Auto-sync
+                </label>
+              {/if}
+              <button
+                type="button"
+                onclick={() => runDeviceSync(device)}
+                disabled={syncingDeviceId !== null || !device.online}
+                title={device.online ? "" : "Device is offline"}
+              >
+                {syncingDeviceId === device.deviceId ? "Syncing…" : "Sync"}
+              </button>
+              <button type="button" class="danger" onclick={() => removePairedDevice(device)}>Forget</button>
+            </li>
+          {/each}
+        </ul>
+        {#if syncStatus === "success"}
+          <p class="hint saved">{syncMessage}</p>
+        {:else if syncStatus === "error"}
+          <p class="hint error">{syncMessage}</p>
+        {/if}
+      {:else if pairedDevicesLoaded}
+        <p class="hint">No paired devices yet.</p>
+      {/if}
+
+      <div class="data-row">
+        <button type="button" onclick={refreshOnlineDevices} disabled={pairedDevicesBusy}>Refresh</button>
+        <button type="button" onclick={togglePairingPanel}>
+          {pairingOpen ? "Cancel pairing" : "Pair a new device…"}
         </button>
       </div>
-    {/if}
 
-    {#if importStatus === "success"}
-      <p class="hint saved">{importMessage}</p>
-    {:else if importStatus === "error"}
-      <p class="hint error">{importMessage}</p>
-    {/if}
-  </section>
-
-  <section class="card">
-    <h2>Paired devices</h2>
-    <p class="hint">
-      Sync reflections, task lists, wellness check-ins, and screen time directly with another
-      device on the same wifi network &mdash; no account, no cloud. Settings are never included.
-      {#if !isIos}
-        <br/> For auto-sync to work, both laptop and phone should be active at start of break.
-      {/if}
-    </p>
-    {#if isIos}
-      <p class="hint">
-        On iPhone this is manual only, and works while Reflectodoro is open &mdash; iOS suspends
-        apps in the background, so a sync started on your laptop won't reach a phone in your
-        pocket. The first time it runs, iOS asks for Local Network permission; if that was
-        declined, turn it back on in iOS Settings &rarr; Reflectodoro &rarr; Local Network, then
-        reopen this page. A denied permission looks exactly like an empty network here: every
-        device stays offline.
-      </p>
-    {/if}
-
-    {#if pairedDevicesLoaded && pairedDevices.length > 0}
-      <ul class="paired-device-list">
-        {#each pairedDevices as device (device.deviceId)}
-          <li>
-            <span class="paired-device-status" class:online={device.online} title={device.online ? "Online" : "Offline"}
-            ></span>
-            <span class="paired-device-name">{deviceLabel(device.name, device.deviceId)} <span class="hint">({device.platform})</span></span>
-            <span class="hint">Last synced: {formatLastSync(device.lastSyncAt)}</span>
-            {#if !isIos}
-              <label class="checkbox auto-sync-checkbox">
-                <input
-                  type="checkbox"
-                  checked={device.autoSyncEnabled}
-                  disabled={autoSyncBusyId === device.deviceId}
-                  onchange={() => toggleDeviceAutoSync(device)}
-                />
-                Auto-sync
-              </label>
+      {#if pairingOpen}
+        <div class="pairing-panel">
+          <div class="pairing-column">
+            <h3>Show a PIN on this device</h3>
+            <p class="hint">
+              Read this PIN to whoever is pairing from the other device and have them enter it there.
+            </p>
+            {#if hostPin}
+              <p class="pairing-pin">{hostPin}</p>
+              <p class="hint">Waiting for the other device to enter this PIN&hellip; (expires in about a minute)</p>
+            {:else}
+              <button type="button" onclick={showPairingPin} disabled={hostPinBusy}>Show PIN</button>
             {/if}
-            <button
-              type="button"
-              onclick={() => runDeviceSync(device)}
-              disabled={syncingDeviceId !== null || !device.online}
-              title={device.online ? "" : "Device is offline"}
-            >
-              {syncingDeviceId === device.deviceId ? "Syncing…" : "Sync"}
-            </button>
-            <button type="button" class="danger" onclick={() => removePairedDevice(device)}>Forget</button>
-          </li>
-        {/each}
-      </ul>
-      {#if syncStatus === "success"}
-        <p class="hint saved">{syncMessage}</p>
-      {:else if syncStatus === "error"}
-        <p class="hint error">{syncMessage}</p>
-      {/if}
-    {:else if pairedDevicesLoaded}
-      <p class="hint">No paired devices yet.</p>
-    {/if}
-
-    <div class="data-row">
-      <button type="button" onclick={refreshOnlineDevices} disabled={pairedDevicesBusy}>Refresh</button>
-      <button type="button" onclick={togglePairingPanel}>
-        {pairingOpen ? "Cancel pairing" : "Pair a new device…"}
-      </button>
-    </div>
-
-    {#if pairingOpen}
-      <div class="pairing-panel">
-        <div class="pairing-column">
-          <h3>Show a PIN on this device</h3>
-          <p class="hint">
-            Read this PIN to whoever is pairing from the other device and have them enter it there.
-          </p>
-          {#if hostPin}
-            <p class="pairing-pin">{hostPin}</p>
-            <p class="hint">Waiting for the other device to enter this PIN&hellip; (expires in about a minute)</p>
-          {:else}
-            <button type="button" onclick={showPairingPin} disabled={hostPinBusy}>Show PIN</button>
-          {/if}
-        </div>
-
-        <div class="pairing-column">
-          <h3>Enter a PIN from another device</h3>
-          <p class="hint">Pick the device that's showing a PIN, then type it in here.</p>
-          <div class="data-row">
-            <button type="button" onclick={refreshPairingCandidates} disabled={candidatesBusy}>
-              {candidatesBusy ? "Searching…" : "Search again"}
-            </button>
           </div>
-          {#if pairingCandidates.length === 0}
-            <p class="hint">{candidatesBusy ? "Searching the local network…" : "No unpaired devices found nearby."}</p>
-          {:else}
-            <form onsubmit={submitJoinPairing}>
-              <label class="medium">
-                Device
-                <select bind:value={selectedCandidateId}>
-                  <option value="" disabled>Select a device&hellip;</option>
-                  {#each pairingCandidates as candidate (candidate.deviceId)}
-                    <option value={candidate.deviceId}>{deviceLabel(candidate.name, candidate.deviceId)} ({candidate.platform})</option>
-                  {/each}
-                </select>
+
+          <div class="pairing-column">
+            <h3>Enter a PIN from another device</h3>
+            <p class="hint">Pick the device that's showing a PIN, then type it in here.</p>
+            <div class="data-row">
+              <button type="button" onclick={refreshPairingCandidates} disabled={candidatesBusy}>
+                {candidatesBusy ? "Searching…" : "Search again"}
+              </button>
+            </div>
+            {#if pairingCandidates.length === 0}
+              <p class="hint">{candidatesBusy ? "Searching the local network…" : "No unpaired devices found nearby."}</p>
+            {:else}
+              <form onsubmit={submitJoinPairing}>
+                <label class="medium">
+                  Device
+                  <select bind:value={selectedCandidateId}>
+                    <option value="" disabled>Select a device&hellip;</option>
+                    {#each pairingCandidates as candidate (candidate.deviceId)}
+                      <option value={candidate.deviceId}>{deviceLabel(candidate.name, candidate.deviceId)} ({candidate.platform})</option>
+                    {/each}
+                  </select>
+                </label>
+                <label>
+                  PIN
+                  <input class="pin-input" type="text" inputmode="numeric" maxlength="6" bind:value={joinPin} placeholder="123456" />
+                </label>
+                <button type="submit" disabled={joinBusy || !selectedCandidateId || !joinPin.trim()}>
+                  {joinBusy ? "Pairing…" : "Pair"}
+                </button>
+              </form>
+            {/if}
+            {#if joinError}
+              <p class="hint error">{joinError}</p>
+            {/if}
+          </div>
+        </div>
+      {/if}
+    </section>
+
+    <!-- Last on the page by design: set-once, rarely-needed controls. -->
+    <button
+      id="settings-advanced"
+      type="button"
+      class="advanced-toggle"
+      aria-expanded={advancedOpen}
+      aria-controls="advanced-settings"
+      onclick={toggleAdvanced}
+    >
+      {advancedOpen ? "Hide advanced settings" : "Advanced settings"}
+    </button>
+    {#if advancedOpen}
+      <div id="advanced-settings" class="advanced">
+        {#if !isAndroid}
+          <EncryptionKeyCard />
+        {/if}
+
+        {#if llmSummaryLoaded}
+          <section class="card">
+            <h2>Daily summary: advanced</h2>
+            <form onsubmit={saveLlmSummaryAdvancedSetting}>
+              <label class="grow">
+                API key (optional)
+                <input
+                  type="password"
+                  autocomplete="off"
+                  bind:value={llmSummaryApiKey}
+                  placeholder="Leave blank for Ollama / LM Studio"
+                />
               </label>
               <label>
-                PIN
-                <input class="pin-input" type="text" inputmode="numeric" maxlength="6" bind:value={joinPin} placeholder="123456" />
+                Timeout (seconds)
+                <input
+                  type="number"
+                  min={LLM_SUMMARY_MIN_TIMEOUT_SECS}
+                  max={LLM_SUMMARY_MAX_TIMEOUT_SECS}
+                  bind:value={llmSummaryTimeoutSecs}
+                />
               </label>
-              <button type="submit" disabled={joinBusy || !selectedCandidateId || !joinPin.trim()}>
-                {joinBusy ? "Pairing…" : "Pair"}
-              </button>
+              <label class="grow">
+                System prompt
+                <textarea
+                  rows="5"
+                  bind:value={llmSummarySystemPrompt}
+                  placeholder={defaultLlmSummarySystemPrompt}
+                ></textarea>
+              </label>
+              <div class="data-row">
+                <button type="submit">Save</button>
+                <button type="button" onclick={resetLlmSummarySystemPromptToDefault}>
+                  Reset prompt to default
+                </button>
+                {#if llmSummaryAdvancedSaved}
+                  <span class="hint saved">Saved</span>
+                {/if}
+              </div>
             </form>
+            <p class="hint">
+              The API key is sent as a Bearer token, only if set, and is stored unencrypted on this
+              device like other settings. Local models can be slow on long days &mdash; raise the
+              timeout ({LLM_SUMMARY_MIN_TIMEOUT_SECS}&ndash;{LLM_SUMMARY_MAX_TIMEOUT_SECS}s) if
+              summaries time out. Leave the prompt blank to use the built-in one shown as the
+              placeholder. Each entry is sent as
+              <code>HH:MM&ndash;HH:MM (duration): what you wrote</code>.
+            </p>
+          </section>
+        {/if}
+
+        <section class="card">
+          <h2>Delete data</h2>
+          <p class="hint">
+            Free up space or start fresh. Deletes reflections, wellness check-ins, task lists and screen
+            time on this device only. Settings, paired devices and the encryption key are kept.
+            &ldquo;Older than&rdquo; never touches habit logs (their history drives each habit's stats);
+            &ldquo;Delete all&rdquo; removes habits too.
+          </p>
+
+          <div class="data-row">
+            <label>
+              Delete entries older than
+              <input type="number" min="1" step="1" bind:value={deleteOlderDays} style="width: 5em" />
+              days
+            </label>
+            <button type="button" class="danger" disabled={deleteBusy} onclick={runDeleteOlder}>
+              Delete older entries&hellip;
+            </button>
+          </div>
+
+          <div class="data-row">
+            <button type="button" class="danger" disabled={deleteBusy} onclick={runDeleteAll}>
+              Delete all data&hellip;
+            </button>
+          </div>
+
+          {#if deleteStatus === "checking" || deleteStatus === "cancelled"}
+            <p class="hint">{deleteMessage}</p>
+          {:else if deleteStatus === "success"}
+            <p class="hint saved">{deleteMessage}</p>
+          {:else if deleteStatus === "error"}
+            <p class="hint error">{deleteMessage}</p>
           {/if}
-          {#if joinError}
-            <p class="hint error">{joinError}</p>
-          {/if}
-        </div>
+        </section>
       </div>
     {/if}
-  </section>
-
-  <!-- Last on the page by design: set-once, rarely-needed controls. -->
-  <button
-    type="button"
-    class="advanced-toggle"
-    aria-expanded={advancedOpen}
-    aria-controls="advanced-settings"
-    onclick={toggleAdvanced}
-  >
-    {advancedOpen ? "Hide advanced settings" : "Advanced settings"}
-  </button>
-  {#if advancedOpen}
-    <div id="advanced-settings" class="advanced">
-      {#if !isAndroid}
-        <EncryptionKeyCard />
-      {/if}
-
-      {#if llmSummaryLoaded}
-        <section class="card">
-          <h2>Daily summary: advanced</h2>
-          <form onsubmit={saveLlmSummaryAdvancedSetting}>
-            <label class="grow">
-              API key (optional)
-              <input
-                type="password"
-                autocomplete="off"
-                bind:value={llmSummaryApiKey}
-                placeholder="Leave blank for Ollama / LM Studio"
-              />
-            </label>
-            <label>
-              Timeout (seconds)
-              <input
-                type="number"
-                min={LLM_SUMMARY_MIN_TIMEOUT_SECS}
-                max={LLM_SUMMARY_MAX_TIMEOUT_SECS}
-                bind:value={llmSummaryTimeoutSecs}
-              />
-            </label>
-            <label class="grow">
-              System prompt
-              <textarea
-                rows="5"
-                bind:value={llmSummarySystemPrompt}
-                placeholder={defaultLlmSummarySystemPrompt}
-              ></textarea>
-            </label>
-            <div class="data-row">
-              <button type="submit">Save</button>
-              <button type="button" onclick={resetLlmSummarySystemPromptToDefault}>
-                Reset prompt to default
-              </button>
-              {#if llmSummaryAdvancedSaved}
-                <span class="hint saved">Saved</span>
-              {/if}
-            </div>
-          </form>
-          <p class="hint">
-            The API key is sent as a Bearer token, only if set, and is stored unencrypted on this
-            device like other settings. Local models can be slow on long days &mdash; raise the
-            timeout ({LLM_SUMMARY_MIN_TIMEOUT_SECS}&ndash;{LLM_SUMMARY_MAX_TIMEOUT_SECS}s) if
-            summaries time out. Leave the prompt blank to use the built-in one shown as the
-            placeholder. Each entry is sent as
-            <code>HH:MM&ndash;HH:MM (duration): what you wrote</code>.
-          </p>
-        </section>
-      {/if}
-
-      <section class="card">
-        <h2>Delete data</h2>
-        <p class="hint">
-          Free up space or start fresh. Deletes reflections, wellness check-ins, task lists and screen
-          time on this device only. Settings, paired devices and the encryption key are kept.
-          &ldquo;Older than&rdquo; never touches habit logs (their history drives each habit's stats);
-          &ldquo;Delete all&rdquo; removes habits too.
-        </p>
-
-        <div class="data-row">
-          <label>
-            Delete entries older than
-            <input type="number" min="1" step="1" bind:value={deleteOlderDays} style="width: 5em" />
-            days
-          </label>
-          <button type="button" class="danger" disabled={deleteBusy} onclick={runDeleteOlder}>
-            Delete older entries&hellip;
-          </button>
-        </div>
-
-        <div class="data-row">
-          <button type="button" class="danger" disabled={deleteBusy} onclick={runDeleteAll}>
-            Delete all data&hellip;
-          </button>
-        </div>
-
-        {#if deleteStatus === "checking" || deleteStatus === "cancelled"}
-          <p class="hint">{deleteMessage}</p>
-        {:else if deleteStatus === "success"}
-          <p class="hint saved">{deleteMessage}</p>
-        {:else if deleteStatus === "error"}
-          <p class="hint error">{deleteMessage}</p>
-        {/if}
-      </section>
-    </div>
-  {/if}
+  </div>
 </div>
 
 <style>
+  /* Two columns: the section navigation on the left, the cards on the right.
+     minmax(0, 1fr) lets the content column shrink instead of forcing the
+     page wider than <main>. */
   .page {
     padding: 24px;
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .content {
     display: flex;
     flex-direction: column;
     gap: 20px;
-    max-width: 1200px;
-    margin: 0 auto;
+    min-width: 0;
   }
 
   /* Large windows: scale the whole page (text, controls, spacing) up together
@@ -2031,6 +2171,143 @@
     .page {
       zoom: 1.15;
       max-width: calc(1200px / 1.15);
+    }
+  }
+
+  /* Sticks within the layout's scrolling <main>, so it stays in view while
+     the cards scroll past. Scrolls itself if the list is taller than the
+     window. */
+  .section-nav {
+    position: sticky;
+    top: 24px;
+    border-right: 1px solid var(--border);
+  }
+
+  .nav-track {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+
+  .section-nav a {
+    flex: none;
+    padding: 7px 12px;
+    border-radius: 8px;
+    color: var(--text-dim);
+    font-size: 13px;
+    text-decoration: none;
+  }
+
+  .section-nav a:hover,
+  .section-nav a:focus-visible {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .section-nav a.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* A little air above a jumped-to card's heading. */
+  .content > [id^="settings-"] {
+    scroll-margin-top: 24px;
+  }
+
+  /* Matches the page zoom on large windows (see .page). vh is scaled by the
+     zoom too, so undo it to keep the panel's bottom on screen. */
+  @media (min-width: 1200px) {
+    .section-nav {
+      top: calc(24px / 1.15);
+    }
+
+    .nav-track {
+      max-height: calc((100vh - 48px) / 1.15);
+    }
+  }
+
+  /* Phones and narrow windows: a side column would leave the cards too
+     cramped, so the navigation becomes a single sticky row above them that
+     scrolls sideways. */
+  @media (max-width: 700px) {
+    .page {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 20px;
+    }
+
+    .section-nav {
+      top: 0;
+      z-index: 2;
+      margin: -24px -24px 0;
+      background: var(--bg);
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* Swipeable row with no visible scrollbar; the edge fades (set from
+       script as the row scrolls) are what tell you there's more. The mask is
+       on this inner track, not the nav, so the bar's own background and
+       bottom border stay solid. */
+    .nav-track {
+      --fade-start: 0px;
+      --fade-end: 0px;
+      flex-direction: row;
+      gap: 6px;
+      max-height: none;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 12px 24px;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-x: contain;
+      scroll-padding-inline: 24px;
+      -webkit-mask-image: linear-gradient(
+        to right,
+        transparent 0,
+        #000 var(--fade-start),
+        #000 calc(100% - var(--fade-end)),
+        transparent 100%
+      );
+      mask-image: linear-gradient(
+        to right,
+        transparent 0,
+        #000 var(--fade-start),
+        #000 calc(100% - var(--fade-end)),
+        transparent 100%
+      );
+    }
+
+    .nav-track::-webkit-scrollbar {
+      display: none;
+    }
+
+    .nav-track.fade-start {
+      --fade-start: 32px;
+    }
+
+    .nav-track.fade-end {
+      --fade-end: 32px;
+    }
+
+    .section-nav a {
+      padding: 5px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      white-space: nowrap;
+    }
+
+    .section-nav a.active {
+      border-color: transparent;
+    }
+
+    .content > [id^="settings-"] {
+      scroll-margin-top: 72px;
     }
   }
 
