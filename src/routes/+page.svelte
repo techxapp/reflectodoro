@@ -35,11 +35,15 @@
     loadAndSyncPomodoroMode,
     savePomodoroMode,
     getUpcomingEvents,
+    getDueHabits,
+    addHabitLog,
+    isKeyLockedError,
     type UpcomingEvents,
     type PomodoroMode,
     type PairedDeviceInfo,
   } from "$lib/db";
   import { groupEventsByDay, timeLabel } from "$lib/calendarFormat";
+  import { formatDueStatus, timeHHMM, type DueHabit } from "$lib/habits";
 
   type SnoozeInfo = { resume_at: string; minutes: number };
   const SNOOZE_MINUTES_OPTIONS = [30, 60, 120, 360, 720];
@@ -110,6 +114,13 @@
   let upcomingLoading = $state(false);
   let upcomingRefreshError = $state<string | null>(null);
   const upcomingGroups = $derived(upcoming ? groupEventsByDay(upcoming.events, now) : []);
+  // "Habits due" card: due and overdue habits (see habits.ts's dueHabits).
+  // Hidden while empty, and on any read failure (a locked encryption key
+  // included), same as the upcoming-events card.
+  let dueList = $state<DueHabit[]>([]);
+  let dueGeneration = 0;
+  let habitBusyId = $state<string | null>(null);
+  let habitError = $state<string | null>(null);
   let destroyed = false;
   let unlistenCrypto: UnlistenFn | null = null;
   let unlisten: UnlistenFn | null = null;
@@ -279,6 +290,34 @@
     }
   }
 
+  /** Last-started-wins, like the overlay's refreshDueHabits. */
+  async function loadDueHabits() {
+    const generation = ++dueGeneration;
+    let next: DueHabit[] = [];
+    try {
+      next = await getDueHabits();
+    } catch (e) {
+      if (!isKeyLockedError(e)) void logError(`[main] due habits: ${e}`);
+    }
+    if (generation === dueGeneration) dueList = next;
+  }
+
+  /** Logs the habit as done now, with no note. */
+  async function markHabitDone(item: DueHabit) {
+    if (habitBusyId !== null) return;
+    habitBusyId = item.habit.id;
+    habitError = null;
+    try {
+      await addHabitLog(item.habit.id, localDateStamp(), timeHHMM(), "");
+      await loadDueHabits();
+    } catch (e) {
+      void logError(`[main] log habit failed: ${e}`);
+      habitError = e instanceof Error ? e.message : String(e);
+    } finally {
+      habitBusyId = null;
+    }
+  }
+
   async function runDeviceSync(device: PairedDeviceInfo) {
     syncingDeviceId = device.deviceId;
     syncStatus = "idle";
@@ -328,6 +367,7 @@
     void refreshMediaPauseStatus();
     void attemptAutoSync();
     void loadUpcomingEvents();
+    void loadDueHabits();
   }
 
   /** The boot sequence below is a chain of awaits: before this wrapper, the
@@ -376,6 +416,7 @@
     unlistenMediaToggle = await listenForMediaToggleRecorded();
     unlistenAutoSyncCompleted = await listen<string>("p2p-sync://auto-completed", () => {
       void loadPairedDevices();
+      void loadDueHabits();
     });
     // The screen-time batch listener lives in +layout.svelte, not here --
     // this route ("/") unmounts on every tab navigation, which would tear
@@ -395,7 +436,11 @@
     // Same independence from the boot chain. Re-read after an encryption-key
     // unlock too, since a locked key is what makes the first read fail.
     void loadUpcomingEvents();
-    void listen("crypto://state", () => void loadUpcomingEvents()).then((fn) => {
+    void loadDueHabits();
+    void listen("crypto://state", () => {
+      void loadUpcomingEvents();
+      void loadDueHabits();
+    }).then((fn) => {
       if (destroyed) fn();
       else unlistenCrypto = fn;
     });
@@ -591,6 +636,39 @@
       {/each}
       {#if upcomingRefreshError}
         <p class="hint error">Couldn't refresh events: {upcomingRefreshError}</p>
+      {/if}
+    </section>
+  {/if}
+
+  {#if dueList.length > 0}
+    <section class="card habits-due-card">
+      <h2>Habits due</h2>
+      <ul class="habit-list">
+        {#each dueList as item (item.habit.id)}
+          <li>
+            <span class="habit-dot" style="background: var(--habit-{item.habit.color})"></span>
+            <span class="habit-name">
+              {#if item.habit.emoji}{item.habit.emoji}{/if}
+              {item.habit.name}
+            </span>
+            <span class="hint habit-status" class:overdue={(item.overdueDays ?? 0) > 0}
+              >{formatDueStatus(item)}</span
+            >
+            <button
+              type="button"
+              class="toggle sync-button"
+              title="Mark as done now"
+              aria-label="Mark {item.habit.name} as done now"
+              disabled={habitBusyId !== null}
+              onclick={() => markHabitDone(item)}
+            >
+              {habitBusyId === item.habit.id ? "Saving…" : "✓ Done"}
+            </button>
+          </li>
+        {/each}
+      </ul>
+      {#if habitError}
+        <p class="hint error">Couldn't log: {habitError}</p>
       {/if}
     </section>
   {/if}
@@ -1013,5 +1091,43 @@
   .event-time,
   .event-location {
     margin: 0;
+  }
+
+  .habit-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .habit-list li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .habit-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .habit-name {
+    flex: 1;
+    font-size: 14px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .habit-status {
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  .habit-status.overdue {
+    color: var(--danger);
   }
 </style>
