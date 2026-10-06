@@ -536,7 +536,11 @@
                     <span class="habit-sub">
                       {formatDaysSince(stats?.daysSince ?? null)}
                       {#if h.targetDays}· every {h.targetDays}d{/if}
-                      {#if stats?.overdue}<span class="badge overdue">Overdue</span>{/if}
+                      {#if stats?.overdue}
+                        <span class="badge overdue">Overdue</span>
+                      {:else if stats?.due && !h.archived}
+                        <span class="badge due">Due</span>
+                      {/if}
                       {#if h.archived}<span class="badge">Hidden</span>{/if}
                     </span>
                   </span>
@@ -912,6 +916,11 @@
     color: var(--text-dim);
     padding: 1px 7px;
     border-radius: 999px;
+  }
+
+  .badge.due {
+    background: var(--accent-soft);
+    color: var(--accent);
   }
 
   .badge.overdue {

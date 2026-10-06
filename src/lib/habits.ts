@@ -147,6 +147,9 @@ export interface HabitStats {
   /** Logs dated within the last 30 days, today included. */
   countLast30: number;
   overdue: boolean;
+  /** Due today or never logged, with a target; same rule as `dueHabits`. Also
+   * true when overdue, so a caller showing both should prefer "Overdue". */
+  due: boolean;
 }
 
 /** `logs` must all belong to one habit. */
@@ -170,6 +173,7 @@ export function habitStats(logs: HabitLog[], targetDays: number | null, todaySta
     avgGapDays,
     countLast30,
     overdue: targetDays !== null && daysSince !== null && daysSince > targetDays,
+    due: targetDays !== null && (daysSince === null || daysSince >= targetDays),
   };
 }
 
