@@ -1,6 +1,6 @@
 # Reflectodoro
 
-> A Pomodoro timer app whose real point is forcing a short self-reflection ("what did I do?") at the end of every break, enforced via a hard-to-dismiss overlay. Fully local and open source — no account, no server, no cloud dependency.
+> The Pomodoro app with self-reflection ("what did I do?") and break you can't skip - enforced via a hard-to-dismiss overlay. Fully local and open source — no account, no server, no cloud dependency.
 
 Reflectodoro runs work/break sessions on a fixed wall-clock grid (`:00`-`:25` work, `:25`-`:30` break, and so on) rather than a rolling timer. When a break ends, a break screen appears that is deliberately hard to dismiss: it only unlocks once the user has typed a short reflection about what they did, optionally sped up by solving a random typing challenge ("breakit"). All reflections, wellness check-ins, and screen-time data are stored in a single local SQLite database on the user's own device — there is no account system and no server this app depends on.
 
