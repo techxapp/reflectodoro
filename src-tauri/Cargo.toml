@@ -109,6 +109,12 @@ base64 = "0.22"
 hmac = "0.12"
 hkdf = "0.12"
 sha2 = "0.10"
+# calendar.rs: resolves an ICS event's TZID (e.g. America/New_York) to a UTC
+# instant, DST-correct. Pure Rust, no system tz database needed, so it behaves
+# identically on Android/iOS. Was a dev-dependency only until the calendar
+# feature needed it at runtime. The ICS parsing itself is in-house (see that
+# file's doc comment for why not the `ical`/`rrule` crates).
+chrono-tz = "0.10.4"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
@@ -214,6 +220,3 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 # backend can't set the item's accessibility class -- this one needs
 # AfterFirstUnlockThisDeviceOnly (see key_store.rs). Already in the lockfile.
 security-framework = "3"
-
-[dev-dependencies]
-chrono-tz = "0.10.4"

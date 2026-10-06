@@ -1155,7 +1155,9 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
             // location (key_store::LOCATION_SETTING) and the app lock PIN,
             // recovery code and their attempt counters
             // (app_lock::DEVICE_LOCAL_SETTINGS).
+            // The calendar source list holds secret iCal URLs, also device-local.
             let kept: Vec<&str> = std::iter::once(crate::key_store::LOCATION_SETTING)
+                .chain(std::iter::once(crate::calendar::SOURCES_KEY))
                 .chain(crate::app_lock::DEVICE_LOCAL_SETTINGS)
                 .collect();
             let placeholders = vec!["?"; kept.len()].join(", ");
@@ -1196,6 +1198,7 @@ pub async fn import_data(app: AppHandle, data: ImportData, mode: ImportMode, inc
         // Nor is this device's app lock PIN (app_lock::DEVICE_LOCAL_SETTINGS).
         for row in data.app_setting.iter().filter(|r| {
             r.key != crate::key_store::LOCATION_SETTING
+                && r.key != crate::calendar::SOURCES_KEY
                 && !crate::app_lock::DEVICE_LOCAL_SETTINGS.contains(&r.key.as_str())
         }) {
             let sql = if mode == ImportMode::Merge {

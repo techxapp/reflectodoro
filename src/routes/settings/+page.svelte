@@ -56,6 +56,19 @@
     saveLlmSummaryAdvanced,
     LLM_SUMMARY_MIN_TIMEOUT_SECS,
     LLM_SUMMARY_MAX_TIMEOUT_SECS,
+    getCalendarConfig,
+    saveCalendarSources,
+    saveCalendarPrefs,
+    validateCalendarUrl,
+    listHolidayCountries,
+    CALENDAR_DEFAULT_LOOKAHEAD_DAYS,
+    CALENDAR_MIN_LOOKAHEAD_DAYS,
+    CALENDAR_MAX_LOOKAHEAD_DAYS,
+    CALENDAR_DEFAULT_MAX_ITEMS,
+    CALENDAR_MIN_MAX_ITEMS,
+    CALENDAR_MAX_MAX_ITEMS,
+    type CalendarSource,
+    type HolidayCountry,
     getThemePreference,
     saveThemePreference,
     type ThemePreference,
@@ -107,6 +120,7 @@
       { id: "screen-time", label: "Screen time" },
       { id: "app-lock", label: "App lock" },
       { id: "daily-summary", label: "Daily summary" },
+      { id: "calendar", label: "Calendar" },
       { id: "auto-pause", label: "Auto-pause", desktopOnly: true },
       { id: "wellness-checkin", label: "Check-in" },
       { id: "stuck-break-screen", label: "Stuck break screen", desktopOnly: true },
@@ -335,6 +349,34 @@
   // Fetched from Rust (db.rs's DEFAULT_LLM_SUMMARY_SYSTEM_PROMPT), same
   // single-source-of-truth pattern as defaultQuoteApiAttribution above.
   let defaultLlmSummarySystemPrompt = $state("");
+
+  // Calendar events (home "Upcoming events" card). Sources are encrypted at
+  // rest and device-local -- see db.ts's "Calendar events" section.
+  let calendarLoaded = $state(false);
+  let calendarLoadError = $state("");
+  let calendarSources = $state<CalendarSource[]>([]);
+  let holidayCountries = $state<HolidayCountry[]>([]);
+  let calendarLookaheadDays = $state(CALENDAR_DEFAULT_LOOKAHEAD_DAYS);
+  let calendarMaxItems = $state(CALENDAR_DEFAULT_MAX_ITEMS);
+  let calendarHolidayPublicOnly = $state(true);
+  let calendarPrefsSaved = $state(false);
+  let calendarNewName = $state("");
+  let calendarNewUrl = $state("");
+  let calendarAdding = $state(false);
+  let calendarMessage = $state("");
+  let calendarMessageIsError = $state(false);
+
+  const holidaySource = $derived(calendarSources.find((s) => s.kind === "holiday"));
+  const personalSources = $derived(calendarSources.filter((s) => s.kind === "personal"));
+  const holidayCountryCode = $derived(
+    holidayCountries.find((c) => c.url === holidaySource?.url)?.code ?? "",
+  );
+  /** A hint only -- picking a country is what turns the feed on, so nothing
+   * is fetched from Google until the user opts in. */
+  const suggestedHolidayCountry = $derived.by(() => {
+    const region = (typeof navigator !== "undefined" ? navigator.language : "").split("-")[1];
+    return region ? holidayCountries.find((c) => c.code === region.toUpperCase()) : undefined;
+  });
 
   let overlayGranted = $state(false);
   let overlayChecked = $state(false);
@@ -720,6 +762,22 @@
   });
 
   onMount(async () => {
+    try {
+      const cfg = await getCalendarConfig();
+      calendarSources = cfg.sources;
+      calendarLookaheadDays = cfg.lookaheadDays;
+      calendarMaxItems = cfg.maxItems;
+      calendarHolidayPublicOnly = cfg.holidayPublicOnly;
+      holidayCountries = await listHolidayCountries();
+      calendarLoaded = true;
+    } catch (e) {
+      // Most likely a locked encryption key (the sources are encrypted); the
+      // unlock modal handles that, and a revisit loads normally afterwards.
+      calendarLoadError = String(e);
+    }
+  });
+
+  onMount(async () => {
     themePreference = await getThemePreference();
     themeLoaded = true;
   });
@@ -1074,6 +1132,106 @@
     // Shows the default in the editor; saving it stores a blank override
     // (see saveLlmSummaryAdvancedSetting), so future default changes still apply.
     llmSummarySystemPrompt = defaultLlmSummarySystemPrompt;
+  }
+
+  function setCalendarMessage(text: string, isError: boolean) {
+    calendarMessage = text;
+    calendarMessageIsError = isError;
+  }
+
+  /** Persists a new source list; on failure the in-memory list is rolled back
+   * so the UI never shows a calendar that wasn't actually saved. */
+  async function persistCalendarSources(next: CalendarSource[]): Promise<boolean> {
+    const previous = calendarSources;
+    calendarSources = next;
+    try {
+      await saveCalendarSources(next);
+      return true;
+    } catch (e) {
+      calendarSources = previous;
+      setCalendarMessage(`Couldn't save: ${e}`, true);
+      return false;
+    }
+  }
+
+  async function changeHolidayCountry(e: Event) {
+    const code = (e.currentTarget as HTMLSelectElement).value;
+    const others = calendarSources.filter((s) => s.kind !== "holiday");
+    const country = holidayCountries.find((c) => c.code === code);
+    const next: CalendarSource[] = country
+      ? [
+          ...others,
+          {
+            id: crypto.randomUUID(),
+            name: `Holidays in ${country.name}`,
+            kind: "holiday",
+            url: country.url,
+            enabled: true,
+          },
+        ]
+      : others;
+    setCalendarMessage("", false);
+    await persistCalendarSources(next);
+  }
+
+  async function addPersonalCalendar(e: Event) {
+    e.preventDefault();
+    const url = calendarNewUrl.trim();
+    if (!url) return;
+    calendarAdding = true;
+    setCalendarMessage("", false);
+    try {
+      // Fetching it once doubles as validation: a typo or a non-iCal URL is
+      // rejected here instead of silently showing nothing on the home screen.
+      const check = await validateCalendarUrl(url);
+      const name = calendarNewName.trim() || check.name || "Calendar";
+      const ok = await persistCalendarSources([
+        ...calendarSources,
+        { id: crypto.randomUUID(), name, kind: "personal", url, enabled: true },
+      ]);
+      if (ok) {
+        calendarNewName = "";
+        calendarNewUrl = "";
+        setCalendarMessage(`Added “${name}” (${check.eventCount} events found).`, false);
+      }
+    } catch (err) {
+      setCalendarMessage(String(err), true);
+    } finally {
+      calendarAdding = false;
+    }
+  }
+
+  async function toggleCalendarSource(id: string, enabled: boolean) {
+    setCalendarMessage("", false);
+    await persistCalendarSources(calendarSources.map((s) => (s.id === id ? { ...s, enabled } : s)));
+  }
+
+  async function removeCalendarSource(id: string) {
+    setCalendarMessage("", false);
+    await persistCalendarSources(calendarSources.filter((s) => s.id !== id));
+  }
+
+  async function saveCalendarPreferences(e: Event) {
+    e.preventDefault();
+    const clamp = (raw: number, min: number, max: number, fallback: number) => {
+      const n = Math.round(Number(raw));
+      return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+    };
+    calendarLookaheadDays = clamp(
+      calendarLookaheadDays,
+      CALENDAR_MIN_LOOKAHEAD_DAYS,
+      CALENDAR_MAX_LOOKAHEAD_DAYS,
+      CALENDAR_DEFAULT_LOOKAHEAD_DAYS,
+    );
+    calendarMaxItems = clamp(
+      calendarMaxItems,
+      CALENDAR_MIN_MAX_ITEMS,
+      CALENDAR_MAX_MAX_ITEMS,
+      CALENDAR_DEFAULT_MAX_ITEMS,
+    );
+    await saveCalendarPrefs(calendarLookaheadDays, calendarMaxItems, calendarHolidayPublicOnly);
+    calendarPrefsSaved = true;
+    setTimeout(() => (calendarPrefsSaved = false), 2000);
   }
 
   async function saveWellnessExclusions(e: Event) {
@@ -1691,6 +1849,121 @@
           <code>http://localhost:1234/v1/chat/completions</code>. The model name must match one
           installed on that server. An API key, timeout and custom prompt are under Advanced settings.
         </p>
+      {/if}
+    </section>
+
+    <section class="card" id="settings-calendar">
+      <h2>Calendar</h2>
+      <p class="hint">
+        Shows your upcoming events and holidays in an <strong>Upcoming events</strong> card on the
+        home screen. Nothing is shown until you add a calendar below, and the card is hidden
+        entirely when none is on. Events are fetched directly from the calendar's own address, kept
+        only in memory, and never saved to disk.
+      </p>
+
+      {#if calendarLoadError}
+        <p class="hint error">Couldn't load calendar settings: {calendarLoadError}</p>
+      {:else if calendarLoaded}
+        <h3>Holidays</h3>
+        <label class="medium">
+          Country
+          <select value={holidayCountryCode} onchange={changeHolidayCountry}>
+            <option value="">None</option>
+            {#each holidayCountries as c (c.code)}
+              <option value={c.code}>{c.name}</option>
+            {/each}
+          </select>
+        </label>
+        {#if !holidaySource && suggestedHolidayCountry}
+          <p class="hint">Your system region looks like {suggestedHolidayCountry.name}.</p>
+        {/if}
+        <p class="hint">
+          Uses Google's public holiday calendars. Picking a country is what turns this on.
+        </p>
+
+        <h3>Personal calendars</h3>
+        {#if personalSources.length > 0}
+          <ul class="paired-device-list">
+            {#each personalSources as s (s.id)}
+              <li>
+                <label class="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={s.enabled}
+                    onchange={(e) => toggleCalendarSource(s.id, e.currentTarget.checked)}
+                  />
+                  <span class="paired-device-name">{s.name}</span>
+                </label>
+                <button type="button" class="danger" onclick={() => removeCalendarSource(s.id)}>
+                  Remove
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
+        <form onsubmit={addPersonalCalendar}>
+          <label class="medium">
+            Name (optional)
+            <input type="text" bind:value={calendarNewName} placeholder="Work" />
+          </label>
+          <label class="grow">
+            Secret address in iCal format
+            <input
+              type="text"
+              bind:value={calendarNewUrl}
+              placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </label>
+          <button type="submit" disabled={calendarAdding || !calendarNewUrl.trim()}>
+            {calendarAdding ? "Checking…" : "Add calendar"}
+          </button>
+        </form>
+        {#if calendarMessage}
+          <p class="hint" class:error={calendarMessageIsError} class:saved={!calendarMessageIsError}>
+            {calendarMessage}
+          </p>
+        {/if}
+        <p class="hint">
+          In Google Calendar, open <strong>Settings</strong>, pick the calendar under
+          <em>Settings for my calendars</em>, then copy <strong>Secret address in iCal format</strong>
+          from <em>Integrate calendar</em>. Any iCal link (<code>https://</code> or
+          <code>webcal://</code>) works. <strong>Anyone with that link can read the calendar</strong>,
+          so it's stored encrypted on this device only, and is never exported, synced or logged. To
+          revoke it, reset the secret address in Google Calendar.
+        </p>
+
+        <h3>Display</h3>
+        <form onsubmit={saveCalendarPreferences}>
+          <label>
+            Look ahead (days)
+            <input
+              type="number"
+              bind:value={calendarLookaheadDays}
+              min={CALENDAR_MIN_LOOKAHEAD_DAYS}
+              max={CALENDAR_MAX_LOOKAHEAD_DAYS}
+            />
+          </label>
+          <label>
+            Max events shown
+            <input
+              type="number"
+              bind:value={calendarMaxItems}
+              min={CALENDAR_MIN_MAX_ITEMS}
+              max={CALENDAR_MAX_MAX_ITEMS}
+            />
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" bind:checked={calendarHolidayPublicOnly} />
+            Public holidays only (hide observances)
+          </label>
+          <button type="submit">Save</button>
+          {#if calendarPrefsSaved}
+            <span class="hint saved">Saved</span>
+          {/if}
+        </form>
       {/if}
     </section>
 

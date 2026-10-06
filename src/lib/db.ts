@@ -2393,10 +2393,12 @@ export async function exportAllData(includeSettings: boolean = true): Promise<Ex
         // (key_store.rs) -- meaningless, and harmful, on another device.
         // llm_summary_api_key is a credential; the export is plaintext JSON.
         // app_lock_* is this device's PIN and recovery-code hashes and their
-        // attempt counters (app_lock.rs).
+        // attempt counters (app_lock.rs). calendar_sources holds secret iCal
+        // URLs (a credential, encrypted under this device's key -- see
+        // calendar.rs), so it's neither exportable nor portable.
         db.select<SettingRow[]>(
           `SELECT key, value FROM app_setting
-           WHERE key NOT IN ('encryption_key_location', 'llm_summary_api_key')
+           WHERE key NOT IN ('encryption_key_location', 'llm_summary_api_key', '${CALENDAR_SOURCES_KEY}')
              AND key NOT IN (${APP_LOCK_DEVICE_LOCAL_KEYS.map((k) => `'${k}'`).join(", ")})`,
         )
       : Promise.resolve([]),
@@ -3130,6 +3132,157 @@ export async function saveLlmSummaryAdvanced(
   await saveAppSetting(LLM_SUMMARY_API_KEY_KEY, apiKey);
   await saveAppSetting(LLM_SUMMARY_TIMEOUT_SECS_KEY, String(timeoutSecs));
   await saveAppSetting(LLM_SUMMARY_SYSTEM_PROMPT_KEY, systemPrompt);
+}
+
+// --- Calendar events (home "Upcoming events" card) ------------------------
+//
+// Personal events come from a Google Calendar "secret address in iCal format"
+// URL, holidays from Google's public per-country feeds -- both plain ICS, so
+// one Rust code path (calendar.rs) fetches and parses them. The source list is
+// ENCRYPTED AT REST because a secret URL is a credential (anyone holding it can
+// read the calendar), and is device-local: excluded from export (see
+// exportAllData), skipped on import, never synced. Fetched events themselves
+// are never persisted.
+
+/** Must match `calendar::SOURCES_KEY` in Rust. */
+export const CALENDAR_SOURCES_KEY = "calendar_sources";
+const CALENDAR_LOOKAHEAD_KEY = "calendar_lookahead_days";
+const CALENDAR_MAX_ITEMS_KEY = "calendar_max_items";
+const CALENDAR_PUBLIC_ONLY_KEY = "calendar_holiday_public_only";
+
+// Same bounds calendar.rs clamps to.
+export const CALENDAR_DEFAULT_LOOKAHEAD_DAYS = 14;
+export const CALENDAR_MIN_LOOKAHEAD_DAYS = 1;
+export const CALENDAR_MAX_LOOKAHEAD_DAYS = 90;
+export const CALENDAR_DEFAULT_MAX_ITEMS = 8;
+export const CALENDAR_MIN_MAX_ITEMS = 1;
+export const CALENDAR_MAX_MAX_ITEMS = 30;
+
+export type CalendarSourceKind = "personal" | "holiday";
+
+export interface CalendarSource {
+  id: string;
+  name: string;
+  kind: CalendarSourceKind;
+  url: string;
+  enabled: boolean;
+}
+
+export interface CalendarConfig {
+  sources: CalendarSource[];
+  lookaheadDays: number;
+  maxItems: number;
+  /** Hide Google's "Observance" entries (keep only public holidays). */
+  holidayPublicOnly: boolean;
+}
+
+export interface CalendarEvent {
+  title: string;
+  /** `YYYY-MM-DD` when `allDay`, otherwise an RFC 3339 UTC instant. */
+  start: string;
+  /** Same format as `start`; last day *inclusive* for an all-day event. */
+  end: string;
+  allDay: boolean;
+  sourceName: string;
+  kind: CalendarSourceKind;
+  location: string;
+}
+
+export interface UpcomingEvents {
+  events: CalendarEvent[];
+  errors: { sourceId: string; name: string; message: string }[];
+  /** At least one enabled source exists. */
+  configured: boolean;
+}
+
+export interface HolidayCountry {
+  code: string;
+  name: string;
+  url: string;
+}
+
+function clampInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && raw !== undefined && raw.trim() !== ""
+    ? Math.min(max, Math.max(min, Math.round(n)))
+    : fallback;
+}
+
+export async function getCalendarConfig(): Promise<CalendarConfig> {
+  const db = await getDb();
+  const rows = await db.select<{ key: string; value: string }[]>(
+    `SELECT key, value FROM app_setting WHERE key IN ($1, $2, $3, $4)`,
+    [CALENDAR_SOURCES_KEY, CALENDAR_LOOKAHEAD_KEY, CALENDAR_MAX_ITEMS_KEY, CALENDAR_PUBLIC_ONLY_KEY],
+  );
+  const byKey = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+
+  let sources: CalendarSource[] = [];
+  const stored = (byKey[CALENDAR_SOURCES_KEY] ?? "").trim();
+  if (stored) {
+    const [json] = await decryptFields([stored]);
+    const parsed: unknown = JSON.parse(json);
+    if (Array.isArray(parsed)) {
+      sources = parsed
+        .filter((s): s is CalendarSource => !!s && typeof s.id === "string" && typeof s.url === "string")
+        .map((s) => ({
+          id: s.id,
+          name: typeof s.name === "string" ? s.name : "",
+          kind: s.kind === "holiday" ? "holiday" : "personal",
+          url: s.url,
+          enabled: s.enabled !== false,
+        }));
+    }
+  }
+
+  return {
+    sources,
+    lookaheadDays: clampInt(
+      byKey[CALENDAR_LOOKAHEAD_KEY],
+      CALENDAR_DEFAULT_LOOKAHEAD_DAYS,
+      CALENDAR_MIN_LOOKAHEAD_DAYS,
+      CALENDAR_MAX_LOOKAHEAD_DAYS,
+    ),
+    maxItems: clampInt(
+      byKey[CALENDAR_MAX_ITEMS_KEY],
+      CALENDAR_DEFAULT_MAX_ITEMS,
+      CALENDAR_MIN_MAX_ITEMS,
+      CALENDAR_MAX_MAX_ITEMS,
+    ),
+    holidayPublicOnly: byKey[CALENDAR_PUBLIC_ONLY_KEY] !== "false",
+  };
+}
+
+export async function saveCalendarSources(sources: CalendarSource[]): Promise<void> {
+  if (sources.length === 0) {
+    await saveAppSetting(CALENDAR_SOURCES_KEY, "");
+    return;
+  }
+  const [cipher] = await encryptFields([JSON.stringify(sources)]);
+  await saveAppSetting(CALENDAR_SOURCES_KEY, cipher);
+}
+
+export async function saveCalendarPrefs(
+  lookaheadDays: number,
+  maxItems: number,
+  holidayPublicOnly: boolean,
+): Promise<void> {
+  await saveAppSetting(CALENDAR_LOOKAHEAD_KEY, String(lookaheadDays));
+  await saveAppSetting(CALENDAR_MAX_ITEMS_KEY, String(maxItems));
+  await saveAppSetting(CALENDAR_PUBLIC_ONLY_KEY, holidayPublicOnly ? "true" : "false");
+}
+
+/** `force` bypasses calendar.rs's in-memory cache (the manual refresh button). */
+export function getUpcomingEvents(force = false): Promise<UpcomingEvents> {
+  return invoke<UpcomingEvents>("get_upcoming_events", { force });
+}
+
+/** Settings' "Test" button: fetches the URL once, reports the feed's name and size. */
+export function validateCalendarUrl(url: string): Promise<{ name: string; eventCount: number }> {
+  return invoke("validate_calendar_url", { url });
+}
+
+export function listHolidayCountries(): Promise<HolidayCountry[]> {
+  return invoke<HolidayCountry[]>("list_holiday_countries");
 }
 
 // --- Theme (Settings -> Appearance) --------------------------------------

@@ -2,6 +2,7 @@
 mod android_bridge;
 mod app_lock;
 mod breakit;
+mod calendar;
 mod commands;
 mod crypto;
 mod db;
@@ -1286,6 +1287,9 @@ pub fn run() {
             commands::can_query_usage_stats,
             commands::request_usage_stats_permission,
             commands::fetch_quote,
+            calendar::get_upcoming_events,
+            calendar::validate_calendar_url,
+            calendar::list_holiday_countries,
             commands::default_quote_api_attribution,
             commands::summarize_reflections,
             commands::default_llm_summary_system_prompt,

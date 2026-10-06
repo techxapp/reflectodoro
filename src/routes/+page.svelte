@@ -34,9 +34,12 @@
     attemptAutoSync,
     loadAndSyncPomodoroMode,
     savePomodoroMode,
+    getUpcomingEvents,
+    type UpcomingEvents,
     type PomodoroMode,
     type PairedDeviceInfo,
   } from "$lib/db";
+  import { groupEventsByDay, timeLabel } from "$lib/calendarFormat";
 
   type SnoozeInfo = { resume_at: string; minutes: number };
   const SNOOZE_MINUTES_OPTIONS = [30, 60, 120, 360, 720];
@@ -98,6 +101,17 @@
   let syncStatus = $state<"idle" | "success" | "error">("idle");
   let syncMessage = $state("");
   let autoSyncBusyId = $state<string | null>(null);
+  // "Upcoming events" card (see calendar.rs). null until the first read
+  // resolves, and stays null if that read fails (e.g. a locked encryption key,
+  // which the sources are encrypted under) -- the card is simply hidden then,
+  // same as the break screen's due-habits panel, rather than showing an error
+  // for a feature the user may not even use.
+  let upcoming = $state<UpcomingEvents | null>(null);
+  let upcomingLoading = $state(false);
+  let upcomingRefreshError = $state<string | null>(null);
+  const upcomingGroups = $derived(upcoming ? groupEventsByDay(upcoming.events, now) : []);
+  let destroyed = false;
+  let unlistenCrypto: UnlistenFn | null = null;
   let unlisten: UnlistenFn | null = null;
   let unlistenSnooze: UnlistenFn | null = null;
   let unlistenTasks: UnlistenFn | null = null;
@@ -248,6 +262,23 @@
     }
   }
 
+  /** `force` is the Refresh button: it bypasses calendar.rs's 15-minute feed
+   * cache. Window focus and mount rely on that cache, so coming back to the
+   * window doesn't re-download feeds each time. */
+  async function loadUpcomingEvents(force = false) {
+    if (upcomingLoading) return;
+    upcomingLoading = true;
+    try {
+      upcoming = await getUpcomingEvents(force);
+      upcomingRefreshError = null;
+    } catch (e) {
+      // Keep the last good list; only surface the failure if there is one.
+      upcomingRefreshError = upcoming ? (e instanceof Error ? e.message : String(e)) : null;
+    } finally {
+      upcomingLoading = false;
+    }
+  }
+
   async function runDeviceSync(device: PairedDeviceInfo) {
     syncingDeviceId = device.deviceId;
     syncStatus = "idle";
@@ -296,6 +327,7 @@
   function onWindowFocus() {
     void refreshMediaPauseStatus();
     void attemptAutoSync();
+    void loadUpcomingEvents();
   }
 
   /** The boot sequence below is a chain of awaits: before this wrapper, the
@@ -360,6 +392,13 @@
     // Independent of bootMainWindow's sequential chain below -- nothing else
     // needs to block on the paired-device list resolving.
     void loadPairedDevices();
+    // Same independence from the boot chain. Re-read after an encryption-key
+    // unlock too, since a locked key is what makes the first read fail.
+    void loadUpcomingEvents();
+    void listen("crypto://state", () => void loadUpcomingEvents()).then((fn) => {
+      if (destroyed) fn();
+      else unlistenCrypto = fn;
+    });
     // Started immediately, before bootMainWindow's long chain of sequential
     // awaited IPC round-trips (settings syncs, get_enabled, get_snooze_until,
     // task-list reads, listener registrations) -- this route unmounts on
@@ -382,7 +421,9 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     window.removeEventListener("focus", onWindowFocus);
+    unlistenCrypto?.();
     unlisten?.();
     unlistenSnooze?.();
     unlistenTasks?.();
@@ -506,6 +547,54 @@
     {/if}
   </section>
 
+  {#if upcoming?.configured}
+    <section class="card upcoming-events-card">
+      <div class="card-header">
+        <h2>Upcoming events</h2>
+        <button
+          type="button"
+          class="toggle sync-button"
+          onclick={() => loadUpcomingEvents(true)}
+          disabled={upcomingLoading}
+        >
+          {upcomingLoading ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
+      {#if upcomingGroups.length === 0}
+        <p class="hint">Nothing coming up.</p>
+      {:else}
+        {#each upcomingGroups as group (group.dayKey)}
+          <p class="event-day">{group.label}</p>
+          <ul class="event-list">
+            {#each group.events as ev}
+              <li>
+                <span
+                  class="event-dot"
+                  class:holiday={ev.kind === "holiday"}
+                  title={ev.sourceName}
+                ></span>
+                <span class="event-title">{ev.title}</span>
+                {#if ev.kind === "holiday"}
+                  <span class="event-badge">Holiday</span>
+                {/if}
+                <span class="hint event-time">{timeLabel(ev, now)}</span>
+                {#if ev.location}
+                  <span class="hint event-location">{ev.location}</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/each}
+      {/if}
+      {#each upcoming.errors as err (err.sourceId)}
+        <p class="hint error">Couldn't refresh {err.name}: {err.message}</p>
+      {/each}
+      {#if upcomingRefreshError}
+        <p class="hint error">Couldn't refresh events: {upcomingRefreshError}</p>
+      {/if}
+    </section>
+  {/if}
+
   {#if pairedDevicesLoaded && pairedDevices.length > 0}
     <section class="card paired-devices-card">
       <h2>Paired devices</h2>
@@ -610,8 +699,13 @@
       padding: 12px 14px;
     }
 
-    .paired-device-name {
+    .paired-device-name,
+    .event-title {
       font-size: 16px;
+    }
+
+    .event-day {
+      font-size: 13px;
     }
 
     label.checkbox {
@@ -853,5 +947,71 @@
   .sync-button {
     padding: 6px 12px;
     font-size: 12px;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .event-day {
+    margin: 14px 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+  }
+
+  .event-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .event-list li {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .event-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+    align-self: center;
+  }
+
+  .event-dot.holiday {
+    background: #3a9d5d;
+  }
+
+  .event-title {
+    font-size: 14px;
+    /* A long title wraps inside the card instead of widening the grid track. */
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .event-badge {
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: #3a9d5d;
+    border: 1px solid var(--border);
+  }
+
+  .event-time,
+  .event-location {
+    margin: 0;
   }
 </style>
