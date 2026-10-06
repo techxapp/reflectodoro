@@ -774,8 +774,17 @@ async fn run_scheduler(app: AppHandle) {
                     p2p_sync::maybe_auto_sync(auto_sync_handle).await;
                 });
             }
-            if POMODORO_ENABLED.load(Ordering::SeqCst) {
+            // Only *opening* a break is gated on Pomodoro mode. The Work arm
+            // (expire + close the overlay that's already up, arm its grace-period
+            // auto-close) must run regardless: a snooze armed while a break is
+            // open -- auto-pause on wake fires exactly then, when the user comes
+            // back to a dark screen mid-break -- otherwise left `time_expired`
+            // false at the boundary, so a submitted reflection could never
+            // unlock the overlay and nothing ever auto-closed it until the
+            // snooze ran out.
+            {
                 match slot.phase {
+                    Phase::Break if !POMODORO_ENABLED.load(Ordering::SeqCst) => {}
                     Phase::Break => {
                         let this_slot_start = slot.start_iso();
                         let limit_reached = breakit_limit_reached_now(&app).await;
