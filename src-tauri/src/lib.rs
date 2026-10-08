@@ -517,6 +517,12 @@ async fn run_scheduler(app: AppHandle) {
         Ok(mode) => store_mode(mode),
         Err(e) => log::warn!("scheduler: could not read pomodoro_mode, using {}: {e}", current_mode().as_str()),
     }
+    // Same reason for the breakit settings: a cold-start break must not show
+    // a challenge built from the hardcoded default (see
+    // load_saved_breakit_config).
+    if let Err(e) = commands::load_saved_breakit_config(&app).await {
+        log::warn!("scheduler: could not read breakit settings, using defaults until the frontend syncs: {e}");
+    }
     let mut last_phase: Option<Phase> = None;
     let mut expected_wake: Option<DateTime<Local>> = None;
     // Night pause edge detection (Android only) -- see the trigger in the
@@ -802,6 +808,18 @@ async fn run_scheduler(app: AppHandle) {
                         // Guards against the startup webview blank-page race
                         // when the app boots straight into a live break --
                         // a no-op once the app's been running a while.
+                        //
+                        // Not on Android: that race is about a freshly created
+                        // desktop WebviewWindow, and Android never creates
+                        // one -- the break UI is the native overlay's own
+                        // WebView, or the already-loaded main webview routing
+                        // itself to /overlay. Waiting there only delayed the
+                        // overlay by up to 6s on a cold recovery launch,
+                        // leaving the main window on screen in the meantime
+                        // (the "gap" before the overlay). The other thing the
+                        // wait bought, time for the frontend's breakit sync,
+                        // is now covered by load_saved_breakit_config above.
+                        #[cfg(not(target_os = "android"))]
                         overlay::wait_for_webview_warmup(&app).await;
 
                         // State was committed as `open` *before* the await

@@ -47,6 +47,21 @@ private fun nextBoundarySecondConcentration(secondOfHour: Int): Int = when {
   else -> 60 * 60
 }
 
+/** Whether the wall clock is inside a break slot right now, by the same grid
+ * rule as above (grid::slot_for_mode): Normal :25-:30 and :55-:00,
+ * Concentration :25:00-:26:00 and :50:00-:00. Used only by
+ * BreakAlarmReceiver to decide whether a recovery launch has anything to show;
+ * Rust still owns every real phase decision. */
+fun isInBreakNow(context: Context): Boolean {
+  val now = Calendar.getInstance()
+  val secondOfHour = now.get(Calendar.MINUTE) * 60 + now.get(Calendar.SECOND)
+  return if (PomodoroEnabledPref.isConcentrationMode(context)) {
+    secondOfHour in (25 * 60) until (26 * 60) || secondOfHour >= 50 * 60
+  } else {
+    secondOfHour in (25 * 60) until (30 * 60) || secondOfHour >= 55 * 60
+  }
+}
+
 /** (Re)arms the single next AlarmManager wake, replacing whatever was
  * previously scheduled -- setAlarmClock is one-shot, so BreakSchedulerService
  * and BreakAlarmReceiver both call this every time they run to keep the

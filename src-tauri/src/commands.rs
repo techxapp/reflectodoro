@@ -99,12 +99,19 @@ pub fn sync_breakit_config(
     include_special: bool,
     max_per_day: u32,
 ) {
-    let (len, include_special, max_per_day) = {
+    let (len, include_special, max_per_day, shape_changed) = {
         let mut cfg = state.breakit_config.lock().unwrap();
-        cfg.length = length.clamp(4, 64);
+        let new_len = length.clamp(4, 64);
+        // Only length/charset decide what a challenge looks like. When they
+        // already match (run_scheduler now loads them from the DB before the
+        // first break -- load_saved_breakit_config), the challenge on screen
+        // is already right, and replacing it would just change the code under
+        // a user who may have started typing it.
+        let shape_changed = cfg.length != new_len || cfg.include_special != include_special;
+        cfg.length = new_len;
         cfg.include_special = include_special;
         cfg.max_per_day = max_per_day.max(1);
-        (cfg.length, cfg.include_special, cfg.max_per_day)
+        (cfg.length, cfg.include_special, cfg.max_per_day, shape_changed)
     };
     log::info!("sync_breakit_config: length={len} include_special={include_special} max_per_day={max_per_day}");
 
@@ -122,7 +129,7 @@ pub fn sync_breakit_config(
     // both at once in opposite orders across two threads is a deadlock.
     let corrected = {
         let mut overlay = state.overlay.lock().unwrap();
-        if overlay.open && !overlay.breakit_matched {
+        if shape_changed && overlay.open && !overlay.breakit_matched {
             overlay.breakit_challenge = breakit::generate_challenge(len, include_special);
             true
         } else {
@@ -268,6 +275,50 @@ pub(crate) async fn load_saved_pomodoro_mode(app: &AppHandle) -> Result<crate::g
         .await
         .map_err(|e| format!("failed to read pomodoro_mode: {e}"))?;
     Ok(value.map(|v| crate::grid::Mode::parse(&v)).unwrap_or_default())
+}
+
+/// Reads the saved breakit settings straight from `app_setting` into
+/// `AppState.breakit_config`, for `run_scheduler` to call before its first
+/// iteration -- the same cold-start reason as `load_saved_pomodoro_mode`.
+/// Without it, a break opened by a cold process start (Android's alarm
+/// recovery) showed a challenge built from the hardcoded default until the
+/// frontend's `sync_breakit_config` arrived and swapped it for a different one.
+/// Missing or unparseable rows keep whatever is already in state. Same clamps
+/// as `sync_breakit_config`.
+pub(crate) async fn load_saved_breakit_config(app: &AppHandle) -> Result<(), String> {
+    let pool = crate::db::open_direct_pool(app).await?;
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT key, value FROM app_setting WHERE key IN ('breakit_length', 'breakit_include_special', 'breakit_max_per_day')",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("failed to read breakit settings: {e}"))?;
+    use tauri::Manager as _;
+    let state = app.state::<AppState>();
+    let mut cfg = state.breakit_config.lock().unwrap();
+    for (key, value) in rows {
+        match key.as_str() {
+            "breakit_length" => {
+                if let Ok(n) = value.trim().parse::<u32>() {
+                    cfg.length = n.clamp(4, 64);
+                }
+            }
+            "breakit_include_special" => cfg.include_special = value.trim() == "true",
+            "breakit_max_per_day" => {
+                if let Ok(n) = value.trim().parse::<u32>() {
+                    cfg.max_per_day = n.max(1);
+                }
+            }
+            _ => {}
+        }
+    }
+    log::info!(
+        "load_saved_breakit_config: length={} include_special={} max_per_day={}",
+        cfg.length,
+        cfg.include_special,
+        cfg.max_per_day
+    );
+    Ok(())
 }
 
 #[tauri::command]

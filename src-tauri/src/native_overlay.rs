@@ -677,6 +677,9 @@ enum NativeOverlayEvent {
     /// WebView -- it reuses this channel as the one Kotlin->Rust path that
     /// exists. See `crate::SCHEDULER_WAKE`.
     SchedulerWake,
+    /// From MainActivity.onDestroy, right before it ends the process (see its
+    /// doc comment). Only logged, so the exported log says why it stopped.
+    ActivityDestroyed,
 }
 
 /// Guards `SubmitReflection` against two channel events being handled
@@ -789,6 +792,10 @@ fn handle_channel_event(app: &AppHandle, value: Value) {
         NativeOverlayEvent::SchedulerWake => {
             log::info!("native_overlay: scheduler_wake from BreakAlarmReceiver");
             crate::SCHEDULER_WAKE.notify_one();
+        }
+        NativeOverlayEvent::ActivityDestroyed => {
+            log::info!("native_overlay: MainActivity destroyed (swiped away or finished) -- process is ending; the next break's alarm restarts it");
+            log::logger().flush();
         }
     }
 }

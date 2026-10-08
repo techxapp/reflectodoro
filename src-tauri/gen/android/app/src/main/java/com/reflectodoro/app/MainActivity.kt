@@ -2,7 +2,10 @@ package com.reflectodoro.app
 
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.Process
+import android.util.Log
 import android.view.View
+import androidx.activity.OnBackPressedCallback
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import androidx.webkit.WebSettingsCompat
@@ -54,6 +57,38 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    // Back leaves the app the way Home does, on every version. Android 12+
+    // already moves a root task to the back here, but 10-11 finish the
+    // Activity, which now ends the process (see onDestroy) -- and with it the
+    // scheduler, until the next break's alarm cold-starts it again over
+    // whatever the user is doing.
+    onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+      override fun handleOnBackPressed() {
+        moveTaskToBack(true)
+      }
+    })
+  }
+
+  /** A real destroy (swiped from Recents, or finished) while the foreground
+   * service keeps the process alive leaves Tauri with no Activity, and every
+   * Rust->Kotlin plugin call after that -- the scheduler makes one every
+   * MOBILE_POLL_INTERVAL -- hits wry's `first_activity_id().expect("no
+   * available activity")` and aborts the process (release builds are
+   * panic = "abort"). So the process died anyway, ~20s later, silently, and
+   * the next break-start alarm had to cold-start the app over whatever the
+   * user was doing. Ending it here does the same thing on purpose, and gets
+   * the reason into the log first. Configuration changes are excluded: wry
+   * keeps its references across those. */
+  override fun onDestroy() {
+    super.onDestroy()
+    if (isChangingConfigurations) return
+    Log.i("Reflectodoro/Activity", "MainActivity destroyed -- ending the process")
+    try {
+      NativeBridgePlugin.sharedChannel?.sendObject(mapOf("kind" to "activity_destroyed"))
+    } catch (e: Exception) {
+      Log.w("Reflectodoro/Activity", "activity_destroyed send failed: $e")
+    }
+    Process.killProcess(Process.myPid())
   }
 
   /** enableEdgeToEdge() above (WindowCompat.setDecorFitsSystemWindows(false))

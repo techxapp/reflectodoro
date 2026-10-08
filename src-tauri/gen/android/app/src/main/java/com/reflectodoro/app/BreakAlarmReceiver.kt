@@ -40,6 +40,10 @@ class BreakAlarmReceiver : BroadcastReceiver() {
       context.startForegroundService(Intent(context, BreakSchedulerService::class.java))
     } catch (e: Exception) {
       Log.w(TAG, "startForegroundService failed: $e")
+      // The service is what re-arms the next alarm (setAlarmClock is
+      // one-shot). Without it, re-arm here, or the chain ends now -- recover()
+      // no longer relaunches the app outside a break, so nothing else would.
+      scheduleNextAlarm(context)
     }
 
     // No scheduler has ever run in this process: it was dead (this receiver
@@ -87,7 +91,24 @@ class BreakAlarmReceiver : BroadcastReceiver() {
     }, WAKE_ANSWER_TIMEOUT_MS)
   }
 
+  /** Whether a recovery launch would have a break to show. Outside a break
+   * (most concretely the break-end boundary, which fires this receiver just as
+   * often as break start) a dead scheduler has nothing to do until the next
+   * break -- the alarm chain is kept going by BreakSchedulerService either way,
+   * and the next break-start boundary recovers then. Relaunching anyway pulled
+   * the app over whatever the user had gone back to, at every break end. Same
+   * for Pomodoro mode off or snoozed (night pause included): no break opens. */
+  private fun recoveryHasBreakToShow(context: Context): Boolean {
+    if (!PomodoroEnabledPref.isEnabled(context)) return false
+    if (PomodoroEnabledPref.getSnoozeUntilMs(context) > System.currentTimeMillis()) return false
+    return isInBreakNow(context)
+  }
+
   private fun recover(context: Context) {
+    if (!recoveryHasBreakToShow(context)) {
+      Log.i(TAG, "no live scheduler, but not inside an active break -- not relaunching")
+      return
+    }
     postWakeNotification(context)
 
     // Deliberately DOES auto-launch to the foreground here, unlike every
